@@ -12,7 +12,8 @@
  */
 import {useEffect, useState} from 'react';
 
-import type {AppInfo, Theme} from '@marimo/protocol';
+import {THEME_MODES} from '@marimo/protocol';
+import type {AppInfo, Theme, ThemeMode} from '@marimo/protocol';
 
 import {Composer} from './components/Composer.js';
 import {Settings} from './components/Settings.js';
@@ -24,7 +25,6 @@ import './styles/chat.css';
 
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [preview, setPreview] = useState<Theme | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const agent = useAgent();
 
@@ -58,10 +58,25 @@ export function App(): React.JSX.Element {
     }
   }, [agent.openSettings]);
 
-  const theme: Theme = preview ?? info?.theme ?? 'dark';
+  /*
+   * What the colours actually are.
+   *
+   * `system` is resolved against what the OS reported, so a machine that
+   * switches to dark at sunset takes the window with it — which is the whole
+   * point of the preference not being a boolean.
+   */
+  const theme: Theme =
+    agent.themeMode === 'system' ? (info?.theme ?? 'dark') : agent.themeMode;
   useEffect(() => {
     document.documentElement.dataset['theme'] = theme;
   }, [theme]);
+
+  /** Writes the preference. The event that comes back is what moves the switch. */
+  const setThemeMode = (mode: ThemeMode): void => {
+    void window.marimo
+      .call('settings.set', {patch: {appearance: {theme: mode}}})
+      .catch(() => undefined);
+  };
 
   const busy = agent.live?.running === true;
   const disabled = agent.profile === undefined;
@@ -117,18 +132,21 @@ export function App(): React.JSX.Element {
           >
             Settings
           </button>
-          <div className="head-theme">
-            {(['light', 'dark'] as const).map((value) => (
+          <div className="head-theme" role="group" aria-label="Theme">
+            {THEME_MODES.map((mode) => (
               <button
-                key={value}
+                key={mode}
                 type="button"
                 className="theme-button"
-                aria-pressed={theme === value}
+                /* Pressed means "this is the preference", not "this is the
+                   colour" — with `system` chosen, neither Light nor Dark is
+                   pressed even though one of them is what you are looking at. */
+                aria-pressed={agent.themeMode === mode}
                 onClick={() => {
-                  setPreview(value);
+                  setThemeMode(mode);
                 }}
               >
-                {value}
+                {mode}
               </button>
             ))}
           </div>

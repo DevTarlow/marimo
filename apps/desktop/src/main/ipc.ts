@@ -49,6 +49,8 @@ export interface IpcDependencies {
    * `system`, which is the default the app ships with anyway.
    */
   themeMode?: () => ThemeMode;
+  /** Told after a settings write, so anything holding a copy can re-read. */
+  onSettingsChanged?: () => void;
   /**
    * A problem worth showing the user, decided once at startup.
    *
@@ -158,6 +160,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'settings.set': async (params) => {
       await agent().updateSettings(params.patch);
+      dependencies.onSettingsChanged?.();
       return {settings: await publicSettings()};
     },
 

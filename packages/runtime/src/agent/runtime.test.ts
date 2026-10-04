@@ -10,7 +10,7 @@
  * The successful path needs a provider, so it lives with the agent package's
  * tests — this file is about the wiring around it.
  */
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -324,5 +324,122 @@ describe('changing an agent', () => {
 
     await instance.selectProfile(created.id);
     expect((await instance.activeProfile()).id).toBe(created.id);
+  });
+});
+
+/*
+ * Reading a conversation must not need a provider.
+ *
+ * The version that resolved the model configuration first returned an *empty*
+ * conversation whenever the key was missing — so an expired key, a cleared key,
+ * or a fresh install emptied every chat in the window while the messages sat on
+ * disk the whole time. That is indistinguishable from having lost them.
+ *
+ * It was found by trying to render a stored answer and getting a blank screen,
+ * which is why the test writes a real conversation file and reads it back.
+ */
+describe('reading a conversation without a working provider', () => {
+  let dir: string;
+  let paths: AppPaths;
+  let profileId: string;
+  const sessionId = 'session-read-check';
+
+  /**
+   * One stored event, in the shape the session service writes.
+   *
+   * `actions` and `longRunningToolIds` are part of it: a line missing them is
+   * skipped by the reader, which is how a hand-written conversation file
+   * silently reads back as nothing at all.
+   */
+  function stored(author: string, role: string, text: string): string {
+    return JSON.stringify({
+      author,
+      content: {role, parts: [{text}]},
+      id: `event-${author}-${text.length}`,
+      invocationId: '',
+      actions: {
+        stateDelta: {},
+        artifactDelta: {},
+        requestedAuthConfirmation: {},
+        requestedToolConfirmations: {},
+      },
+      longRunningToolIds: [],
+      timestamp: Date.now(),
+    });
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-read-'));
+    paths = resolveAppPaths(dir);
+    const profiles = new ProfileStore({
+      file: paths.profiles,
+      defaultWorkspaceRoot: dir,
+      defaultIdentity: '',
+      defaultTools: [],
+      defaultSkills: [],
+    });
+    await profiles.load();
+    profileId = (await profiles.activeProfile()).id;
+
+    await mkdir(paths.sessions, {recursive: true});
+    await writeFile(
+      join(paths.sessions, `${sessionId}.jsonl`),
+      `${stored('user', 'user', 'show me the parser output')}\n${stored('marimo', 'model', 'Here it is.')}\n`,
+      'utf8',
+    );
+    await writeFile(
+      join(paths.sessions, 'index.json'),
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          [sessionId]: {
+            id: sessionId,
+            title: 'Parser output',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            messageCount: 2,
+            appName: 'marimo',
+            userId: 'local',
+            profileId,
+          },
+        },
+      }),
+      'utf8',
+    );
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function runtime(): AgentRuntime {
+    return new AgentRuntime({
+      paths,
+      readSecret: async () => ({state: 'absent'}),
+    });
+  }
+
+  it('refuses the turn, because there is no key', async () => {
+    // The premise: this install genuinely cannot answer.
+    expect((await runtime().host(profileId)).ok).toBe(false);
+  });
+
+  it('still reads the stored conversation', async () => {
+    const {messages} = await runtime().transcript(profileId, sessionId);
+
+    expect(messages.map((message) => message.text)).toEqual([
+      'show me the parser output',
+      'Here it is.',
+    ]);
+  });
+
+  it('answers with nothing for an agent that does not exist', async () => {
+    const runtime = new AgentRuntime({
+      paths,
+      readSecret: async () => ({state: 'absent'}),
+    });
+    const {messages, pending} = await runtime.transcript('no-such-agent', sessionId);
+    expect(messages).toEqual([]);
+    expect(pending).toEqual([]);
   });
 });

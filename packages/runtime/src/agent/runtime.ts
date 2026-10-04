@@ -36,6 +36,7 @@ import type {
   AgentProfile,
   AgentUiEvent,
   CatalogEntry,
+  TranscriptMessage,
   ProfileCatalog,
   ProfilePatch,
   ProviderId,
@@ -291,6 +292,35 @@ export class AgentRuntime {
    * remember to — is what makes "a capability the user turned off is absent"
    * true on the *next* turn rather than after a restart.
    */
+  /**
+   * Reads a conversation, which needs no provider at all.
+   *
+   * Deliberately not `host()`. That resolves the model configuration and refuses
+   * without a key — correctly, for a turn — but reading a stored conversation
+   * has nothing to do with a model. Going through `host()` made every
+   * conversation in the app appear *empty* the moment a key expired, was
+   * cleared, or had not been entered yet: the messages were on disk and the
+   * window showed nothing, which is indistinguishable from having lost them.
+   */
+  async transcript(
+    profileId: string,
+    sessionId: string,
+  ): Promise<{messages: TranscriptMessage[]; pending: PendingGate[]}> {
+    const profile = await this.profileFor(profileId);
+    if (!profile) {
+      return {messages: [], pending: []};
+    }
+    /*
+     * The placeholder-config host, which is the same one a turn uses before its
+     * configuration is resolved. It has the session service and nothing else,
+     * which is exactly what reading needs.
+     */
+    const host = await this.ensureHost(profileId);
+    const {messages} = await host.getTranscript(sessionId, profileId);
+    const pending = await host.pendingGates(sessionId);
+    return {messages, pending};
+  }
+
   async host(profileId: string): Promise<HostResult> {
     const settings = await this.settingsStore.load();
     const profile = await this.profileFor(profileId);

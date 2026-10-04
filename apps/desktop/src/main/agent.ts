@@ -356,20 +356,19 @@ export class AgentService {
     return session;
   }
 
+  /**
+   * Reads a conversation.
+   *
+   * Goes to the runtime's own reader rather than resolving the provider first.
+   * The version that resolved it returned an empty conversation whenever the key
+   * was missing — so an expired key emptied every chat in the window, and the
+   * history was on disk the whole time.
+   */
   async transcript(
     profileId: string,
     sessionId: string,
   ): Promise<{messages: TranscriptMessage[]; pending: PendingGate[]}> {
-    const result = await this.runtime.host(profileId);
-    if (!result.ok) {
-      // A conversation with no working provider can still be *read*, which is
-      // what lets the window show the refusal beside the history rather than
-      // instead of it.
-      return {messages: [], pending: []};
-    }
-    const {messages} = await result.host.getTranscript(sessionId, profileId);
-    const pending = await result.host.pendingGates(sessionId);
-    return {messages, pending};
+    return await this.runtime.transcript(profileId, sessionId);
   }
 
   /**

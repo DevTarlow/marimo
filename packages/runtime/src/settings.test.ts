@@ -521,6 +521,8 @@ describe('SettingsStore appearance', () => {
   it('starts on the shipped picture and the stylesheet accent', async () => {
     const settings = await store().load();
     expect(settings.appearance).toEqual({
+      // Follows the machine until somebody says otherwise.
+      theme: 'system',
       background: '',
       accent: '',
       uiScale: 'default',
@@ -536,6 +538,7 @@ describe('SettingsStore appearance', () => {
     const after = await settings.patch({appearance: {uiScale: 'large'}});
 
     expect(after.appearance).toEqual({
+      theme: 'system',
       background: 'wall.jpg',
       accent: '#2fb6a8',
       uiScale: 'large',
@@ -552,6 +555,8 @@ describe('SettingsStore appearance', () => {
     // The block falls back whole rather than storing a value that cannot be
     // pasted into a CSS variable.
     expect(settings.appearance).toEqual({
+      // Follows the machine until somebody says otherwise.
+      theme: 'system',
       background: '',
       accent: '',
       uiScale: 'default',
@@ -584,6 +589,9 @@ describe('SettingsStore appearance', () => {
     const settings = await store().load();
 
     expect(settings.appearance).toEqual({
+      // And a file from before the theme existed comes back following the
+      // machine, which is the same answer as a fresh install.
+      theme: 'system',
       background: 'wall.jpg',
       accent: '#2fb6a8',
       uiScale: 'large',

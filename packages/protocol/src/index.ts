@@ -351,7 +351,31 @@ export const backgroundDarknessSchema = z
   .min(0)
   .max(BACKGROUND_DARKNESS_MAX);
 
+/**
+ * How the window decides its colours.
+ *
+ * `system` is the default and is not the same as "dark": it means the app has no
+ * opinion and follows the OS, which can change while the app is running. The
+ * resolved answer is reported separately in `AppInfo`, so a window never has to
+ * guess which way `system` went.
+ */
+export const THEME_MODES = ['system', 'light', 'dark'] as const;
+export const themeModeSchema = z.enum(THEME_MODES);
+export type ThemeMode = z.infer<typeof themeModeSchema>;
+
+/** Which way the OS (or the user) actually went. */
+export const themeSchema = z.enum(['light', 'dark']);
+export type Theme = z.infer<typeof themeSchema>;
+
 export const appearanceSchema = z.object({
+  /**
+   * Light, dark, or whatever the machine is set to.
+   *
+   * A preference rather than a reading: `system` is the default and is resolved
+   * against the OS at the moment it is drawn, so a machine that switches to dark
+   * at sunset takes the window with it.
+   */
+  theme: themeModeSchema,
   /**
    * Imported background file name inside the app's backgrounds directory. Empty
    * means the picture shipped with the app.
@@ -367,6 +391,9 @@ export const appearancePatchSchema = appearanceSchema.partial();
 
 export function defaultAppearance(): Appearance {
   return {
+    // Follows the machine until told otherwise, which is what most people want
+    // and what a window should do before anybody has an opinion about it.
+    theme: 'system',
     background: '',
     accent: '',
     uiScale: 'default',
@@ -1312,6 +1339,14 @@ export type AgentUiEvent =
    */
   | {type: 'window.openSettings'}
   /*
+   * The theme preference changed.
+   *
+   * An event as well as a field on `AppInfo`, because it changes without the
+   * window asking — a second window, or a settings write from anywhere — and a
+   * window that had to re-ask would be one that only notices on reload.
+   */
+  | {type: 'theme.changed'; mode: ThemeMode}
+  /*
    * A helper agent, while it runs.
    *
    * Three events rather than a nested `AgentUiEvent`, deliberately. A child's
@@ -1353,22 +1388,6 @@ export interface IpcErrorResult {
  * description of what the app does rather than a wish list. The entries above
  * that this app will not implement are pruned as their replacements arrive.
  */
-
-/**
- * How the window decides its colours.
- *
- * `system` is the default and is not the same as "dark": it means the app has no
- * opinion and follows the OS, which can change while the app is running. The
- * resolved answer is reported separately in `AppInfo`, so a window never has to
- * guess which way `system` went.
- */
-export const THEME_MODES = ['system', 'light', 'dark'] as const;
-export const themeModeSchema = z.enum(THEME_MODES);
-export type ThemeMode = z.infer<typeof themeModeSchema>;
-
-/** Which way the OS (or the user) actually went. */
-export const themeSchema = z.enum(['light', 'dark']);
-export type Theme = z.infer<typeof themeSchema>;
 
 /**
  * A gate a conversation is still waiting on.

@@ -29,7 +29,7 @@ import {
 } from 'electron';
 
 import {IPC_EVENT_CHANNEL, defaultWindowState} from '@marimo/protocol';
-import type {AgentUiEvent, WindowState} from '@marimo/protocol';
+import type {AgentUiEvent, ThemeMode, WindowState} from '@marimo/protocol';
 
 import {registerIpcHandler} from './ipc.js';
 import {noticeFor, trayMenu} from './tray.js';
@@ -204,6 +204,33 @@ export function broadcast(event: AgentUiEvent): void {
 let startupWarning: string | undefined;
 
 /**
+ * The theme preference, kept in step with the settings file.
+ *
+ * A plain variable because `app.info` is answered synchronously and the settings
+ * store is not — so the value is refreshed whenever the file changes rather than
+ * read on every call.
+ */
+let storedThemeMode: ThemeMode = 'system';
+
+/** Re-reads the preference, and tells the window if it moved. */
+async function refreshThemeMode(): Promise<void> {
+  if (agent === undefined) {
+    return;
+  }
+  try {
+    const settings = await agent.settings();
+    const next = settings.appearance.theme;
+    if (next !== storedThemeMode) {
+      storedThemeMode = next;
+      broadcast({type: 'theme.changed', mode: next});
+    }
+  } catch {
+    // A settings file that cannot be read leaves the last known answer in
+    // place, which is better than the window losing its colours over it.
+  }
+}
+
+/**
  * The tray, when there is one.
  *
  * Its existence is what makes closing the window not mean quitting, so it is
@@ -254,6 +281,21 @@ async function bootstrap(): Promise<void> {
   registerIpcHandler({
     paths,
     agent: () => agent,
+    /*
+     * The preference as stored, read fresh each time rather than cached: the
+     * window can change it, and a cached answer would leave the theme switch
+     * disagreeing with the file it just wrote.
+     */
+    themeMode: () => storedThemeMode,
+    /*
+     * Re-read after a settings write, since that is where the theme can change.
+     * A callback rather than an event: the write happens in the IPC handler, and
+     * inventing a broadcast for something with exactly one producer would be a
+     * second mechanism for the same fact.
+     */
+    onSettingsChanged: () => {
+      void refreshThemeMode();
+    },
     ...(startupWarning === undefined ? {} : {warning: startupWarning}),
     service: {
       paths,
@@ -294,6 +336,7 @@ async function bootstrap(): Promise<void> {
   }
 
   await refreshJobs();
+  await refreshThemeMode();
 
   /*
    * Remember where it ends up.

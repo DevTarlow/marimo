@@ -24,6 +24,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
 import type {
   AgentProfile,
+  ThemeMode,
   AgentUiEvent,
   PendingGate,
   SessionSummary,
@@ -90,6 +91,8 @@ export interface AgentController {
    * different values, or the second one opens nothing.
    */
   openSettings: number;
+  /** The stored theme preference, kept in step with the settings file. */
+  themeMode: ThemeMode;
   newSession: () => Promise<void>;
   dismissError: () => void;
 }
@@ -110,6 +113,7 @@ export function useAgent(): AgentController {
   const [storedPending, setStoredPending] = useState<PendingGate[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [openSettings, setOpenSettings] = useState(0);
+  const [themeMode, setThemeMode] = useState<ThemeMode>('system');
 
   /*
    * Read by the event listener, which is registered once and would otherwise
@@ -213,6 +217,16 @@ export function useAgent(): AgentController {
        */
       if (event.type === 'window.openSettings') {
         setOpenSettings((count) => count + 1);
+        return;
+      }
+
+      /*
+       * The preference, which changes without this window asking — so it arrives
+       * as an event rather than being something the window only notices when it
+       * reloads.
+       */
+      if (event.type === 'theme.changed') {
+        setThemeMode(event.mode);
         return;
       }
 
@@ -515,6 +529,7 @@ export function useAgent(): AgentController {
     stop,
     open,
     openSettings,
+    themeMode,
     reload: boot,
     newSession,
     dismissError: () => {

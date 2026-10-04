@@ -7,7 +7,12 @@
  * the UI milestone, where it can be done with a renderer that escapes by
  * construction rather than by a regex somebody has to keep correct.
  */
+import {useEffect, useLayoutEffect, useRef, useState} from 'react';
+
 import type {PendingGate, TranscriptMessage} from '@marimo/protocol';
+
+import {shouldFollow, shouldOfferJump} from '../scroll.js';
+import {Copy, Markdown} from './Markdown.js';
 
 import type {LiveSubagent, LiveToolCall, LiveTurn} from '../hooks/useAgent.js';
 
@@ -152,7 +157,16 @@ function Message({message}: {message: TranscriptMessage}): React.JSX.Element {
         </div>
       )}
       {message.text.length > 0 && (
-        <div className="bubble">{message.text}</div>
+        message.role === 'assistant' ? (
+          <div className="bubble bubble-answer">
+            <Markdown text={message.text} />
+            <div className="bubble-actions">
+              <Copy text={message.text} what="answer" />
+            </div>
+          </div>
+        ) : (
+          <div className="bubble">{message.text}</div>
+        )
       )}
       {message.error !== undefined && message.error.length > 0 && (
         <p className="message-error">{message.error}</p>
@@ -176,8 +190,69 @@ export function Transcript({
 }): React.JSX.Element {
   const empty = messages.length === 0 && live === null && pending.length === 0;
 
+  const view = useRef<HTMLDivElement>(null);
+  const [jumpable, setJumpable] = useState(false);
+  /*
+   * Whether to follow is decided from the geometry *before* the new content
+   * arrived, which is why it is a ref rather than a comparison made after the
+   * render: by then the element is already taller and the view looks further from
+   * the bottom than the user left it.
+   */
+  const follow = useRef(true);
+
+  const onScroll = (): void => {
+    const element = view.current;
+    if (element === null) {
+      return;
+    }
+    const geometry = {
+      scrollTop: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+    };
+    follow.current = shouldFollow(geometry);
+    setJumpable(shouldOfferJump(geometry));
+  };
+
+  /*
+   * Runs before the browser paints, so streamed text never appears a frame late
+   * and then jumps. A `useEffect` here would show the new text at the old scroll
+   * position first, which reads as a stutter on every token.
+   */
+  useLayoutEffect(() => {
+    const element = view.current;
+    if (element === null || !follow.current) {
+      return;
+    }
+    element.scrollTop = element.scrollHeight;
+    setJumpable(false);
+  });
+
+  /*
+   * A new conversation starts at the bottom, whatever the last one was doing.
+   * Keyed on emptiness rather than on the messages themselves, so arriving text
+   * does not re-run it and fight the follow rule above.
+   */
+  const blank = messages.length === 0 && live === null;
+  useEffect(() => {
+    follow.current = true;
+    setJumpable(false);
+    const element = view.current;
+    if (element !== null) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [blank]);
+
   return (
-    <div className="transcript" role="log" aria-live="polite" aria-label="Conversation">
+    <div className="transcript-wrap">
+    <div
+      className="transcript"
+      role="log"
+      aria-live="polite"
+      aria-label="Conversation"
+      ref={view}
+      onScroll={onScroll}
+    >
       {empty && (
         <div className="empty">
           <img className="empty-mark" src="./marimo-logo.png" alt="" />
@@ -206,7 +281,11 @@ export function Transcript({
           {live.subagents.map((helper) => (
             <SubagentGroup key={helper.callId} helper={helper} live={live.running} />
           ))}
-          {live.text.length > 0 && <div className="bubble">{live.text}</div>}
+          {live.text.length > 0 && (
+            <div className="bubble bubble-answer">
+              <Markdown text={live.text} />
+            </div>
+          )}
           {live.running && live.text.length === 0 && (
             <div className="bubble thinking" aria-label="Working">
               <span />
@@ -223,6 +302,29 @@ export function Transcript({
 
       {busy && pending.length === 0 && live === null && (
         <p className="working-note">Working…</p>
+      )}
+    </div>
+
+      {/*
+        Offered only once somebody has clearly stopped following. A button that
+        appeared the moment they scrolled a line would flicker in and out while
+        they read, which is worse than not offering one.
+      */}
+      {jumpable && (
+        <button
+          type="button"
+          className="jump"
+          onClick={() => {
+            const element = view.current;
+            if (element !== null) {
+              element.scrollTop = element.scrollHeight;
+            }
+            follow.current = true;
+            setJumpable(false);
+          }}
+        >
+          Jump to latest
+        </button>
       )}
     </div>
   );

@@ -260,6 +260,29 @@ async function main() {
       }
     }
 
+    /*
+     * A fresh install opens by asking for a key rather than by showing a chat
+     * that refuses. Checked here because it is the first thing a new user sees
+     * and the only part of the first run that no unit test covers.
+     */
+    const asked = await send('Runtime.evaluate', {
+      expression: `JSON.stringify({
+        onboarding: !!document.querySelector('.onboarding'),
+        input: !!document.querySelector('.onboarding-input'),
+        composer: !!document.querySelector('.composer-box'),
+      })`,
+      returnByValue: true,
+    });
+    const first = JSON.parse(asked.result.value);
+    if (first.onboarding !== true || first.input !== true) {
+      fail(`a fresh install did not ask for a key: ${asked.result.value}`);
+    } else if (first.composer !== true) {
+      // Not blocking: somebody who wants to look around first still can.
+      fail('the first run took the message box away');
+    } else {
+      ok('a fresh install asks for a key, without taking the window over');
+    }
+
     ok(`the theme resolved to ${probe.theme}`);
     }
 

@@ -13,9 +13,10 @@
 import {useEffect, useState} from 'react';
 
 import {THEME_MODES} from '@marimo/protocol';
-import type {AppInfo, Theme, ThemeMode} from '@marimo/protocol';
+import type {AppInfo, PublicSettings, Theme, ThemeMode} from '@marimo/protocol';
 
 import {Composer} from './components/Composer.js';
+import {Onboarding} from './components/Onboarding.js';
 import {Settings} from './components/Settings.js';
 import {SessionRail} from './components/SessionRail.js';
 import {Transcript} from './components/Transcript.js';
@@ -26,7 +27,31 @@ import './styles/chat.css';
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  /**
+   * The settings as the window needs them for the first-run question.
+   *
+   * Fetched here rather than inside `useAgent` because it is a fact about the
+   * *pane*, not about the conversation: the agent is perfectly happy to hold a
+   * conversation it cannot yet answer.
+   */
+  const [settings, setSettings] = useState<PublicSettings | null>(null);
   const agent = useAgent();
+
+  const loadSettings = (): void => {
+    void window.marimo
+      .call('settings.get', {})
+      .then(({settings: loaded}) => {
+        setSettings(loaded);
+      })
+      .catch(() => {
+        // A settings read that fails is already reported by Settings itself; an
+        // error here would be a second one over the conversation.
+      });
+  };
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +118,7 @@ export function App(): React.JSX.Element {
            * not take.
            */
           void agent.reload();
+          loadSettings();
         }}
       />
     );
@@ -178,6 +204,20 @@ export function App(): React.JSX.Element {
 
         {!agent.ready ? (
           <p className="loading">Starting…</p>
+        ) : settings !== null && !settings.hasApiKey ? (
+          /*
+           * Asked before it is needed, rather than after. The refusal a turn
+           * gives is honest and in the right place — but it is the *second*
+           * thing a new user learns, and the first should have been the
+           * question.
+           */
+          <Onboarding
+            settings={settings}
+            onSaved={loadSettings}
+            onOpenSettings={() => {
+              setShowSettings(true);
+            }}
+          />
         ) : (
           <Transcript
             messages={agent.messages}

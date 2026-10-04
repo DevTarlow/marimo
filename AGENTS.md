@@ -143,6 +143,24 @@ In a container where `chrome-sandbox` cannot be setuid-root, Electron aborts wit
 smoke check takes `MARIMO_NO_SANDBOX=1` for that case, and nothing else does —
 it is a real reduction in isolation and must not become the quiet default.
 
+## Packaging
+
+```bash
+pnpm --filter @marimo/desktop package   # AppImage into apps/desktop/release/
+```
+
+**`asar` stays off.** The runner is this binary started with
+`ELECTRON_RUN_AS_NODE=1`, and Node mode has no asar support: reading a file
+inside one fails with `Invalid package`. Turning it on produces a release whose
+background runner cannot start — verified, not assumed — and it works perfectly
+in development, so nothing catches it until somebody installs the app.
+`asarUnpack` is the tempting alternative and a worse one: it means enumerating
+the runner's whole transitive dependency tree.
+
+Packaging changes what `app.getAppPath()` returns, and the OS service plan
+writes the runner's path into a systemd unit. Check `pnpm --filter
+@marimo/desktop package` still produces a runnable runner when that path moves.
+
 ## House style
 
 - **Comments explain why.** The code says what it does. A comment that restates

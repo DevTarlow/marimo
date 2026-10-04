@@ -1,9 +1,9 @@
 {
   "name": "@marimo/desktop",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
-  "description": "Marimo Agent Electron shell: the chat window, the desktop companion, and the agent host.",
+  "description": "An always-on desktop AI agent: a chat window, a floating companion, and a headless runner that keeps scheduled jobs going while the app is closed.",
   "productName": "Marimo Agent",
   "main": "dist/main/main.js",
   "scripts": {
@@ -14,7 +14,9 @@
     "typecheck": "tsc -b tsconfig.runner.json && tsc -p tsconfig.renderer.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "smoke": "node scripts/smoke.mjs",
-    "jobs-check": "node scripts/jobs-check.mjs"
+    "jobs-check": "node scripts/jobs-check.mjs",
+    "package": "pnpm build && electron-builder --linux AppImage",
+    "package:dir": "pnpm build && electron-builder --dir"
   },
   "dependencies": {
     "@marimo/agent": "workspace:*",
@@ -29,9 +31,41 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
     "tsx": "^4.23.13",
     "typescript": "^6.0.3",
     "vite": "^8.3.0",
     "vitest": "^5.0.0"
-  }
+  },
+  "license": "MIT",
+  "author": "DevTarlow",
+  "build": {
+    "appId": "com.marimo.agent",
+    "productName": "Marimo Agent",
+    "copyright": "Copyright (c) 2026 DevTarlow",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.map",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "dist/main/main.js"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "icon": "assets/marimo-logo.png",
+      "synopsis": "An always-on desktop AI agent",
+      "description": "A chat window, a floating desktop companion, and a background runner that keeps scheduled jobs going while the app is closed."
+    },
+    "executableName": "marimo-agent",
+    "asar": false
+  },
+  "//": "asar is off deliberately. The job runner is this same binary started with ELECTRON_RUN_AS_NODE=1, and in that mode Electron does not patch `fs` to read inside an asar archive \u2014 reading one fails with \"Invalid package\". So a packaged app with asar on has a runner that cannot start, which is the whole of \"jobs run while the app is closed\" broken in every release and working perfectly in development."
 }

@@ -151,6 +151,28 @@ and memory review, the chat's markdown and code rendering, the floating
 companion, the capability panels, and packaging for Linux, then Windows and
 macOS.
 
+## Building a release
+
+```bash
+pnpm --filter @marimo/desktop package      # an AppImage in apps/desktop/release/
+```
+
+Linux ships as an **AppImage**, which is self-contained and runs on any
+distribution. A `.deb` needs a `homepage` in its metadata, and this project has
+no published URL yet — inventing one for a released package is worse than not
+shipping that artifact, so the target arrives with the URL. Windows (NSIS) and
+macOS (DMG) follow the same config.
+
+**`asar` is off, and that is deliberate rather than an oversight.**
+electron-builder warns about it and suggests `asarUnpack` instead. It cannot be
+used here: the job runner is this same binary started with
+`ELECTRON_RUN_AS_NODE=1`, and in that mode Electron does not patch `fs` to read
+inside an asar archive — a script inside one fails with `Invalid package`. So a
+packaged app with `asar` on has a background runner that cannot start, which is
+the whole of "jobs run while the app is closed" broken in every release while
+working perfectly in development. `asarUnpack` would mean enumerating every
+transitive dependency of the runner, which is a list that goes stale silently.
+
 ## Licence
 
-Not yet chosen. Nothing here may be redistributed until it is.
+MIT. See [LICENCE](LICENCE).

@@ -25,6 +25,10 @@ allowBuilds:
   '@google/genai': true
   cpu-features: false
   electron: true
+  # Needed only for the Windows installer, which is not being built yet — and it
+  # is a build script, so it stays off until it is. Turn it on with the NSIS
+  # target, not before.
+  electron-winstaller: false
   esbuild: true
   protobufjs: true
   ssh2: false

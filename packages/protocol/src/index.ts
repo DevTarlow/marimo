@@ -1833,6 +1833,17 @@ export interface AppInfo {
    * toggle.
    */
   secretsEncrypted: boolean;
+  /**
+   * Something wrong that the user has to know about but that has not stopped
+   * the app working.
+   *
+   * A place for the failures whose only symptom is a feature quietly not doing
+   * anything — the app and the job runner disagreeing about where the data lives
+   * is the one that exists today. A console line is not enough for those: in a
+   * packaged app nobody has a console, and the evidence otherwise is a scheduled
+   * job that never fires and no reason given.
+   */
+  warning?: string;
   /** The mode the user chose. */
   themeMode: ThemeMode;
   /** Which way that resolved, right now. */

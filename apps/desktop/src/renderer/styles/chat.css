@@ -495,3 +495,22 @@
   background: var(--surface-hover);
   color: var(--text);
 }
+
+/*
+ * A warning, not an error: something is wrong and nothing has stopped working.
+ * Amber rather than red, and no dismiss button — a user who closes this has lost
+ * the only explanation they will ever get for a feature that quietly does
+ * nothing.
+ */
+.warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-3);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  user-select: text;
+}

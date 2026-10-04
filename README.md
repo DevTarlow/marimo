@@ -122,11 +122,24 @@ skills.json       skills you wrote
 
 ## Status and next steps
 
-The plan runs M0–M8. M0 — the workspace, the vendored agent core, the
-Electron-free runtime, the shell and the runner — is done. Next is the agent core
-work (MCP servers, sub-agents, approval gates that survive a restart, memory
-review), then the tray and the background service, the chat UI, the floating
-companion, the capability panels, and packaging for Linux, then Windows and macOS.
+The plan runs M0–M8. What works today:
+
+- **The agent.** MCP servers connect, their tools are offered to the model, and a
+  server the user has not trusted asks before each call — a gate that survives a
+  restart, because it is derived from the stored conversation rather than held in
+  memory. `web_search` works with no API key, through a hidden window.
+- **The window.** A chat with a conversation rail, streaming answers, tool calls
+  that fold away, and approval cards.
+- **Scheduled jobs**, while the app is open *and* while it is closed. The app and
+  the headless runner share one job file, and an occurrence is claimed by a
+  compare-and-set so it runs once whichever process gets there first.
+- **The headless runner** (`dist/runner/run-due.js`) — the same binary started as
+  plain Node, so it needs no display and can be woken by an OS timer.
+
+Next: the tray and the OS service that wakes the runner, the agent's sub-agents
+and memory review, the chat's markdown and code rendering, the floating
+companion, the capability panels, and packaging for Linux, then Windows and
+macOS.
 
 ## Licence
 

@@ -100,7 +100,22 @@ pnpm typecheck        # including test projects
 pnpm test             # vitest, everywhere
 pnpm --filter @marimo/desktop dev     # Vite + Electron
 pnpm --filter @marimo/desktop smoke   # boot a real window and prove it works
+pnpm --filter @marimo/desktop jobs-check   # prove a due job runs in the app
 ```
+
+The job runner is the same binary started as plain Node, so it can be run by
+hand the way the OS timer will:
+
+```bash
+ELECTRON_RUN_AS_NODE=1 ./apps/desktop/node_modules/.bin/electron \
+  apps/desktop/dist/runner/run-due.js --json
+```
+
+It exits 0 when there was nothing to do, and non-zero only when it could not do
+its job — an unreadable jobs file, a data directory it cannot read. Keep that
+distinction: for a timer, "exit 0, nothing happened" and "exit 0, I could not
+read the file" are the same observation, and the second is the failure nobody
+notices.
 
 If Electron's binary download fails with `ENOENT ... ~/.cache/electron`, the
 environment does not allow writes outside the repository. Use the wrapper, which

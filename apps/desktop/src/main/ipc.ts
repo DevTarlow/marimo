@@ -39,6 +39,14 @@ export interface IpcDependencies {
    * `system`, which is the default the app ships with anyway.
    */
   themeMode?: () => ThemeMode;
+  /**
+   * A problem worth showing the user, decided once at startup.
+   *
+   * Passed in rather than worked out here because it is a fact about the paths
+   * this process resolved, and this module's job is answering calls — not
+   * deciding what is wrong with the install.
+   */
+  warning?: string;
 }
 
 /** Every call this app answers, with its result type pinned to the protocol. */
@@ -75,6 +83,9 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       // at launch can become usable later in the session, and the answer decides
       // whether the window can offer to run jobs while the app is closed.
       secretsEncrypted: safeStorageCipher.available(),
+      ...(dependencies.warning === undefined
+        ? {}
+        : {warning: dependencies.warning}),
       themeMode: themeMode(),
       theme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light',
     }),

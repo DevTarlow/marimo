@@ -41,6 +41,7 @@
 
   --success: #3fbf8f;
   --warning: #e0b341;
+  --warning-soft: rgba(224, 179, 65, 0.12);
   --danger: #f0616d;
   --danger-soft: rgba(240, 97, 109, 0.12);
 
@@ -70,6 +71,7 @@
 
   --success: #1f7a56;
   --warning: #8a5a06;
+  --warning-soft: rgba(138, 90, 6, 0.1);
   --danger: #c12a3c;
   --danger-soft: rgba(193, 42, 60, 0.1);
 

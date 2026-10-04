@@ -164,15 +164,22 @@ export function broadcast(event: AgentUiEvent): void {
  * instead, which needs nothing from the app.
  */
 
+/** A problem to show the user, decided while the app starts. */
+let startupWarning: string | undefined;
+
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
 
   const disagreement = userDataDisagreement();
   if (disagreement !== undefined) {
-    // Loud on purpose. Nothing else fails when this is wrong — the background
-    // service simply never finds anything due — so the warning is the only
-    // evidence the user would ever get.
+    /*
+     * Loud on purpose, and shown in the window as well as logged. Nothing else
+     * fails when this is wrong — the background service simply never finds
+     * anything due — so this warning is the only evidence the user would ever
+     * get, and a console line is evidence nobody in a packaged app can see.
+     */
     console.warn(`[marimo] ${disagreement}`);
+    startupWarning = disagreement;
   }
 
   /*
@@ -192,7 +199,11 @@ async function bootstrap(): Promise<void> {
     agent = undefined;
   }
 
-  registerIpcHandler({paths, agent: () => agent});
+  registerIpcHandler({
+    paths,
+    agent: () => agent,
+    ...(startupWarning === undefined ? {} : {warning: startupWarning}),
+  });
 
   mainWindow = await createWindow();
 

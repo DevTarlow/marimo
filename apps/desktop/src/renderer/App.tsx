@@ -94,6 +94,17 @@ export function App(): React.JSX.Element {
           </div>
         </header>
 
+        {info?.warning !== undefined && (
+          /*
+           * Shown, not dismissible, and not styled as a failure: the app works
+           * and one thing will not. A user who closes it has lost the only
+           * explanation they would ever get for a job that never fires.
+           */
+          <div className="warning" role="status">
+            <span>{info.warning}</span>
+          </div>
+        )}
+
         {agent.error !== null && (
           <div className="error" role="alert">
             <span>{agent.error}</span>

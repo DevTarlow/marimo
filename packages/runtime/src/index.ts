@@ -30,6 +30,35 @@ export type {
   SecretWriterOptions,
 } from './secrets.js';
 
+/* Waking the job runner when the app is closed. */
+export {
+  planService,
+  runnerEnvironment,
+  SERVICE_LABEL,
+  SERVICE_UNIT,
+} from './service/plan.js';
+export type {
+  PlannedCommand,
+  PlannedFile,
+  ServicePlan,
+  ServicePlatform,
+  ServiceProbe,
+  ServiceSpec,
+} from './service/plan.js';
+export {
+  installService,
+  nodeServiceHost,
+  serviceState,
+  uninstallService,
+} from './service/apply.js';
+export type {
+  CommandResult,
+  ServiceFailure,
+  ServiceHost,
+  ServiceOutcome,
+  ServiceState,
+} from './service/apply.js';
+
 /* A lock that works between processes, for the files they share. */
 export {
   FileLockTimeoutError,

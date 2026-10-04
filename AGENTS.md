@@ -117,6 +117,19 @@ distinction: for a timer, "exit 0, nothing happened" and "exit 0, I could not
 read the file" are the same observation, and the second is the failure nobody
 notices.
 
+The service layer that wakes it is in `packages/runtime/src/service` and is split
+in two on purpose: `plan.ts` produces the unit/plist/task as *data*, and
+`apply.ts` is the only part that touches the machine. Every mistake worth
+catching is in the content of what gets written, so that is what the tests assert
+on — a host is injected, and no test ever installs a timer.
+
+`ELECTRON_RUN_AS_NODE=1` in those definitions is load-bearing rather than tidy.
+Without it the timer launches a GUI, fails to find a display, and dies with
+SIGTRAP — a service that is enabled, runs every minute, and does nothing. The
+`MARIMO_USER_DATA_DIR` beside it is invariant 13 made structural: baking the path
+in means the app and the service agree even for a portable install and after a
+product-name change, which are exactly when they would silently stop agreeing.
+
 If Electron's binary download fails with `ENOENT ... ~/.cache/electron`, the
 environment does not allow writes outside the repository. Use the wrapper, which
 points every tool cache inside it:

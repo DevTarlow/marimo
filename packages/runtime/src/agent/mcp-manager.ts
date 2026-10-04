@@ -275,7 +275,10 @@ export class McpManager {
       });
       return {
         ok: true,
-        detail: `${tools.length} tools.`,
+        // The singular case, which the line above it has and this one did not —
+        // a server offering one tool reported "1 tools." to whoever pressed
+        // Refresh.
+        detail: `${tools.length} tool${tools.length === 1 ? '' : 's'}.`,
         tools: tools.map((tool) => tool.name),
       };
     } catch (error) {

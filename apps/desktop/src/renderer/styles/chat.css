@@ -804,3 +804,80 @@
   font-size: var(--text-sm);
   line-height: 1.5;
 }
+
+/* -------------------------------------------------------------- connectors */
+
+.connector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  margin-top: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.connector-editing {
+  border-color: var(--accent);
+}
+
+.connector-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The state is carried by colour *and* by the sentence beneath, because a dot
+   alone is not readable by somebody who cannot tell the colours apart. */
+.connector-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.connector-dot[data-state='online'] {
+  background: var(--accent);
+}
+
+.connector-dot[data-state='connecting'] {
+  background: var(--warning);
+}
+
+.connector-dot[data-state='error'] {
+  background: var(--danger);
+}
+
+.connector-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+.connector-transport {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.connector-detail {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.connector-error {
+  color: var(--danger);
+}
+
+.connector-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}

@@ -36,6 +36,7 @@ export {
   mcpTransportSchema,
 } from './mcp.js';
 export type {McpSecretRef, McpServer, McpTransport} from './mcp.js';
+import type {McpServer} from './mcp.js';
 
 /* -------------------------------------------------------------------------- */
 /* Settings                                                                    */
@@ -1509,6 +1510,22 @@ export const agentCallSchemas = {
 
   /* What the agent can reach right now. */
   'mcp.statuses': z.object({}),
+  /*
+   * Connectors.
+   *
+   * Separate calls from `settings.set` rather than a settings patch, because
+   * adding a server has to *dial* it: the write and the connection are one
+   * action from the user's point of view, and a window that saved the file and
+   * left the server unconnected would report success for something that did not
+   * happen.
+   */
+  'mcp.set': z.object({server: mcpServerSchema}),
+  'mcp.remove': z.object({serverId: z.string().min(1)}),
+  /*
+   * Dials a server without saving it, so somebody can find out that a command is
+   * wrong before they commit to it.
+   */
+  'mcp.test': z.object({server: mcpServerSchema}),
 
   /* Whether jobs run while the app is closed. */
   'service.status': z.object({}),
@@ -1560,6 +1577,9 @@ export interface AgentCallResults {
   'chat.approve': {accepted: boolean};
   'chat.abort': {aborted: boolean};
   'mcp.statuses': Record<string, McpStatus>;
+  'mcp.set': {servers: McpServer[]; statuses: Record<string, McpStatus>};
+  'mcp.remove': {servers: McpServer[]; statuses: Record<string, McpStatus>};
+  'mcp.test': {ok: boolean; detail: string};
   'service.status': ServiceStatus;
   'service.enable': ServiceChange;
   'service.disable': ServiceChange;

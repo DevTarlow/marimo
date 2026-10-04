@@ -180,6 +180,23 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       return {settings: await publicSettings()};
     },
 
+    'mcp.set': async (params) => {
+      const servers = await agent().setMcpServer(params.server);
+      return {servers, statuses: agent().mcpStatuses()};
+    },
+
+    'mcp.remove': async (params) => {
+      const servers = await agent().removeMcpServer(params.serverId);
+      return {servers, statuses: agent().mcpStatuses()};
+    },
+
+    /*
+     * Dials a server that has not been saved, so somebody can find out that a
+     * command is wrong before committing to it — which is the difference between
+     * a typo they fix and a connector that "does not work".
+     */
+    'mcp.test': async (params) => await agent().testMcpServer(params.server),
+
     'service.status': async () =>
       dependencies.service === undefined
         ? {installed: false, keysReadable: false, definitionPath: ''}

@@ -30,6 +30,7 @@ import type {AppPaths} from '@marimo/runtime';
 import {PROVIDERS} from '@marimo/protocol';
 import type {
   AgentProfile,
+  McpServer,
   AgentUiEvent,
   McpStatus,
   PendingGate,
@@ -261,6 +262,43 @@ export class AgentService {
     await this.mcp.apply(settings.mcpServers);
   }
 
+  /**
+   * Adds or replaces a connector, and dials it.
+   *
+   * The write and the connection are one action, because they are one action to
+   * the user: a window that saved the file and left the server unconnected would
+   * report success for something that had not happened.
+   */
+  async setMcpServer(server: McpServer): Promise<McpServer[]> {
+    const settings = await this.runtime.settings();
+    const next = [
+      ...settings.mcpServers.filter((entry) => entry.id !== server.id),
+      server,
+    ];
+    await this.runtime.updateSettings({mcpServers: next});
+    await this.applyMcpServers();
+    return next;
+  }
+
+  async removeMcpServer(serverId: string): Promise<McpServer[]> {
+    const settings = await this.runtime.settings();
+    const next = settings.mcpServers.filter((entry) => entry.id !== serverId);
+    await this.runtime.updateSettings({mcpServers: next});
+    await this.applyMcpServers();
+    return next;
+  }
+
+  /** Dials a server without saving it, so a wrong command can be found out first. */
+  async testMcpServer(
+    server: McpServer,
+  ): Promise<{ok: boolean; detail: string}> {
+    return await this.mcp.test(server);
+  }
+
+  mcpStatuses(): Record<string, McpStatus> {
+    return this.mcp.statuses();
+  }
+
   async profiles(): Promise<{
     profiles: AgentProfile[];
     activeProfileId: string;
@@ -384,10 +422,6 @@ export class AgentService {
 
   abort(profileId: string, sessionId: string): {aborted: boolean} {
     return {aborted: this.runtime.abort(profileId, sessionId)};
-  }
-
-  mcpStatuses(): Record<string, McpStatus> {
-    return this.mcp.statuses() as Record<string, McpStatus>;
   }
 
   /** Whether any agent is mid-turn. */

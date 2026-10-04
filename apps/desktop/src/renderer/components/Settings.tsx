@@ -17,12 +17,21 @@
  */
 import {useEffect, useState} from 'react';
 
-import type {AgentProfile, CatalogTool, ProfileCatalog, PublicSettings} from '@marimo/protocol';
+import type {
+  AgentProfile,
+  CatalogTool,
+  McpStatus,
+  ProfileCatalog,
+  PublicSettings,
+} from '@marimo/protocol';
+
+import {Connectors} from './Connectors.js';
 
 interface Loaded {
   settings: PublicSettings;
   catalog: ProfileCatalog;
   profile: AgentProfile | undefined;
+  statuses: Record<string, McpStatus>;
 }
 
 export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
@@ -43,7 +52,8 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
         (entry) => entry.id === settings.activeProfileId,
       );
       const catalog = await window.marimo.call('profiles.catalog', {});
-      setLoaded({settings, catalog, profile});
+      const statuses = await window.marimo.call('mcp.statuses', {});
+      setLoaded({settings, catalog, profile, statuses});
       setDraft(
         profile === undefined
           ? null
@@ -265,6 +275,14 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
             />
           ))}
         </section>
+
+        <Connectors
+          servers={loaded.settings.mcpServers}
+          statuses={loaded.statuses}
+          onChange={() => {
+            void load();
+          }}
+        />
 
         <section className="settings-section">
           <h3>API key</h3>

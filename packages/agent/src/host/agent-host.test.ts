@@ -1153,4 +1153,144 @@ describe('AgentHost', () => {
       host.setSessionModel('nope', 'deepseek-flash'),
     ).rejects.toThrow(/Unknown session/);
   });
+
+  /**
+   * Gates outlive the process that raised them.
+   *
+   * A paused turn is waiting for a person, and people close windows. Before
+   * this, `approve` consulted an in-memory round alone, so after a relaunch the
+   * card was still on screen and pressing Approve did nothing at all — no
+   * error, no effect, no way to tell it had not worked. The conversation is the
+   * only thing that survives, so the question is read back out of it.
+   */
+  describe('a gate that outlives its process', () => {
+    /** A turn that asks to run a command, then answers once it has run. */
+    function shellCommand(command: string) {
+      return (messages: Array<Record<string, unknown>>) =>
+        messages.some((message) => message['role'] === 'tool')
+          ? textChunks('The command finished.')
+          : toolCallChunks('call_shell', 'run_shell', {command});
+    }
+
+    it('reads a pending gate back out of the conversation', async () => {
+      const command = 'echo persisted-gate';
+      const {host, session} = await startHost(shellCommand(command));
+
+      await collect(host.run(session, 'run it'));
+
+      const pending = await host.pendingGates(session);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toMatchObject({tool: 'run_shell', args: {command}});
+      expect(pending[0]?.callId.length).toBeGreaterThan(0);
+    });
+
+    it('answers one the raising process never saw decided', async () => {
+      const marker = `marimo-restart-${Date.now()}`;
+      const command = `echo ${marker}`;
+
+      const {host, session} = await startHost(shellCommand(command));
+      const first = await collect(host.run(session, 'echo the marker'));
+
+      const approval = first.find((event) => event.type === 'approval.request');
+      const callId =
+        approval?.type === 'approval.request' ? approval.callId : '';
+      expect(callId.length).toBeGreaterThan(0);
+
+      /*
+       * The restart: the object that raised the gate is gone, and so is
+       * everything it was holding. A second host over the same session
+       * directory is what the app looks like after a relaunch.
+       */
+      host.dispose();
+      const restarted = createHost(fake?.baseUrl ?? '');
+
+      expect(
+        (await restarted.pendingGates(session)).map((gate) => gate.callId),
+      ).toEqual([callId]);
+
+      const second = await collect(
+        restarted.approve({sessionId: session, callId, confirmed: true}),
+      );
+
+      const finished = second.find((event) => event.type === 'tool.finished');
+      expect(finished).toMatchObject({type: 'tool.finished', ok: true});
+      if (finished?.type === 'tool.finished') {
+        expect(finished.result).toContain(marker);
+      }
+    });
+
+    it('honours a refusal given after the restart', async () => {
+      const marker = `marimo-refused-${Date.now()}`;
+      const command = `echo ${marker}`;
+      const {host, session} = await startHost(shellCommand(command));
+      const first = await collect(host.run(session, 'run it'));
+      const approval = first.find((event) => event.type === 'approval.request');
+      const callId =
+        approval?.type === 'approval.request' ? approval.callId : '';
+
+      host.dispose();
+      const restarted = createHost(fake?.baseUrl ?? '');
+
+      const second = await collect(
+        restarted.approve({sessionId: session, callId, confirmed: false}),
+      );
+
+      const finished = second.find((event) => event.type === 'tool.finished');
+      expect(finished).toMatchObject({ok: false});
+
+      /*
+       * The assertion that matters is not the wording — that belongs to ADK, and
+       * pinning it here would make a dependency's phrasing a test failure. It is
+       * that the command did not run: a refusal that still executed the thing it
+       * refused would be the worst bug this file could have.
+       */
+      if (finished?.type === 'tool.finished') {
+        expect(finished.result).not.toContain(marker);
+      }
+    });
+
+    it('stops reporting a gate once it has been answered', async () => {
+      const {host, session} = await startHost(shellCommand('echo once'));
+      const first = await collect(host.run(session, 'run it'));
+      const approval = first.find((event) => event.type === 'approval.request');
+      const callId =
+        approval?.type === 'approval.request' ? approval.callId : '';
+
+      await collect(
+        host.approve({sessionId: session, callId, confirmed: true}),
+      );
+
+      expect(await host.pendingGates(session)).toEqual([]);
+    });
+
+    it('reports nothing for a conversation that never asked', async () => {
+      const {host, session} = await startHost(() => textChunks('hello'));
+      await collect(host.run(session, 'hi'));
+      expect(await host.pendingGates(session)).toEqual([]);
+    });
+
+    it('reports nothing for a conversation that does not exist', async () => {
+      const {host} = await startHost(() => textChunks('ok'));
+      // An empty answer rather than a throw: a window asks this for whatever it
+      // is showing, including a conversation deleted in another window a moment
+      // ago, and that must not become an error on screen.
+      expect(await host.pendingGates('no-such-session')).toEqual([]);
+    });
+
+    it('ignores an approval for a call that is not waiting', async () => {
+      const {host, session} = await startHost(shellCommand('echo x'));
+      await collect(host.run(session, 'run it'));
+
+      // Nothing is driven: sending ADK a confirmation for a question it never
+      // asked is what it refuses outright.
+      const events = await collect(
+        host.approve({
+          sessionId: session,
+          callId: 'a-call-that-was-never-made',
+          confirmed: true,
+        }),
+      );
+      expect(events).toEqual([]);
+    });
+  });
 });

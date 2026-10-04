@@ -1,0 +1,253 @@
+/**
+ * Reading pending gates out of an event stream.
+ *
+ * The pure half of "a gate survives a restart", tested without a host, a
+ * provider or a filesystem. This is where the awkward cases live: a gate that
+ * was never given an id, a gate answered by a refusal, a round of several gates
+ * where only some have been decided, and the turn the user simply walked away
+ * from.
+ *
+ * The integration in `agent-host.test.ts` proves the mechanism end to end; this
+ * proves the arithmetic, which is the part that would be wrong in a way an
+ * end-to-end test only sometimes notices.
+ */
+import {describe, expect, it} from 'vitest';
+
+import type {AdkEvent} from '../sessions/file-session-service.js';
+import {pendingGatesIn} from './agent-host.js';
+
+const GATE = 'adk_request_confirmation';
+
+/** An event in one invocation, carrying the parts given. */
+function event(
+  invocationId: string,
+  ...parts: Array<Record<string, unknown>>
+): AdkEvent {
+  return {
+    invocationId,
+    timestamp: 1_700_000_000_000,
+    content: {parts},
+  } as unknown as AdkEvent;
+}
+
+/** The call ADK makes when a tool needs approving. */
+function gate(
+  id: string | undefined,
+  tool = 'run_shell',
+  args: Record<string, unknown> = {},
+  hint = '',
+): Record<string, unknown> {
+  return {
+    functionCall: {
+      ...(id === undefined ? {} : {id}),
+      name: GATE,
+      args: {
+        originalFunctionCall: {name: tool, args},
+        toolConfirmation: {hint},
+      },
+    },
+  };
+}
+
+/** Any response that settles the call with this id. */
+function answer(id: string, name = 'run_shell'): Record<string, unknown> {
+  return {functionResponse: {id, name, response: {ok: true}}};
+}
+
+describe('pendingGatesIn', () => {
+  it('finds nothing in an empty conversation', () => {
+    expect(pendingGatesIn([])).toEqual([]);
+  });
+
+  it('reports a gate that was asked and not answered', () => {
+    const gates = pendingGatesIn([
+      event('run-1', gate('call_1', 'run_shell', {command: 'ls'}, 'ls')),
+    ]);
+
+    expect(gates).toHaveLength(1);
+    expect(gates[0]).toMatchObject({
+      callId: 'call_1',
+      tool: 'run_shell',
+      args: {command: 'ls'},
+      hint: 'ls',
+    });
+  });
+
+  it('says when the question was asked', () => {
+    // So a card can say how long it has waited, and a headless run can report
+    // that a job has been parked since Tuesday rather than looking stuck.
+    const gates = pendingGatesIn([event('run-1', gate('call_1', 'run_shell'))]);
+    expect(gates[0]?.askedAt).toBe(
+      new Date(1_700_000_000_000).toISOString(),
+    );
+  });
+
+  it('stops reporting one that has been answered', () => {
+    expect(
+      pendingGatesIn([
+        event('run-1', gate('call_1', 'run_shell')),
+        event('run-2', answer('call_1')),
+      ]),
+    ).toEqual([]);
+  });
+
+  /*
+   * A refusal is an answer. ADK settles a rejected confirmation with a function
+   * response carrying the same id, so leaving it pending would put a card back
+   * on screen for a decision the user already made — and answering it again
+   * would send ADK a confirmation for a call it is no longer asking about.
+   */
+  it('counts a refusal as an answer', () => {
+    const refused = {
+      functionResponse: {id: 'call_1', name: GATE, response: {confirmed: false}},
+    };
+    expect(
+      pendingGatesIn([
+        event('run-1', gate('call_1', 'run_shell')),
+        event('run-2', refused),
+      ]),
+    ).toEqual([]);
+  });
+
+  /*
+   * The case that matters most and is easiest to get wrong.
+   *
+   * A turn is one invocation. Asking something else starts a new one, which
+   * abandons the gate the old turn was waiting on — the app has always behaved
+   * that way. A reader that looked for "unanswered anywhere" would resurrect
+   * that card on every reload, and Approve on it would ask ADK to confirm a call
+   * belonging to a turn that is over.
+   */
+  it('abandons the previous turn\'s gates when a new turn starts', () => {
+    const gates = pendingGatesIn([
+      event('run-1', gate('call_1', 'run_shell', {command: 'ls'})),
+      event('run-2', {text: 'never mind, what is the weather'}),
+    ]);
+
+    expect(gates).toEqual([]);
+  });
+
+  it('abandons them even when the new turn asked nothing at all', () => {
+    const gates = pendingGatesIn([
+      event('run-1', gate('call_1', 'run_shell')),
+      event('run-2'),
+    ]);
+    expect(gates).toEqual([]);
+  });
+
+  it('keeps a gate from the newest turn while it is undecided', () => {
+    const gates = pendingGatesIn([
+      event('run-1', gate('call_1', 'run_shell')),
+      event('run-2', answer('call_1')),
+      event('run-2', gate('call_2', 'write_file', {path: 'a'})),
+    ]);
+
+    expect(gates.map((entry) => entry.callId)).toEqual(['call_2']);
+  });
+
+  /*
+   * A round of several gates is answered as *one message* — ADK reads the
+   * confirmations from the newest message alone — so on disk the round stays
+   * entirely undecided until the resume happens. Half-answered is a state that
+   * exists only in memory, between two clicks, and it is not one the disk can
+   * disagree with: a reload during it shows the round again, which is honest.
+   */
+  it('reports every gate of a round until the round is answered', () => {
+    const gates = pendingGatesIn([
+      event(
+        'run-1',
+        gate('call_1', 'write_file', {path: 'a'}),
+        gate('call_2', 'write_file', {path: 'b'}),
+        gate('call_3', 'write_file', {path: 'c'}),
+      ),
+    ]);
+
+    expect(gates.map((entry) => entry.callId)).toEqual([
+      'call_1',
+      'call_2',
+      'call_3',
+    ]);
+  });
+
+  it('clears the whole round when it is answered as one message', () => {
+    const gates = pendingGatesIn([
+      event('run-1', gate('call_1'), gate('call_2'), gate('call_3')),
+      event('run-2', answer('call_1'), answer('call_2'), answer('call_3')),
+    ]);
+
+    expect(gates).toEqual([]);
+  });
+
+  it('reports the ones a response in the same turn did not settle', () => {
+    // Which is how ADK answers a call it is still asking about: the refusal
+    // lands beside the gate.
+    const gates = pendingGatesIn([
+      event('run-1', gate('call_1'), answer('call_1'), gate('call_2')),
+    ]);
+
+    expect(gates.map((entry) => entry.callId)).toEqual(['call_2']);
+  });
+
+  it('keeps the order the questions were asked in', () => {
+    // So a round of cards draws the same way every time it is read, rather than
+    // reshuffling when the window reloads.
+    const gates = pendingGatesIn([
+      event(
+        'run-1',
+        gate('c', 'run_shell'),
+        gate('a', 'run_shell'),
+        gate('b', 'run_shell'),
+      ),
+    ]);
+    expect(gates.map((entry) => entry.callId)).toEqual(['c', 'a', 'b']);
+  });
+
+  /*
+   * A gate with no id cannot be answered — a response has nothing to match it
+   * against — so it is left out rather than shown as a card that could never
+   * work. ADK always sends an id; this is for a stream that has been through a
+   * model or a proxy that did not.
+   */
+  it('skips a gate with no id', () => {
+    expect(
+      pendingGatesIn([event('run-1', gate(undefined, 'run_shell'))]),
+    ).toEqual([]);
+  });
+
+  it('treats a malformed gate as an unknown tool rather than throwing', () => {
+    // `readGate` is deliberately total: a card reading "unknown" is a bug worth
+    // seeing, and an exception here would take the whole conversation with it.
+    const gates = pendingGatesIn([
+      event('run-1', {functionCall: {id: 'x', name: GATE}}),
+    ]);
+    expect(gates[0]).toMatchObject({callId: 'x', tool: 'unknown', args: {}});
+  });
+
+  it('ignores an event with no parts at all', () => {
+    const empty = {invocationId: 'run-1', content: {}} as unknown as AdkEvent;
+    expect(pendingGatesIn([empty])).toEqual([]);
+  });
+
+  it('ignores ordinary tool calls, which are not questions for a person', () => {
+    const gates = pendingGatesIn([
+      event('run-1', {
+        functionCall: {id: 'auto', name: 'current_time', args: {}},
+      }),
+    ]);
+    expect(gates).toEqual([]);
+  });
+
+  /*
+   * An event with no invocation id abandons nothing. Older streams, or one
+   * written by a build that did not record it, must not have their gates
+   * silently dropped — a card that never appears is worse than one that is
+   * merely late.
+   */
+  it('does not abandon a gate for an event that names no invocation', () => {
+    const gates = pendingGatesIn([
+      event('run-1', gate('call_1', 'run_shell')),
+      {timestamp: 1, content: {parts: []}} as unknown as AdkEvent,
+    ]);
+    expect(gates.map((entry) => entry.callId)).toEqual(['call_1']);
+  });
+});

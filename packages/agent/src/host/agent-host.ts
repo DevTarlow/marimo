@@ -93,6 +93,42 @@ interface GateDecision {
 }
 
 /**
+ * A gate a conversation is still waiting on.
+ *
+ * The same three facts an `approval.request` carries, because they are the three
+ * a card needs to be drawn and to be answerable: which call, what it would do,
+ * and the one line that says what that means.
+ */
+export interface PendingGate {
+  callId: string;
+  tool: string;
+  args: unknown;
+  hint: string;
+  /**
+   * When the question was asked, so a card can say how long it has waited.
+   *
+   * There is deliberately no expiry. A desktop agent's user may be away for
+   * hours, and a gate that lapsed while they were out would silently throw away
+   * the work they asked for — the turn would simply never finish, with nothing
+   * on screen to say why. The age is reported and the decision stays with them.
+   */
+  askedAt: string;
+}
+
+/**
+ * The gates of one paused round, and the decisions taken so far.
+ *
+ * Held together because ADK reads confirmations from the newest message alone:
+ * the answers cannot be sent one at a time, so they have to accumulate somewhere
+ * until the round is complete.
+ */
+interface GateRound {
+  sessionId: string;
+  gates: Set<string>;
+  decisions: Map<string, GateDecision>;
+}
+
+/**
  * The confirmation response ADK resumes a gated call with.
  *
  * ADK matches it to the gate by `id` and to the original call through the gate's
@@ -152,13 +188,7 @@ export class AgentHost {
    * mapping layer answers the calls left behind on the wire, so an abandoned
    * round costs a re-ask rather than a broken conversation.
    */
-  private gateRound:
-    | {
-        sessionId: string;
-        gates: Set<string>;
-        decisions: Map<string, GateDecision>;
-      }
-    | undefined;
+  private gateRound: GateRound | undefined;
 
   constructor(options: AgentHostOptions) {
     this.sessionService = new FileSessionService({
@@ -463,6 +493,54 @@ export class AgentHost {
   }
 
   /**
+   * The gates this conversation is still waiting on, read from disk.
+   *
+   * The in-memory `gateRound` is the fast path, and it is not the truth. A
+   * process that restarted, a window that reloaded, and the headless runner
+   * looking at a job the app paused on all have the same problem: the gate was
+   * raised by an object that no longer exists, so the only place it survives is
+   * the conversation itself.
+   *
+   * That is the same rule the rest of this app follows — the thread on disk is
+   * the state machine — and it is what makes an approval card answerable after a
+   * relaunch instead of being a button that silently does nothing.
+   */
+  async pendingGates(sessionId: string): Promise<PendingGate[]> {
+    const events = await this.sessionService.listEvents(sessionId);
+    return pendingGatesIn(events);
+  }
+
+  /**
+   * The round to record a decision against.
+   *
+   * Prefers the round this process opened, and falls back to reading the gates
+   * back out of the conversation when it did not open one — which is what a
+   * restart, a reload or a second window looks like from here.
+   *
+   * The derived round is cached exactly like a live one, so a round with several
+   * gates still collects all of its decisions before anything is sent: ADK reads
+   * the confirmations from the newest message alone, and resuming on the first
+   * decision is what leaves a turn with one tool result for two calls.
+   */
+  private async roundFor(sessionId: string): Promise<GateRound | undefined> {
+    if (this.gateRound?.sessionId === sessionId) {
+      return this.gateRound;
+    }
+
+    const gates = await this.pendingGates(sessionId);
+    if (gates.length === 0) {
+      return undefined;
+    }
+
+    this.gateRound = {
+      sessionId,
+      gates: new Set(gates.map((gate) => gate.callId)),
+      decisions: new Map(),
+    };
+    return this.gateRound;
+  }
+
+  /**
    * Answers a pending `adk_request_confirmation` gate. ADK resumes the paused
    * call when the newest user turn carries a function response whose name is
    * the gate name and whose id is the gate's call id.
@@ -473,15 +551,14 @@ export class AgentHost {
    * together. Resuming on the first decision is what left a real turn with one
    * tool result for two tool calls, which the provider refuses.
    *
-   * A gate this host is not waiting on is dropped rather than sent: it belongs
-   * to a round that was already answered, or to one abandoned by a later turn,
-   * and ADK would refuse it as a confirmation for a call it is not asking about.
-   * The window has already taken its card down by then; the channel says so
-   * itself before it gets this far.
+   * A gate that is not waiting anywhere — answered already, or belonging to a
+   * round abandoned by a later turn — is dropped rather than sent: ADK would
+   * refuse it as a confirmation for a call it is not asking about, and the
+   * window has taken its card down by then.
    */
   async *approve(params: ApproveParams): AsyncGenerator<AgentUiEvent> {
-    const round = this.gateRound;
-    if (!round || round.sessionId !== params.sessionId) {
+    const round = await this.roundFor(params.sessionId);
+    if (!round) {
       return;
     }
     if (!round.gates.has(params.callId)) {
@@ -895,6 +972,76 @@ function readGate(args: unknown): GateDetails {
     args: record.originalFunctionCall?.args ?? {},
     hint: record.toolConfirmation?.hint ?? '',
   };
+}
+
+/**
+ * The gates a conversation has been asked and not yet answered.
+ *
+ * A gate is raised by an ADK function call and settled by a function response
+ * carrying the same id, so "still pending" is exactly "asked, and no response
+ * with that id since". Reading it out of the event stream rather than out of
+ * memory is what lets a card survive a relaunch: the process that raised it is
+ * gone, and the conversation is the only thing that is not.
+ *
+ * **Only the newest invocation counts.** A turn is one invocation, and starting
+ * a new one abandons whatever the previous turn was waiting on — the app has
+ * always behaved that way, it just had nothing on disk to say so. Without this,
+ * a gate the user walked away from would come back as a card every time the
+ * window reloaded, and pressing Approve on it would ask ADK to confirm a call
+ * belonging to a turn that is over.
+ *
+ * Note the shape of a real approval: the question is asked in one invocation and
+ * answered in the *next* one, because resuming is a new turn carrying the
+ * confirmation. That is why this tracks the newest invocation rather than
+ * looking for gates with no answer anywhere — after an approval, the newest
+ * invocation is the one that answered it, and it has nothing pending.
+ *
+ * Order is the order the questions were asked, so a round of several gates draws
+ * its cards the same way every time it is read.
+ */
+export function pendingGatesIn(events: readonly AdkEvent[]): PendingGate[] {
+  let invocation: string | undefined;
+  let asked = new Map<string, PendingGate>();
+  let answered = new Set<string>();
+
+  for (const event of events) {
+    if (event.invocationId !== undefined && event.invocationId !== invocation) {
+      invocation = event.invocationId;
+      asked = new Map();
+      answered = new Set();
+    }
+
+    for (const part of event.content?.parts ?? []) {
+      const call = part.functionCall;
+      if (call?.name === REQUEST_CONFIRMATION_FUNCTION_CALL_NAME) {
+        /*
+         * A gate with no id cannot be answered — there is nothing for a response
+         * to match — so it is left out rather than shown as a card that could
+         * never work.
+         */
+        if (call.id) {
+          const gate = readGate(call.args);
+          asked.set(call.id, {
+            callId: call.id,
+            tool: gate.tool,
+            args: gate.args,
+            hint: gate.hint,
+            askedAt: new Date(event.timestamp).toISOString(),
+          });
+        }
+        continue;
+      }
+
+      // Any response settles its call, whatever it answers: a refusal is an
+      // answer, and so is a tool result that came back after approval.
+      const response = part.functionResponse;
+      if (response?.id) {
+        answered.add(response.id);
+      }
+    }
+  }
+
+  return [...asked.values()].filter((gate) => !answered.has(gate.callId));
 }
 
 function hasError(response: unknown): boolean {

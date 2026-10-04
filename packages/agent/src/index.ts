@@ -1,5 +1,9 @@
-export {AgentHost} from './host/agent-host.js';
-export type {AgentHostOptions, ApproveParams} from './host/agent-host.js';
+export {AgentHost, pendingGatesIn} from './host/agent-host.js';
+export type {
+  AgentHostOptions,
+  ApproveParams,
+  PendingGate,
+} from './host/agent-host.js';
 
 /*
  * MCP servers: one connection each, and the tools they offer.

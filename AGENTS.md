@@ -41,27 +41,39 @@ Each of these is silent when it breaks. That is the whole reason they are listed
    paused turn's pending calls are derived from the stored thread, never held in
    memory — that is what lets a reloaded window answer a card, and a restarted
    process lose a typing animation rather than a conversation.
-2. **Every tool call gets an answer.** An assistant message with tool calls must
+2. **A gate is live only in the newest invocation.** A turn is one invocation,
+   and starting a new one abandons whatever the previous turn was waiting on.
+   Note the shape of a real approval: the question is asked in one invocation and
+   answered in the *next* one, because resuming is a new turn carrying the
+   confirmation. So `pendingGatesIn` tracks the newest invocation rather than
+   looking for unanswered calls anywhere — get this wrong and a card the user
+   walked away from comes back on every reload, with an Approve button that asks
+   ADK to confirm a call belonging to a finished turn.
+3. **Every tool call gets an answer.** An assistant message with tool calls must
    be followed by one result per call or the provider refuses the whole request —
    on that turn *and every later turn of that conversation*.
-3. **Reasoning is replayed.** DeepSeek rejects a tool-carrying turn whose
+4. **Reasoning is replayed.** DeepSeek rejects a tool-carrying turn whose
    `reasoning_content` is missing from a later request. It is not decoration.
-4. **Gated means gated in code, not in the prompt.** Whether a call pauses the
+5. **Gated means gated in code, not in the prompt.** Whether a call pauses the
    turn is decided before the tool is offered to the model.
-5. **A refused path is refused after resolution.** `..`, an absolute path outside
+6. **A refused path is refused after resolution.** `..`, an absolute path outside
    the workspace, and a symlink that leaves it are one refusal.
-6. **Truncation is visible.** A capped tool result says so, so the model knows
+7. **Truncation is visible.** A capped tool result says so, so the model knows
    there is more rather than believing it read everything.
-7. **Secrets never cross to the renderer.** Settings report `hasKey`, never a key.
-8. **A capability the user turned off is absent, not discouraged.**
-9. **One turn at a time holds across processes.** The app and the runner are
-   serialised by a lock, not by hope.
-10. **Unattended means unapproved stays unapproved.** A headless run never
+8. **Secrets never cross to the renderer.** Settings report `hasKey`, never a key.
+9. **A capability the user turned off is absent, not discouraged.**
+10. **One turn at a time holds across processes.** The app and the runner are
+    serialised by a lock, not by hope.
+11. **Unattended means unapproved stays unapproved.** A headless run never
     answers its own approval gate.
-11. **A newer document is never overwritten.** See "Documents" below.
-12. **The app and the runner resolve the same user-data directory.** When they do
+12. **A newer document is never overwritten.** See "Documents" below.
+13. **The app and the runner resolve the same user-data directory.** When they do
     not, nothing errors: the window writes one `jobs.json`, the service reads
     another, finds nothing due, and exits 0.
+14. **An MCP server's tools cannot take a built-in name.** The reserved set is
+    every built-in name *before* the profile filter — a tool the profile has
+    switched off still owns its name, because the profile can change between
+    turns.
 
 ## Documents
 

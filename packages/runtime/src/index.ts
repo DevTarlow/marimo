@@ -62,6 +62,18 @@ export type {
   StoredSkillForPrompt,
 } from './agent/resolve.js';
 
+/* MCP servers: which exist, which are up, and where their credentials live. */
+export {
+  McpManager,
+  mcpSecretFile,
+  secretReaderFor,
+} from './agent/mcp-manager.js';
+export type {
+  McpConnectionState,
+  McpManagerOptions,
+  McpStatus,
+} from './agent/mcp-manager.js';
+
 /* Scheduled jobs. */
 export {
   DEFAULT_SCHEDULE,

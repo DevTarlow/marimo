@@ -31,7 +31,7 @@ import {
   assertWritable,
   DocumentTooNewError,
   readVersionedDocument,
-} from './migrations.js';
+} from '@marimo/agent';
 
 /** How many proposals may wait at once. */
 export const MAX_PENDING_PROPOSALS = 50;

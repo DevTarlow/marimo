@@ -29,7 +29,7 @@ import {
   assertWritable,
   DocumentTooNewError,
   readVersionedDocument,
-} from './migrations.js';
+} from '@marimo/agent';
 
 export interface SkillStoreOptions {
   file: string;

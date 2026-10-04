@@ -79,7 +79,17 @@ export function createWebSearchTool(context: WebSearchToolContext) {
       }
 
       const lines = results.slice(0, MAX_RESULTS).map((result, index) => {
-        const snippet = result.snippet.trim().slice(0, MAX_SNIPPET_CHARS);
+        /*
+         * Marked, not silently cut. A snippet that stops mid-sentence reads as a
+         * snippet that ended there, and the model quoting half a result as
+         * though it were the whole thing is exactly what a visible marker
+         * prevents. `MAX_SNIPPET_CHARS` is short enough that this fires often.
+         */
+        const whole = result.snippet.trim();
+        const snippet =
+          whole.length > MAX_SNIPPET_CHARS
+            ? `${whole.slice(0, MAX_SNIPPET_CHARS)} [snippet cut]`
+            : whole;
         const head = `${index + 1}. ${result.title.trim() || '(untitled)'}`;
         return snippet.length > 0
           ? `${head}\n   ${result.url}\n   ${snippet}`

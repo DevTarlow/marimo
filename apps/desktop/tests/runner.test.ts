@@ -12,7 +12,7 @@
  * produces the designed outcome: the job runs, is refused for want of a key, and
  * records that as its result.
  */
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -145,6 +145,24 @@ describe('runDue', () => {
     // And it did not touch the job.
     const after = JSON.parse(await readFile(paths.jobs, 'utf8'));
     expect(after.jobs.jobs[0].lastStatus).toBeUndefined();
+  });
+
+  /*
+   * Held for the length of the work and released afterwards.
+   *
+   * The runner used to only *read* the lock, which made the exclusion
+   * one-directional: an app launched while a runner was mid-turn found the lock
+   * free, took it, and started its own scheduler beside the run in progress. It
+   * holds it now, so the app waits — and it must not leave it behind, or the app
+   * would wait forever and jobs would stop until somebody deleted a file they
+   * have never heard of.
+   */
+  it('leaves no lock behind after a run', async () => {
+    await seedDueJob();
+
+    await runDue({paths});
+
+    await expect(stat(paths.appLock)).rejects.toThrow();
   });
 
   it('takes over from an app that is gone', async () => {

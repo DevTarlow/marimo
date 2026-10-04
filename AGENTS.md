@@ -18,10 +18,12 @@ packages/protocol   The typed contract: zod schemas for every IPC call, the
                     documents. No Electron, no Node, no React.
 packages/agent      Everything ADK: the OpenAI-compatible provider, tool set,
                     skills that compose the system instruction, the file-backed
-                    memory and session stores, AgentHost. No Electron.
+                    memory and session stores, AgentHost, and the
+                    document-version machinery. No Electron.
 packages/runtime    The Electron-free half of the app proper: where files live,
-                    secrets with the cipher injected, the jobs/profiles/settings/
-                    skills stores, and the document-version machinery.
+                    secrets with the cipher injected, and the jobs/profiles/
+                    settings/skills/proposals stores. Re-exports the version
+                    machinery it uses, so a caller still finds it beside them.
 apps/desktop        The Electron app: src/main (window, IPC, tray, adapters),
                     src/preload (the sandboxed bridge), src/runner (the headless
                     job runner), src/renderer (React), src/shared.
@@ -90,6 +92,17 @@ Every file the app owns carries a `version` and is read through
 The rule behind all of it: **a lenient read plus a write is how a user's data
 disappears.** If you add a store that reads leniently, its write path must call
 `assertWritable` or quarantine first.
+
+`migrations.ts` lives in `packages/agent` rather than `packages/runtime`, because
+the conversation index needs it and the dependency runs one way — `runtime`
+imports `agent`, not the reverse. `runtime` re-exports it so a caller still finds
+it beside the stores.
+
+**Every document is covered**, and an audit is the only way to know that: the
+session index was the last one missing the guard, and its lenient read plus an
+unguarded write meant a corrupt index became an empty one on the very next
+message — every conversation gone from the sidebar. When you add a store, add it
+to that list.
 
 ## Commands
 

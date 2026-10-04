@@ -173,6 +173,56 @@ describe('FileSessionService', () => {
     expect(await service.getIndex()).toEqual([]);
   });
 
+  /*
+   * And does not then *replace* it. The lenient read above is only safe because
+   * the write refuses — without that, an unreadable index became an empty one on
+   * the very next message and every conversation vanished from the sidebar,
+   * which is the failure this project's document rule exists to prevent.
+   */
+  it('keeps the corrupt index rather than overwriting it', async () => {
+    await writeFile(join(rootDir, 'index.json'), 'not json', 'utf8');
+    await service.getIndex();
+
+    const {readdir} = await import('node:fs/promises');
+    const entries = await readdir(rootDir);
+    const kept = entries.find((entry) => entry.includes('unreadable'));
+    expect(kept).toBeDefined();
+    expect(await readFile(join(rootDir, kept ?? ''), 'utf8')).toBe('not json');
+  });
+
+  it('accepts an index that is JSON but not an index, and keeps it', async () => {
+    await writeFile(join(rootDir, 'index.json'), '{"hello":"world"}', 'utf8');
+    expect(await service.getIndex()).toEqual([]);
+
+    const {readdir} = await import('node:fs/promises');
+    expect(
+      (await readdir(rootDir)).some((entry) => entry.includes('unreadable')),
+    ).toBe(true);
+  });
+
+  /*
+   * Invariant 12 for the file that holds the conversation list. A future build's
+   * index must be left exactly where it is: losing the list is bad, and writing
+   * over it is worse.
+   */
+  it('refuses an index from a newer build, and leaves it alone', async () => {
+    const future = JSON.stringify({version: 99, sessions: {}});
+    await writeFile(join(rootDir, 'index.json'), future, 'utf8');
+
+    await expect(service.getIndex()).rejects.toThrow(/newer version/u);
+    expect(await readFile(join(rootDir, 'index.json'), 'utf8')).toBe(future);
+  });
+
+  it('refuses to write over an index from a newer build', async () => {
+    const future = JSON.stringify({version: 99, sessions: {}});
+    await writeFile(join(rootDir, 'index.json'), future, 'utf8');
+
+    await expect(
+      service.createSession({appName: APP, userId: USER, sessionId: 'x'}),
+    ).rejects.toThrow(/newer version/u);
+    expect(await readFile(join(rootDir, 'index.json'), 'utf8')).toBe(future);
+  });
+
   it('records a per-conversation model at creation and on change', async () => {
     await service.createSession({
       appName: APP,

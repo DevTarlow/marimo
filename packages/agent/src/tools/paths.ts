@@ -6,7 +6,7 @@
  * inside the configured workspace root, which is what stops `../../etc/passwd`
  * and a symlink planted inside the workspace from escaping it.
  */
-import {realpath} from 'node:fs/promises';
+import {readlink, realpath} from 'node:fs/promises';
 import {
   basename,
   dirname,
@@ -51,6 +51,19 @@ export async function resolveInsideWorkspace(
  * non-existent tail re-appended. A path that does not exist yet still has to be
  * checkable, and resolving only the ancestor is what keeps a symlinked parent
  * from hiding an escape.
+ *
+ * **A dangling symlink is followed, not re-appended.** `realpath` reports
+ * ENOENT for a symlink whose target does not exist, exactly as it does for a
+ * name that was never there — so appending the leaf unchecked treated
+ * `<root>/link -> /outside/missing` as an ordinary new file inside the root.
+ * `write_file` then followed the link and created the file outside the
+ * workspace, and its own confirmation predicate returned false because `stat`
+ * threw, so there was no approval card either. One escape, no gate, no warning.
+ *
+ * Reading the link first is what tells the two apart. The target is resolved
+ * against the already-real parent — a relative link is relative to where the
+ * link is, not to the process — and then resolved in turn, so a chain of
+ * dangling links ends somewhere checkable rather than at the first hop.
  */
 async function realpathOrNearestAncestor(target: string): Promise<string> {
   try {
@@ -63,7 +76,20 @@ async function realpathOrNearestAncestor(target: string): Promise<string> {
     if (parent === target) {
       return target;
     }
-    return join(await realpathOrNearestAncestor(parent), basename(target));
+    const resolvedParent = await realpathOrNearestAncestor(parent);
+
+    /*
+     * `readlink` fails with EINVAL for a name that is not a link and ENOENT for
+     * one that is not there at all, and both mean the same thing here: an
+     * ordinary new file under a parent that has already been resolved.
+     */
+    const link = await readlink(target).catch(() => undefined);
+    if (link !== undefined) {
+      const through = isAbsolute(link) ? link : resolve(resolvedParent, link);
+      return await realpathOrNearestAncestor(through);
+    }
+
+    return join(resolvedParent, basename(target));
   }
 }
 

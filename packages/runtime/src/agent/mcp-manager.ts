@@ -345,10 +345,18 @@ export class McpManager {
       const tools = await connection.listTools();
 
       /*
-       * Checked here rather than left to `createTools`, because this is where a
-       * user can still be told. A collision at turn time would be an exception
-       * in the middle of a conversation; here it is a sentence under the
-       * server's name.
+       * Built here rather than left to `createTools`, because a name a server
+       * cannot offer has to be reported where a user can still be told. A
+       * failure at turn time is an exception in the middle of a conversation;
+       * here it is a sentence under the server's name.
+       *
+       * **This does not check against built-in names, and cannot.** It passes no
+       * `reserved` set, so the only collision it can catch is between two of the
+       * server's own tools. The property still holds, by a different mechanism:
+       * every server tool is offered as `mcp_<server>_<tool>`, and no built-in
+       * name begins with `mcp_`, so a built-in collision is unreachable rather
+       * than refused. `createTools` computes the real reserved set for the case
+       * the prefixing ever changes.
        */
       buildMcpTools({server, connection, tools});
 

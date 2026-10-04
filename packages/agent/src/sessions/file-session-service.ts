@@ -16,7 +16,16 @@ import {join} from 'node:path';
 
 import {BaseSessionService} from '@google/adk';
 
+import {z} from 'zod';
+
 import type {SessionSource} from '@marimo/protocol';
+
+import {
+  assertWritable,
+  DocumentTooNewError,
+  quarantineDocument,
+  readVersionedDocument,
+} from '../migrations.js';
 
 /**
  * Types are derived from the base class instead of imported by name so this
@@ -76,10 +85,38 @@ export interface SessionIndexEntry {
   source?: SessionSource;
 }
 
-interface SessionIndexFile {
-  version: 1;
-  sessions: Record<string, SessionIndexEntry>;
-}
+/**
+ * The index document, as a schema rather than an interface.
+ *
+ * It is read back from a file a user can edit and a crash can truncate, so the
+ * shape has to be *checked* rather than asserted — an interface says what the
+ * writer meant, and a schema says what the reader will accept.
+ *
+ * `.passthrough()` on the entry: a future build may add a field, and a reader
+ * that refused the whole index over one it did not recognise would take the
+ * conversation list with it.
+ */
+const sessionIndexEntrySchema = z
+  .object({
+    id: z.string().min(1),
+    title: z.string(),
+    createdAt: z.string().min(1),
+    updatedAt: z.string().min(1),
+    messageCount: z.number().int().nonnegative(),
+    appName: z.string(),
+    userId: z.string(),
+    model: z.string().optional(),
+    profileId: z.string().optional(),
+    workspaceId: z.string().optional(),
+  })
+  .passthrough();
+
+const indexFileSchema = z.object({
+  version: z.literal(1),
+  sessions: z.record(z.string(), sessionIndexEntrySchema),
+});
+
+type SessionIndexFile = z.infer<typeof indexFileSchema>;
 
 export interface FileSessionServiceOptions {
   rootDir: string;
@@ -427,23 +464,62 @@ export class FileSessionService extends BaseSessionService {
     return join(this.rootDir, INDEX_FILE);
   }
 
+  /**
+   * The conversation index, read through the version machinery.
+   *
+   * It used to be a bare `JSON.parse` that answered an empty index for anything
+   * it could not read — and the write below is unguarded, so a corrupt index was
+   * replaced by an empty one on the very next message and every conversation
+   * disappeared from the sidebar. That is precisely the "lenient read plus a
+   * write" this project forbids, and it was the last document not following the
+   * rule.
+   *
+   * A file from a newer build throws rather than reading as empty, for the same
+   * reason: losing the list is bad, and *writing over* it is worse.
+   */
   private async readIndex(): Promise<SessionIndexFile> {
-    try {
-      const raw = await readFile(this.indexFilePath(), 'utf8');
-      const parsed = JSON.parse(raw) as SessionIndexFile;
-      if (!parsed || typeof parsed !== 'object' || !parsed.sessions) {
-        return {version: 1, sessions: {}};
-      }
-      return parsed;
-    } catch (error) {
-      if (isNotFound(error) || error instanceof SyntaxError) {
-        return {version: 1, sessions: {}};
-      }
-      throw error;
+    const read = await readVersionedDocument(this.indexFilePath(), {
+      label: 'The conversation index',
+    });
+    if (read.state === 'too-new') {
+      throw new DocumentTooNewError(
+        'The conversation index',
+        read.found,
+        read.supported,
+      );
     }
+    if (read.state === 'unreadable') {
+      /*
+       * Moved aside rather than replaced. The conversations themselves are in
+       * their own JSONL files and are untouched either way, but the index holds
+       * the titles and the ordering, and a parse bug must not be the end of
+       * them.
+       */
+      await quarantineDocument(this.indexFilePath());
+      return {version: 1, sessions: {}};
+    }
+    if (read.state === 'current' || read.state === 'migrated') {
+      const parsed = indexFileSchema.safeParse(read.document);
+      if (parsed.success) {
+        return parsed.data;
+      }
+      // Parsed as JSON but is not an index: the same treatment as unreadable,
+      // because the next write would otherwise replace it with nothing.
+      await quarantineDocument(this.indexFilePath());
+    }
+    return {version: 1, sessions: {}};
   }
 
   private async writeIndex(index: SessionIndexFile): Promise<void> {
+    /*
+     * Refused before anything is written. This is the half that makes the
+     * leniency above safe: the conversations are re-read from disk on every
+     * launch, but the index is only ever *written* from memory, so a write over
+     * a document this build does not understand is unrecoverable.
+     */
+    await assertWritable(this.indexFilePath(), {
+      label: 'The conversation index',
+    });
     await mkdir(this.rootDir, {recursive: true});
     const target = this.indexFilePath();
     const temporary = `${target}.tmp`;

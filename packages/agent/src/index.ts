@@ -108,6 +108,23 @@ export type {
   ReviewRequest,
 } from './memory/index.js';
 export {SKILLS, composeInstruction} from './skills/index.js';
+/*
+ * Document versioning lives here rather than in `@marimo/runtime` because the
+ * conversation index needs it too, and the dependency runs one way: `runtime`
+ * imports `agent`, not the reverse. It needs nothing but `node:fs`, so it can.
+ */
+export {
+  assertWritable,
+  DOCUMENT_VERSION,
+  DocumentTooNewError,
+  quarantineDocument,
+  readVersionedDocument,
+} from './migrations.js';
+export type {
+  DocumentRead,
+  DocumentMigration,
+  ReadVersionedOptions,
+} from './migrations.js';
 export type {Skill} from './skills/index.js';
 export {
   resolveInsideWorkspace,

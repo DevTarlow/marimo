@@ -292,16 +292,7 @@ export function createTools(
   config: AgentConfig,
   deps: ToolDependencies,
 ): BaseTool[] {
-  const tools = baseTools(config, deps);
-  /*
-   * Offered last, and only when the host can build a child. Depth is one by
-   * construction: `deps.subagent.build` builds an agent from this same function
-   * without this dependency, so a helper has no way to ask for one of its own.
-   */
-  if (deps.subagent) {
-    tools.push(createSpawnAgentTool(deps.subagent));
-  }
-  return tools;
+  return baseTools(config, deps);
 }
 
 function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
@@ -361,11 +352,29 @@ function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
     tools.push(...discordTools({discord: deps.discordService}));
   }
 
+  /*
+   * The helper tool, with the rest and therefore *before* the profile's
+   * selection.
+   *
+   * It used to be appended afterwards, which meant it was never filtered: a
+   * profile that had switched helpers off — or allowed nothing at all — was
+   * still offered `spawn_agent`, while the settings screen drew a checkbox for
+   * it and the catalogue listed it as grantable. The checkbox did nothing, and
+   * the README's claim that a tool which is off is not offered was false for
+   * this one tool.
+   *
+   * Depth is still one by construction: `deps.subagent.build` builds an agent
+   * from this same function without this dependency, so a helper has no way to
+   * ask for one of its own.
+   */
+  if (deps.subagent) {
+    tools.push(createSpawnAgentTool(deps.subagent));
+  }
+
   const granted = filterTools(tools, config.enabledTools);
 
   /*
-   * `save_skill` is added after the profile's selection rather than inside it,
-   * and it is the only tool that is.
+   * `save_skill` is added after the profile's selection rather than inside it.
    *
    * Every other tool is a capability the user grants, so a profile that should
    * not be able to run a shell simply does not list it. This one is the mechanism
@@ -394,7 +403,20 @@ function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
    * a collision is a programming error, not something a user can be told about
    * usefully in the middle of a turn.
    */
-  const reserved = new Set(tools.map((tool) => tool.name));
+  /*
+   * Every built-in name this build can produce — computed from the tools that
+   * were *built*, before the profile filter, and including the two that are
+   * added after it.
+   *
+   * `tools` covers everything up to and including the helper tool. `save_skill`
+   * is not in it, because that one is pushed into `granted` below. Both have to
+   * be here: a name the profile has switched off still belongs to the built-in
+   * that owns it, because the profile can change between turns.
+   */
+  const reserved = new Set([
+    ...tools.map((tool) => tool.name),
+    'save_skill',
+  ]);
   for (const source of deps.mcpServers ?? []) {
     granted.push(
       ...buildMcpTools({

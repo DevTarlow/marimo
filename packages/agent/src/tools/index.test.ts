@@ -520,3 +520,86 @@ describe('the tool catalogue', () => {
     expect(new Set(byDefault)).toEqual(new Set(SAFE_DEFAULT_TOOLS));
   });
 });
+
+/*
+ * The helper tool and the profile's selection.
+ *
+ * It was appended *after* `filterTools`, so it was never filtered: a profile
+ * that had switched helpers off — or allowed nothing at all — was still offered
+ * `spawn_agent`. The settings screen drew a checkbox for it, the catalogue
+ * listed it as grantable, and the checkbox did nothing.
+ *
+ * Every test in this file omitted the subagent dependency, which is exactly why
+ * nothing caught it. These pass it.
+ */
+describe('the helper tool and the profile filter', () => {
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(process.cwd(), '.marimo-filter-'));
+  });
+
+  afterEach(async () => {
+    await rm(workDir, {recursive: true, force: true});
+  });
+
+  function withSubagent(enabledTools: string[] | undefined): string[] {
+    return createTools(
+      {
+        apiKey: 'test-key',
+        baseUrl: 'http://127.0.0.1:1',
+        model: 'deepseek-chat',
+        temperature: 0,
+        systemPrompt: 'test',
+        workspaceRoot: workDir,
+        allowPrivateNetworkFetch: false,
+        ...(enabledTools === undefined ? {} : {enabledTools}),
+      },
+      {
+        memory: new MemoryStore({workspaceRoot: workDir}),
+        model: 'deepseek-chat',
+        subagent: {build: () => ({}) as never},
+      },
+    ).map((tool) => tool.name);
+  }
+
+  it('is offered when the profile grants it', () => {
+    expect(withSubagent(['read_file', 'spawn_agent'])).toContain('spawn_agent');
+  });
+
+  it('is absent when the profile does not', () => {
+    const names = withSubagent(['read_file', 'run_shell']);
+    expect(names).toContain('read_file');
+    expect(names).not.toContain('spawn_agent');
+  });
+
+  /*
+   * The sharpest form of the bug. An empty list means "this agent may do
+   * nothing", which is a legitimate setting the store documents — and the
+   * unfiltered tool meant it could still spawn helpers.
+   */
+  it('is absent when the profile allows nothing at all', () => {
+    expect(withSubagent([])).toEqual([]);
+  });
+
+  it('is still offered when there is no profile and therefore no filter', () => {
+    expect(withSubagent(undefined)).toContain('spawn_agent');
+  });
+
+  it('is not offered at all when the host supplies no way to build one', () => {
+    const names = createTools(
+      {
+        apiKey: 'test-key',
+        baseUrl: 'http://127.0.0.1:1',
+        model: 'deepseek-chat',
+        temperature: 0,
+        systemPrompt: 'test',
+        workspaceRoot: workDir,
+        allowPrivateNetworkFetch: false,
+        enabledTools: ['read_file', 'spawn_agent'],
+      },
+      {memory: new MemoryStore({workspaceRoot: workDir}), model: 'deepseek-chat'},
+    ).map((tool) => tool.name);
+    expect(names).not.toContain('spawn_agent');
+  });
+});

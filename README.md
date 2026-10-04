@@ -156,9 +156,8 @@ Known gaps, stated plainly:
   the schemas are there and the settings schema still carries the fields, but
   nothing in the window configures them, so they are unreachable. They are
   scheduled for nothing — somebody should either wire them or remove them.
-- **`appearance` carries `background`, `accent`, `uiScale` and
-  `backgroundDarkness`** from the project this was extracted from. Nothing reads
-  them. Same choice as Discord: wire or remove.
+- **The `.deb` and the two installers** need a platform each; see the table
+  above for what is verified and what is not.
 
 ## Building a release
 

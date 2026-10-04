@@ -23,7 +23,7 @@ import {
   assertWritable,
   DocumentTooNewError,
   readVersionedDocument,
-} from './migrations.js';
+} from '@marimo/agent';
 
 import {agentProfileSchema, profilePatchSchema} from '@marimo/protocol';
 import type {AgentProfile, ProfilePatch, Workspace} from '@marimo/protocol';

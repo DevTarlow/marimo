@@ -62,6 +62,14 @@ const MCP_RECONCILE_MS = 30_000;
  */
 const IDLE_REVIEW_MS = 60_000;
 
+/**
+ * How often to look again when a background run owns the jobs.
+ *
+ * A run is seconds to a minute, so this is quick enough that the app takes over
+ * promptly and slow enough not to spin.
+ */
+const LOCK_RETRY_MS = 5_000;
+
 export interface AgentServiceOptions {
   paths: AppPaths;
   /** Where a turn's events are sent. */
@@ -93,6 +101,8 @@ export class AgentService {
   /** Held for as long as this process is: "the app is running the jobs". */
   private appLock: ProcessLock | undefined;
   private reconcile: NodeJS.Timeout | undefined;
+  /** Waiting for a background run to finish so this process can own the jobs. */
+  private lockTimer: NodeJS.Timeout | undefined;
   /** The pending idle look, reset by each new turn. */
   private idleReview: NodeJS.Timeout | undefined;
   /** Which agent the turn in flight belongs to, for the review that follows. */
@@ -235,19 +245,8 @@ export class AgentService {
   }
 
   async start(): Promise<void> {
-    /*
-     * Claimed before anything else, so a headless run that is already in
-     * progress knows to leave the jobs alone. Not being able to take it is not a
-     * failure: it means a runner got there first, and it will be finished in
-     * seconds.
-     */
-    this.appLock = await holdProcessLock(this.options.paths.appLock);
     await this.applyMcpServers();
-    /*
-     * Started after the servers, so a job whose prompt needs an MCP tool is not
-     * dispatched before that tool exists.
-     */
-    await this.scheduler.start();
+    await this.claimJobs();
     this.reconcile = setInterval(() => {
       void this.mcp.reconcile();
     }, MCP_RECONCILE_MS);
@@ -263,6 +262,7 @@ export class AgentService {
       clearInterval(this.reconcile);
       this.reconcile = undefined;
     }
+    this.lockTimer = this.clearTimer(this.lockTimer);
     this.idleReview = this.clearIdle(this.idleReview);
     this.scheduler.stop();
     await this.appLock?.release();
@@ -348,6 +348,52 @@ export class AgentService {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[marimo] the memory review did not finish: ${detail}`);
     }
+  }
+
+  /**
+   * Claims the right to run scheduled jobs, retrying while a runner has it.
+   *
+   * The lock is held for as long as this process runs, and the *runner* holds it
+   * for the length of its tick. So failing to take it means a background run is
+   * in progress — and the answer is to wait rather than to run beside it, which
+   * would be two processes running turns at once.
+   *
+   * The scheduler is started only once the claim succeeds, because a scheduler
+   * running without the lock is exactly the concurrency the lock exists to
+   * prevent.
+   */
+  private async claimJobs(): Promise<void> {
+    this.appLock = await holdProcessLock(this.options.paths.appLock);
+    if (this.appLock !== undefined) {
+      /*
+       * Started after the servers, so a job whose prompt needs an MCP tool is
+       * not dispatched before that tool exists.
+       */
+      await this.scheduler.start();
+      return;
+    }
+
+    this.lockTimer = setInterval(() => {
+      void holdProcessLock(this.options.paths.appLock).then(
+        async (lock) => {
+          if (lock === undefined || this.stopped) {
+            return;
+          }
+          this.appLock = lock;
+          this.lockTimer = this.clearTimer(this.lockTimer);
+          await this.scheduler.start();
+        },
+        () => undefined,
+      );
+    }, LOCK_RETRY_MS);
+    this.lockTimer.unref?.();
+  }
+
+  private clearTimer(handle: NodeJS.Timeout | undefined): undefined {
+    if (handle !== undefined) {
+      clearInterval(handle);
+    }
+    return undefined;
   }
 
   /** Re-reads the server list and dials whatever changed. */

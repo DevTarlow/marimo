@@ -289,69 +289,6 @@ export function activeProvider(
 /* -------------------------------------------------------------------------- */
 
 /**
- * The UI scale presets.
- *
- * Four steps rather than a slider: each one is a set of text and spacing tokens
- * in the stylesheet, so the choice is a name the CSS already understands rather
- * than a number the renderer has to interpolate into a variable.
- */
-export const UI_SCALES = [
-  'compact',
-  'default',
-  'comfortable',
-  'large',
-] as const;
-export const uiScaleSchema = z.enum(UI_SCALES);
-export type UiScale = z.infer<typeof uiScaleSchema>;
-
-export const UI_SCALE_LABELS: Record<UiScale, string> = {
-  compact: 'Compact',
-  default: 'Default',
-  comfortable: 'Comfortable',
-  large: 'Large',
-};
-
-/**
- * The accent colour, as `#rrggbb`. The empty string means "whatever the
- * stylesheet says", so a user who never opens the picker keeps the design's own
- * blue and a future theme change is not fought by a stored value.
- *
- * Validated here rather than at the `input[type=color]` that writes it: the value
- * ends up in a CSS custom property, and the field is a text box in a JSON file a
- * user can edit.
- */
-export const accentColorSchema = z.union([
-  z.literal(''),
-  z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Expected a #rrggbb colour'),
-]);
-
-/**
- * How dark the window is behind the conversation, as a percentage.
- *
- * This is the alpha of the tint laid over the photograph, so it is the one
- * control that makes an arbitrary picture readable: the design's own tinting
- * assumes a picture of roughly the same brightness as the one it ships with, and
- * a bright or busy photograph needs more of it while a dark one needs less. The
- * value is the *centre* column's tint — the rails are always a fixed step darker,
- * which is what makes them read as panels — so 74 reproduces the design exactly
- * and 100 hides the picture altogether.
- *
- * An integer percentage rather than a 0–1 float: it is a slider position, it is
- * shown to the user as a number, and rounding is not something the renderer
- * should be deciding.
- */
-export const DEFAULT_BACKGROUND_DARKNESS = 74;
-
-/** The darkest the rails can get before the tint stops being a tint. */
-export const BACKGROUND_DARKNESS_MAX = 100;
-
-export const backgroundDarknessSchema = z
-  .number()
-  .int()
-  .min(0)
-  .max(BACKGROUND_DARKNESS_MAX);
-
-/**
  * How the window decides its colours.
  *
  * `system` is the default and is not the same as "dark": it means the app has no
@@ -367,6 +304,16 @@ export type ThemeMode = z.infer<typeof themeModeSchema>;
 export const themeSchema = z.enum(['light', 'dark']);
 export type Theme = z.infer<typeof themeSchema>;
 
+/**
+ * How the window looks.
+ *
+ * A theme and nothing else. The project this was extracted from carried a
+ * background image, an accent colour and a UI scale here as well; all three had
+ * settings, tests and no reader — no window ever drew them — so they went with
+ * the features they belonged to. A field that is stored, validated and never
+ * read is worse than a missing one, because it looks like a working feature from
+ * the settings screen.
+ */
 export const appearanceSchema = z.object({
   /**
    * Light, dark, or whatever the machine is set to.
@@ -376,14 +323,6 @@ export const appearanceSchema = z.object({
    * at sunset takes the window with it.
    */
   theme: themeModeSchema,
-  /**
-   * Imported background file name inside the app's backgrounds directory. Empty
-   * means the picture shipped with the app.
-   */
-  background: z.string(),
-  accent: accentColorSchema,
-  uiScale: uiScaleSchema,
-  backgroundDarkness: backgroundDarknessSchema,
 });
 
 export type Appearance = z.infer<typeof appearanceSchema>;
@@ -394,10 +333,6 @@ export function defaultAppearance(): Appearance {
     // Follows the machine until told otherwise, which is what most people want
     // and what a window should do before anybody has an opinion about it.
     theme: 'system',
-    background: '',
-    accent: '',
-    uiScale: 'default',
-    backgroundDarkness: DEFAULT_BACKGROUND_DARKNESS,
   };
 }
 

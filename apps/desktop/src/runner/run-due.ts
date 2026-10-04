@@ -36,6 +36,7 @@ import {
   createJobRunner,
   defaultUserDataDir,
   FileSecretStore,
+  holdProcessLock,
   isProcessHeld,
   JobScheduler,
   JobStore,
@@ -149,6 +150,30 @@ export async function runDue(options: {
   });
 
   /*
+   * Claimed for the duration of the work, not merely checked.
+   *
+   * Checking once at startup was one-directional: it told this process whether
+   * an app was up, and told the app nothing. So an app launched while a runner
+   * was mid-turn found the lock free, took it, and ran its own scheduler beside
+   * this one — two processes running turns at once, which is the thing the
+   * invariant says must not happen. Holding it makes the exclusion symmetric,
+   * and the app waits for this to be released.
+   */
+  const lock = await holdProcessLock(paths.appLock);
+  if (lock === undefined) {
+    // Somebody took it between the check above and here. Theirs.
+    runtime.dispose();
+    return {
+      userData: paths.userData,
+      appIsRunning: true,
+      total: 0,
+      enabled: 0,
+      due: 0,
+      ran: [],
+    };
+  }
+
+  /*
    * `onChange` is the scheduler saying it recorded something about a job —
    * which is every dispatch outcome, including a deferral and a gate. A `Set`
    * because one job can record twice in a run: once when it starts, once when
@@ -171,6 +196,7 @@ export async function runDue(options: {
     // killed mid-write.
     await scheduler.runOnce();
   } finally {
+    await lock.release();
     runtime.dispose();
   }
 

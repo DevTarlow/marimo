@@ -25,7 +25,7 @@ import {
   DocumentTooNewError,
   quarantineDocument,
   readVersionedDocument,
-} from './migrations.js';
+} from '@marimo/agent';
 
 export interface JobStoreOptions {
   file: string;

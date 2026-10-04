@@ -11,7 +11,7 @@ import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {DEFAULT_BACKGROUND_DARKNESS, PROVIDERS} from '@marimo/protocol';
+import {PROVIDERS} from '@marimo/protocol';
 
 import {
   chooseModel,
@@ -510,116 +510,38 @@ describe('SettingsStore appearance', () => {
     return new SettingsStore(join(dir, 'settings.json'));
   }
 
-  async function write(raw: unknown): Promise<void> {
-    await writeFile(
-      join(dir, 'settings.json'),
-      JSON.stringify(raw, null, 2),
-      'utf8',
-    );
-  }
-
-  it('starts on the shipped picture and the stylesheet accent', async () => {
+  it('starts by following the machine', async () => {
     const settings = await store().load();
-    expect(settings.appearance).toEqual({
-      // Follows the machine until somebody says otherwise.
-      theme: 'system',
-      background: '',
-      accent: '',
-      uiScale: 'default',
-      backgroundDarkness: DEFAULT_BACKGROUND_DARKNESS,
-    });
+    expect(settings.appearance).toEqual({theme: 'system'});
   });
 
-  it('merges one field without clearing the others', async () => {
+  /*
+   * The merge behaviour the block was always about: flipping one thing must not
+   * clear another, which is why the patch schema accepts a subset.
+   */
+  it('merges a change without clearing the rest of the block', async () => {
     const settings = store();
-    await settings.patch({
-      appearance: {background: 'wall.jpg', accent: '#2fb6a8'},
-    });
-    const after = await settings.patch({appearance: {uiScale: 'large'}});
+    await settings.patch({appearance: {theme: 'dark'}});
+    const after = await settings.patch({appearance: {}});
 
-    expect(after.appearance).toEqual({
-      theme: 'system',
-      background: 'wall.jpg',
-      accent: '#2fb6a8',
-      uiScale: 'large',
-      backgroundDarkness: DEFAULT_BACKGROUND_DARKNESS,
-    });
+    expect(after.appearance.theme).toBe('dark');
   });
 
-  it('refuses an accent that is not a colour, keeping the block', async () => {
-    await write({
-      appearance: {background: 'wall.jpg', accent: 'red', uiScale: 'compact'},
-    });
-    const settings = await store().load();
-
-    // The block falls back whole rather than storing a value that cannot be
-    // pasted into a CSS variable.
-    expect(settings.appearance).toEqual({
-      // Follows the machine until somebody says otherwise.
-      theme: 'system',
-      background: '',
-      accent: '',
-      uiScale: 'default',
-      backgroundDarkness: DEFAULT_BACKGROUND_DARKNESS,
-    });
-  });
-
-  it('accepts a six-digit hex accent', async () => {
+  it('keeps a choice through an unrelated write', async () => {
     const settings = store();
-    const after = await settings.patch({appearance: {accent: '#8B7CF6'}});
-    expect(after.appearance.accent).toBe('#8B7CF6');
+    await settings.patch({appearance: {theme: 'light'}});
+    const after = await settings.patch({temperature: 0.2});
+
+    expect(after.appearance.theme).toBe('light');
   });
 
-  it('keeps a darkness the user chose, through another appearance write', async () => {
+  it('refuses a theme that is not one of the three', async () => {
     const settings = store();
-    await settings.patch({appearance: {backgroundDarkness: 88}});
-    const after = await settings.patch({appearance: {uiScale: 'compact'}});
-
-    expect(after.appearance.backgroundDarkness).toBe(88);
-  });
-
-  it('gives a file written before the slider existed the default darkness', async () => {
-    // The upgrade path, and the reason this field is added inside the block
-    // rather than as a flat setting: a file from the build before the slider has
-    // no `backgroundDarkness`, and must come back at the design's own value with
-    // the rest of the block intact.
-    await write({
-      appearance: {background: 'wall.jpg', accent: '#2fb6a8', uiScale: 'large'},
-    });
-    const settings = await store().load();
-
-    expect(settings.appearance).toEqual({
-      // And a file from before the theme existed comes back following the
-      // machine, which is the same answer as a fresh install.
-      theme: 'system',
-      background: 'wall.jpg',
-      accent: '#2fb6a8',
-      uiScale: 'large',
-      backgroundDarkness: DEFAULT_BACKGROUND_DARKNESS,
-    });
-  });
-
-  it('refuses a darkness outside the range, keeping the block', async () => {
-    await write({
-      appearance: {background: 'wall.jpg', backgroundDarkness: 140},
-    });
-    const settings = await store().load();
-
-    // Out of range falls back with the block, rather than being clamped into a
-    // value the user never chose.
-    expect(settings.appearance.backgroundDarkness).toBe(
-      DEFAULT_BACKGROUND_DARKNESS,
-    );
-    expect(settings.appearance.background).toBe('');
-  });
-
-  it('refuses a fractional darkness', async () => {
-    // An integer percentage, because it is a slider position shown as a number.
-    await write({appearance: {backgroundDarkness: 74.5}});
-    const settings = await store().load();
-    expect(settings.appearance.backgroundDarkness).toBe(
-      DEFAULT_BACKGROUND_DARKNESS,
-    );
+    await expect(
+      settings.patch({appearance: {theme: 'sepia' as never}}),
+    ).rejects.toThrow();
+    // And the block is untouched rather than half-written.
+    expect((await settings.load()).appearance.theme).toBe('system');
   });
 });
 

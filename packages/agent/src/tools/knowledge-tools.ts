@@ -125,10 +125,23 @@ export async function searchWorkspace(
       if (!haystack.includes(needle)) {
         continue;
       }
+      const whole = line.trim();
+      /*
+       * A clipped line is a *truncated* result, and it has to say so in the same
+       * place the match-count cap does — otherwise the summary reports a
+       * complete search while handing the model a sentence that stops halfway.
+       */
+      const text =
+        whole.length > MAX_LINE_CHARS
+          ? `${whole.slice(0, MAX_LINE_CHARS)} [line cut]`
+          : whole;
+      if (whole.length > MAX_LINE_CHARS) {
+        outcome.truncated = true;
+      }
       outcome.matches.push({
         file: relative(root, file).split(sep).join('/'),
         line: index + 1,
-        text: line.trim().slice(0, MAX_LINE_CHARS),
+        text,
       });
       if (outcome.matches.length >= limit) {
         outcome.truncated = true;

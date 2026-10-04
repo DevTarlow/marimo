@@ -83,11 +83,30 @@ describe('web_search', () => {
     expect(output).toBe('Web search failed: engine unreachable');
   });
 
-  it('trims a long snippet', async () => {
+  /*
+   * Cut *and marked*. The old version of this test asserted only that the long
+   * text was gone, which the silent cut satisfied — so it went on passing while
+   * a snippet that stopped mid-sentence was handed to the model as though it
+   * had ended there. Invariant 7 is that truncation is visible, and this is the
+   * assertion that says so.
+   */
+  it('cuts a long snippet and says that it did', async () => {
     const {provider} = providerReturning([
       {title: 't', url: 'https://example.com', snippet: 'y'.repeat(900)},
     ]);
     const output = await run(createWebSearchTool({provider}), {query: 'x'});
+
     expect(output).not.toContain('y'.repeat(400));
+    expect(output).toContain('[snippet cut]');
+  });
+
+  it('leaves a snippet that fits alone', async () => {
+    const {provider} = providerReturning([
+      {title: 't', url: 'https://example.com', snippet: 'a short one'},
+    ]);
+    const output = await run(createWebSearchTool({provider}), {query: 'x'});
+
+    expect(output).toContain('a short one');
+    expect(output).not.toContain('[snippet cut]');
   });
 });

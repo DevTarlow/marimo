@@ -83,19 +83,26 @@ export type {
   ProcessLockOptions,
 } from './lock.js';
 
-/* Format versions, and refusing to overwrite a document we cannot read. */
+/*
+ * Format versions, and refusing to overwrite a document we cannot read.
+ *
+ * Re-exported from `@marimo/agent`, where it lives — the conversation index
+ * needs the same rule and cannot import from here, and one implementation is
+ * better than two. Kept in this package's public API so a caller still finds it
+ * beside the stores that use it.
+ */
 export {
   assertWritable,
   DOCUMENT_VERSION,
   DocumentTooNewError,
   quarantineDocument,
   readVersionedDocument,
-} from './migrations.js';
+} from '@marimo/agent';
 export type {
   DocumentMigration,
   DocumentRead,
   ReadVersionedOptions,
-} from './migrations.js';
+} from '@marimo/agent';
 
 /* The agent, assembled from what the user configured. */
 export {AgentRuntime} from './agent/runtime.js';

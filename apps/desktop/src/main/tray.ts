@@ -24,6 +24,8 @@ export interface TrayState {
   busy: boolean;
   /** Connectors, for the summary line. */
   connectors: Readonly<Record<string, McpStatus>>;
+  /** Whether the floating companion is on screen. */
+  companionVisible: boolean;
 }
 
 /** One row of the menu. */
@@ -75,6 +77,11 @@ export function trayMenu(state: TrayState): TrayItem[] {
     },
     {type: 'separator'},
     {id: 'toggle-window', label: state.windowVisible ? 'Hide window' : 'Show window'},
+    {
+      id: 'toggle-companion',
+      label: 'Desktop companion',
+      checked: state.companionVisible,
+    },
     {id: 'settings', label: 'Settings…'},
     {type: 'separator'},
     {

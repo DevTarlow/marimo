@@ -34,6 +34,7 @@ import type {AppPaths} from '@marimo/runtime';
 
 import type {AgentService} from './agent.js';
 import {providerSecretStore, safeStorageCipher} from './secrets.js';
+import type {Companion} from './companion.js';
 import {disable, enable, statusOf} from './service.js';
 import type {ServiceContext} from './service.js';
 
@@ -51,6 +52,14 @@ export interface IpcDependencies {
   themeMode?: () => ThemeMode;
   /** Told after a settings write, so anything holding a copy can re-read. */
   onSettingsChanged?: () => void;
+  /**
+   * The floating companion, when one has been created.
+   *
+   * A getter rather than the window itself, because the tray and the window can
+   * each turn it off and on, and a caller holding a destroyed window would be
+   * holding the wrong one.
+   */
+  companion?: () => Companion | undefined;
   /**
    * A problem worth showing the user, decided once at startup.
    *
@@ -199,6 +208,28 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
      * a typo they fix and a connector that "does not work".
      */
     'mcp.test': async (params) => await agent().testMcpServer(params.server),
+
+    'companion.status': () => ({
+      visible: dependencies.companion?.()?.isVisible() ?? false,
+    }),
+
+    'companion.setVisible': async (params) => {
+      const window = dependencies.companion?.();
+      if (window === undefined) {
+        return {visible: false};
+      }
+      if (params.visible) {
+        await window.show();
+      } else {
+        window.hide();
+      }
+      return {visible: window.isVisible()};
+    },
+
+    'companion.pointer': (params) => {
+      dependencies.companion?.()?.setClickThrough(!params.over);
+      return {ok: true};
+    },
 
     'service.status': async () =>
       dependencies.service === undefined

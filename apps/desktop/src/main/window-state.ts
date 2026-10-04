@@ -150,3 +150,61 @@ function overlap(
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
+
+/**
+ * Reads a window's remembered geometry.
+ *
+ * `undefined` for a file that is absent, unreadable, or not a rectangle — all
+ * three mean the same thing to a caller, which is "open where you would have
+ * opened anyway". A window that refused to appear because its geometry file was
+ * corrupt would be a worse failure than one that forgot where it was.
+ */
+export async function loadWindowState(
+  file: string,
+): Promise<WindowState | undefined> {
+  const {readFile} = await import('node:fs/promises');
+  try {
+    const parsed: unknown = JSON.parse(await readFile(file, 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null) {
+      return undefined;
+    }
+    const candidate = parsed as Partial<Record<keyof WindowState, unknown>>;
+    const numbers = (['width', 'height', 'x', 'y'] as const).map(
+      (key) => candidate[key],
+    );
+    if (!numbers.every((value) => typeof value === 'number')) {
+      return undefined;
+    }
+    return windowStateOf(
+      parsed as {width: number; height: number; x: number; y: number},
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Writes a window's geometry, so the next launch opens where this one was left.
+ *
+ * Written to a sibling and renamed, like every other document this app owns: a
+ * crash midway through must not leave a half-file where the position was, because
+ * the reader would then find nothing and the window would jump back to the
+ * default — which is exactly the behaviour this exists to prevent.
+ */
+export async function saveWindowState(
+  file: string,
+  state: WindowState,
+): Promise<void> {
+  const {mkdir, rename, writeFile} = await import('node:fs/promises');
+  const {dirname} = await import('node:path');
+  try {
+    await mkdir(dirname(file), {recursive: true});
+    const temporary = `${file}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    await rename(temporary, file);
+  } catch {
+    // A geometry file that cannot be written is not worth an error the user
+    // cannot act on: the window still works, it just opens in the default place
+    // next time.
+  }
+}

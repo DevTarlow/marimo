@@ -1554,6 +1554,17 @@ export const agentCallSchemas = {
    */
   'mcp.test': z.object({server: mcpServerSchema}),
 
+  /*
+   * The floating companion.
+   *
+   * `pointer` is how the window knows where it is *not*: it is a fixed rectangle
+   * over whatever the user is working in, and without this it would swallow every
+   * click on the things behind it.
+   */
+  'companion.status': z.object({}),
+  'companion.setVisible': z.object({visible: z.boolean()}),
+  'companion.pointer': z.object({over: z.boolean()}),
+
   /* Whether jobs run while the app is closed. */
   'service.status': z.object({}),
   'service.enable': z.object({}),
@@ -1607,6 +1618,9 @@ export interface AgentCallResults {
   'mcp.set': {servers: McpServer[]; statuses: Record<string, McpStatus>};
   'mcp.remove': {servers: McpServer[]; statuses: Record<string, McpStatus>};
   'mcp.test': {ok: boolean; detail: string};
+  'companion.status': {visible: boolean};
+  'companion.setVisible': {visible: boolean};
+  'companion.pointer': {ok: boolean};
   'service.status': ServiceStatus;
   'service.enable': ServiceChange;
   'service.disable': ServiceChange;

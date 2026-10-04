@@ -1,0 +1,281 @@
+/**
+ * The companion's own stylesheet, and the only one that has to fight the global
+ * rules.
+ *
+ * `global.css` gives `body` the app's background colour, which is right for a
+ * window and wrong for one that is supposed to float over the desktop: an opaque
+ * body is a 340×460 rectangle sitting on top of whatever the user is working in.
+ * The first rule here is what makes it disappear.
+ *
+ * Everything else is laid out bottom-up, because that is the shape of the thing:
+ * the moss is anchored to the bottom, the chat bar sits on it, and the answers
+ * grow upwards into whatever room is left. A top-down column would make the moss
+ * move every time an answer arrived.
+ */
+
+body.companion-body {
+  background: transparent;
+  overflow: hidden;
+}
+
+/*
+ * The whole surface is a drag handle by default and interactive elements opt out.
+ * The other way round — `no-drag` everywhere except the moss — makes the bubbles
+ * unmovable, and a companion you can only reposition by finding the right square
+ * inch of is one that ends up wherever it landed.
+ */
+.pet {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  height: 100%;
+  padding: var(--space-2);
+  box-sizing: border-box;
+  -webkit-app-region: drag;
+}
+
+/* ---------------------------------------------------------------- bubbles */
+
+/*
+ * Grows upwards from the bottom and scrolls once it is full. `column-reverse`
+ * would pin it to the bottom without a scroll hack, but it also reverses the
+ * reading order for anybody using a screen reader — so the scroll position is
+ * set in the component instead.
+ */
+.pet-column {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  overflow-y: auto;
+  /* Invisible, because a scrollbar down the side of a floating pet is the one
+     piece of chrome that would make it look like a window again. */
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+
+.pet-column::-webkit-scrollbar {
+  display: none;
+}
+
+.pet-bubble {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  /*
+   * Nearly opaque rather than solid. A bubble you can read is the point, but one
+   * at full opacity is a rectangle; at this opacity the desktop shows through
+   * just enough to read as floating while the text stays legible over anything.
+   */
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 30%);
+  user-select: text;
+  animation: bubble-in 140ms ease-out;
+}
+
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pet-bubble {
+    animation: none;
+  }
+}
+
+.pet-user {
+  align-self: flex-end;
+  max-width: 88%;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.pet-assistant {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+/* The markdown renderer brings its own paragraph spacing, which is too much for
+   a bubble this size. */
+.pet-bubble .md-p {
+  margin-bottom: var(--space-2);
+}
+
+.pet-bubble .md > *:last-child {
+  margin-bottom: 0;
+}
+
+.pet-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.pet-thinking {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.pet-thinking span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  animation: pet-think 1.2s ease-in-out infinite;
+}
+
+.pet-thinking span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.pet-thinking span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes pet-think {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------------------------- gate */
+
+.pet-gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-color: var(--warning);
+}
+
+.pet-gate-hint {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.pet-gate-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.pet-button {
+  flex: 1;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.pet-button:hover {
+  color: var(--text);
+}
+
+.pet-button-go {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* -------------------------------------------------------------------- bar */
+
+.pet-bar {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.pet-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 30%);
+}
+
+.pet-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pet-input::placeholder {
+  color: var(--text-faint);
+}
+
+.pet-send {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.pet-send:disabled {
+  opacity: 0.4;
+}
+
+/* ------------------------------------------------------------------- moss */
+
+.pet-moss {
+  position: relative;
+  align-self: center;
+  flex: none;
+  width: 88px;
+  height: 88px;
+  display: grid;
+  place-items: center;
+}
+
+.pet-moss img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* The one gesture that cannot be reimplemented: letting the OS move the
+     window is why the drag feels like dragging a window. */
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 8px 20px rgb(0 0 0 / 35%));
+}
+
+/* Shown on hover, because a floating pet with a permanent toolbar is a window
+   again. Always reachable by keyboard, so it is not pointer-only. */
+.pet-hover-actions {
+  position: absolute;
+  top: -6px;
+  right: -18px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.pet-moss:hover .pet-hover-actions,
+.pet-hover-actions:focus-within {
+  opacity: 1;
+}

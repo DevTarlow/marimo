@@ -32,6 +32,7 @@ import {IPC_EVENT_CHANNEL, defaultWindowState} from '@marimo/protocol';
 import type {AgentUiEvent, ThemeMode, WindowState} from '@marimo/protocol';
 
 import {registerIpcHandler} from './ipc.js';
+import {Companion} from './companion.js';
 import {noticeFor, trayMenu} from './tray.js';
 import type {TrayItem} from './tray.js';
 import {AgentService} from './agent.js';
@@ -41,9 +42,11 @@ import {
   userDataDisagreement,
 } from './paths.js';
 import {
+  loadWindowState,
   MIN_WINDOW_HEIGHT,
   MIN_WINDOW_WIDTH,
   restoreBounds,
+  saveWindowState,
   windowStateOf,
 } from './window-state.js';
 
@@ -97,7 +100,20 @@ let agent: AgentService | undefined;
  * which lands with the rest of the preferences. The clamping below is already
  * real, because the default is still wrong on a small display.
  */
-const rememberedGeometry: WindowState = defaultWindowState();
+/**
+ * Where the window was left last time.
+ *
+ * Read once at startup and written whenever it settles. This was a constant for
+ * a while — `windowStateOf` computed the geometry and the result was thrown
+ * away — so the window opened in the default place on every launch while the
+ * code to remember it sat beside it, tested and unused.
+ */
+let rememberedGeometry: WindowState = defaultWindowState();
+
+/** Where the geometry is kept. */
+function windowStatePath(): string {
+  return join(resolvePaths().userData, 'window-state.json');
+}
 
 async function createWindow(): Promise<BrowserWindow> {
   /*
@@ -107,6 +123,10 @@ async function createWindow(): Promise<BrowserWindow> {
    * drops the position in that case and clamps the size to the widest display
    * attached now.
    */
+  // Freshly read rather than taken from the constant above, which is the
+  // default until the async read in `bootstrap` has happened.
+  rememberedGeometry = (await loadWindowState(windowStatePath())) ?? rememberedGeometry;
+
   const bounds = restoreBounds(
     rememberedGeometry,
     screen.getAllDisplays().map((display) => display.workArea),
@@ -238,6 +258,14 @@ async function refreshThemeMode(): Promise<void> {
  */
 let tray: Tray | undefined;
 /**
+ * The floating companion, once one has been built.
+ *
+ * Built at startup rather than on first use, because "has the user switched this
+ * on" has to be answered before anything can decide whether to show it — and the
+ * window it builds is cheap when it is hidden.
+ */
+let companion: Companion | undefined;
+/**
  * Whether the user has been told that closing the window leaves the app
  * running.
  *
@@ -296,6 +324,7 @@ async function bootstrap(): Promise<void> {
     onSettingsChanged: () => {
       void refreshThemeMode();
     },
+    companion: () => companion,
     ...(startupWarning === undefined ? {} : {warning: startupWarning}),
     service: {
       paths,
@@ -329,6 +358,21 @@ async function bootstrap(): Promise<void> {
    * Opened hidden when the OS started this at login. A window in somebody's face
    * every morning is one they turn the feature off to escape.
    */
+  // On by default, because a companion nobody can find is one nobody uses —
+  // and off is one tick away in the tray.
+  const companionEnabled = true;
+
+  companion = new Companion({
+    stateFile: join(paths.userData, 'companion-state.json'),
+    preload: join(moduleDir, '..', 'preload', 'index.cjs'),
+    htmlPath: join(moduleDir, '..', 'renderer', 'companion.html'),
+    ...(devServerUrl === undefined ? {} : {devServerUrl}),
+    ...(existsSync(windowIcon) ? {icon: windowIcon} : {}),
+  });
+  if (companionEnabled) {
+    await companion.show();
+  }
+
   const startedHidden = process.argv.includes('--hidden');
   mainWindow = await createWindow();
   if (startedHidden) {
@@ -357,7 +401,10 @@ async function bootstrap(): Promise<void> {
     if (mainWindow === undefined || mainWindow.isDestroyed()) {
       return;
     }
-    void windowStateOf(mainWindow.getNormalBounds());
+    void saveWindowState(
+      windowStatePath(),
+      windowStateOf(mainWindow.getNormalBounds()),
+    );
   };
   mainWindow.on('resize', () => {
     if (settle !== undefined) {
@@ -452,6 +499,7 @@ function refreshTray(): void {
     jobs: jobsForTray(),
     busy: agent?.isBusy() ?? false,
     connectors: agent?.mcpStatuses() ?? {},
+    companionVisible: companion?.isVisible() ?? false,
   });
 
   tray.setContextMenu(
@@ -502,6 +550,14 @@ async function onTrayCommand(id: string): Promise<void> {
         mainWindow.hide();
       } else {
         showWindow();
+      }
+      refreshTray();
+      return;
+    case 'toggle-companion':
+      if (companion?.isVisible() === true) {
+        companion.hide();
+      } else {
+        await companion?.show();
       }
       refreshTray();
       return;
@@ -610,6 +666,8 @@ async function shutdown(): Promise<void> {
     return;
   }
   shuttingDown = true;
+  companion?.destroy();
+  companion = undefined;
   const service = agent;
   agent = undefined;
   await service?.stop().catch((error: unknown) => {

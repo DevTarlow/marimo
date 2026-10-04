@@ -33,6 +33,7 @@ function state(overrides: Partial<TrayState> = {}): TrayState {
     jobs: [],
     busy: false,
     connectors: {},
+    companionVisible: false,
     ...overrides,
   };
 }
@@ -117,6 +118,16 @@ describe('the tray menu', () => {
 
   it('says so when none are', () => {
     expect(trayMenu(state())[2]?.label).toBe('No connectors online');
+  });
+
+  it('offers the companion as a switch, not a command', () => {
+    // A command would have to say "show" or "hide" and would be wrong half the
+    // time; a tick says what is true.
+    expect(
+      trayMenu(state({companionVisible: true})).find(
+        (i) => i.id === 'toggle-companion',
+      )?.checked,
+    ).toBe(true);
   });
 
   it('shows the login setting as a tick', () => {

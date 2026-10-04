@@ -1,4 +1,4 @@
-import {dirname} from 'node:path';
+import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 import react from '@vitejs/plugin-react';
@@ -78,5 +78,18 @@ export default defineConfig({
     outDir: 'dist/renderer',
     emptyOutDir: true,
     sourcemap: true,
+    rollupOptions: {
+      /*
+       * Two windows, two documents. The companion is a separate entry rather
+       * than a route in the main window because it is a separate *window* — a
+       * frameless transparent one with a different policy about size, focus and
+       * the mouse — and giving it its own document is what keeps the main
+       * window's layout from having to know it exists.
+       */
+      input: {
+        index: resolve(appRoot, 'index.html'),
+        companion: resolve(appRoot, 'companion.html'),
+      },
+    },
   },
 });

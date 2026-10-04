@@ -7,14 +7,19 @@
  * off-screen is the failure these guard, because the app is then running with
  * nothing to click.
  */
-import {describe, expect, it} from 'vitest';
+import {mkdir, mkdtemp, readdir, rm, writeFile} from 'node:fs/promises';
+import {dirname, join} from 'node:path';
+
+import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import type {WindowState} from '@marimo/protocol';
 
 import {
+  loadWindowState,
   MIN_WINDOW_HEIGHT,
   MIN_WINDOW_WIDTH,
   restoreBounds,
+  saveWindowState,
   windowStateOf,
 } from '../src/main/window-state.js';
 
@@ -118,5 +123,93 @@ describe('windowStateOf', () => {
       x: 12,
       y: 34,
     });
+  });
+});
+
+/*
+ * Remembering where a window was.
+ *
+ * The functions above were written, tested and then never *called*: the geometry
+ * was computed on every resize and thrown away, so the window opened in the
+ * default place every launch while the code to remember it sat beside it looking
+ * finished. Nothing in the unit tests could notice, because the missing piece was
+ * the wiring rather than the arithmetic.
+ *
+ * These cover the file, which is the half that was absent.
+ */
+describe('the geometry file', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-geometry-'));
+    file = join(dir, 'nested', 'window-state.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  it('comes back as it went in', async () => {
+    const state = {width: 1_180, height: 743, x: 40, y: 60};
+    await saveWindowState(file, state);
+    expect(await loadWindowState(file)).toEqual(state);
+  });
+
+  it('creates the directory it needs', async () => {
+    // The path is inside the user-data directory, which exists — but a first run
+    // on a machine where it does not yet is the case this covers.
+    await saveWindowState(file, {width: 900, height: 560, x: 0, y: 0});
+    expect(await loadWindowState(file)).toEqual({
+      width: 900,
+      height: 560,
+      x: 0,
+      y: 0,
+    });
+  });
+
+  /*
+   * All three mean the same thing to a caller — "open where you would have
+   * opened anyway" — and a window that refused to appear because its geometry
+   * file was corrupt would be a worse failure than one that forgot.
+   */
+  it('answers undefined for a file that is not there', async () => {
+    expect(await loadWindowState(file)).toBeUndefined();
+  });
+
+  it('answers undefined for a file that is not JSON', async () => {
+    await mkdir(dirname(file), {recursive: true});
+    await writeFile(file, 'not json at all', 'utf8');
+    expect(await loadWindowState(file)).toBeUndefined();
+  });
+
+  it('answers undefined for JSON that is not a rectangle', async () => {
+    await mkdir(dirname(file), {recursive: true});
+    await writeFile(file, JSON.stringify({x: 1, y: 2}), 'utf8');
+    expect(await loadWindowState(file)).toBeUndefined();
+    await writeFile(file, JSON.stringify({x: '1', y: 2, width: 3, height: 4}), 'utf8');
+    expect(await loadWindowState(file)).toBeUndefined();
+  });
+
+  /*
+   * Written to a sibling and renamed, like every other document the app owns. A
+   * half-file is worse than none: the reader would find something unparseable and
+   * the window would jump back to the default, which is the behaviour this exists
+   * to prevent.
+   */
+  it('leaves no half-file behind', async () => {
+    await saveWindowState(file, {width: 900, height: 560, x: 1, y: 2});
+    const leftovers = (await readdir(dirname(file))).filter((name) =>
+      name.endsWith('.tmp'),
+    );
+    expect(leftovers).toEqual([]);
+  });
+
+  it('does not throw when it cannot write, because a window still opens', async () => {
+    // A directory where the file should be: every write fails.
+    await mkdir(file, {recursive: true});
+    await expect(
+      saveWindowState(file, {width: 1, height: 1, x: 0, y: 0}),
+    ).resolves.toBeUndefined();
   });
 });

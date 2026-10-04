@@ -110,7 +110,15 @@ async function main() {
     const page = await until('the window to appear', async () => {
       const response = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`);
       const targets = await response.json();
-      return targets.find((entry) => entry.type === 'page');
+      /*
+       * The main window by name, not the first page. There are two windows now —
+       * the app and the floating pet — and "the first page" is whichever the
+       * debugger happened to list first, which changes with the order they open
+       * in. Picking the wrong one made this check fail on a build that was fine.
+       */
+      return targets.find(
+        (entry) => entry.type === 'page' && entry.url.includes('index.html'),
+      );
     });
 
     socket = new WebSocket(page.webSocketDebuggerUrl);
@@ -203,6 +211,53 @@ async function main() {
       );
     } else {
       ok(`the tool catalogue offers ${String(probe.catalogNames?.length)} tools`);
+    }
+
+    /*
+     * The companion window. Asserted from here rather than photographed: the
+     * DevTools protocol cannot capture a transparent always-on-top window, so
+     * the evidence that it is up and *transparent* comes from the page itself.
+     */
+    const pages = await (await fetch(`http://127.0.0.1:${String(DEBUG_PORT)}/json/list`)).json();
+    const pet = pages.find(
+      (entry) => entry.type === 'page' && entry.url.includes('companion.html'),
+    );
+    if (pet === undefined) {
+      fail('the desktop companion window did not open');
+    } else {
+      const petSocket = new WebSocket(pet.webSocketDebuggerUrl);
+      await new Promise((resolve) => petSocket.addEventListener('open', resolve));
+      const answer = await new Promise((resolve) => {
+        petSocket.addEventListener('message', (event) => {
+          const message = JSON.parse(event.data);
+          if (message.id === 1) {
+            resolve(message.result?.result?.value ?? '');
+          }
+        });
+        petSocket.send(
+          JSON.stringify({
+            id: 1,
+            method: 'Runtime.evaluate',
+            params: {
+              expression: `JSON.stringify({
+                moss: !!document.querySelector('.pet-moss img'),
+                input: !!document.querySelector('.pet-input'),
+                transparent:
+                  getComputedStyle(document.body).backgroundColor === 'rgba(0, 0, 0, 0)',
+              })`,
+              returnByValue: true,
+            },
+          }),
+        );
+        setTimeout(() => { resolve(''); }, 5_000);
+      });
+      petSocket.close();
+      const state = answer.length > 0 ? JSON.parse(answer) : {};
+      if (state.moss !== true || state.input !== true || state.transparent !== true) {
+        fail(`the companion is wrong: ${answer}`);
+      } else {
+        ok('the desktop companion is up, transparent, and has its chat bar');
+      }
     }
 
     ok(`the theme resolved to ${probe.theme}`);

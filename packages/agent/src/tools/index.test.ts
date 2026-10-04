@@ -12,7 +12,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
 import {toOpenAiTools} from '../models/openai-mapping.js';
-import {createTools} from './index.js';
+import {createTools, SAFE_DEFAULT_TOOLS} from './index.js';
 import type {WebSearchProvider} from './web-search-tool.js';
 
 describe('createTools', () => {
@@ -321,3 +321,73 @@ const NUMERIC_SCHEMA_KEYS = new Set([
   'maxProperties',
   'multipleOf',
 ]);
+
+/*
+ * The list a brand-new profile is granted.
+ *
+ * Tested against the tools that actually exist, because the failure mode is
+ * silent in both directions: a name that no longer matches anything grants
+ * nothing and looks like a capability that was never offered, and a name added
+ * here by accident is a capability nobody chose.
+ */
+describe('the safe defaults', () => {
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(process.cwd(), '.marimo-defaults-'));
+  });
+
+  afterEach(async () => {
+    await rm(workDir, {recursive: true, force: true});
+  });
+
+  /** Every tool the host can build, with nothing optional left out. */
+  function everything(): string[] {
+    return createTools(
+      {
+        apiKey: 'test-key',
+        baseUrl: 'http://127.0.0.1:1',
+        model: 'deepseek-chat',
+        temperature: 0,
+        systemPrompt: 'test',
+        workspaceRoot: workDir,
+        allowPrivateNetworkFetch: false,
+      },
+      {
+        memory: new MemoryStore({workspaceRoot: workDir}),
+        model: 'deepseek-chat',
+        // Present so the web-search name resolves; the defaults name it.
+        webSearch: {search: async () => []},
+        subagent: {build: () => ({}) as never},
+      },
+    ).map((tool) => tool.name);
+  }
+
+  it('names only tools that exist', () => {
+    const built = new Set(everything());
+    const missing = SAFE_DEFAULT_TOOLS.filter((name) => !built.has(name));
+    expect(missing).toEqual([]);
+  });
+
+  /*
+   * The line is not "harmless" but *reach*. Everything in the list can look;
+   * nothing in it can change the machine or act in the world. A tool that can do
+   * either must not be granted to somebody who has not chosen it.
+   */
+  it('grants nothing that can act', () => {
+    for (const reachable of [
+      'write_file',
+      'run_shell',
+      'http_fetch',
+      'spawn_agent',
+    ]) {
+      expect(SAFE_DEFAULT_TOOLS as readonly string[]).not.toContain(reachable);
+    }
+  });
+
+  it('grants the things a person would expect an assistant to manage', () => {
+    expect(SAFE_DEFAULT_TOOLS).toContain('read_file');
+    expect(SAFE_DEFAULT_TOOLS).toContain('web_search');
+    expect(SAFE_DEFAULT_TOOLS).toContain('update_memory');
+  });
+});

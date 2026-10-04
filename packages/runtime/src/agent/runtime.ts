@@ -20,7 +20,7 @@
  * settings change that arrived mid-turn would abort the turn the user is
  * watching.
  */
-import {AgentHost} from '@marimo/agent';
+import {AgentHost, SAFE_DEFAULT_TOOLS} from '@marimo/agent';
 import type {
   DeskService,
   DiscordService,
@@ -110,7 +110,16 @@ export class AgentRuntime {
       // capability is something the user turns on, which is the whole shape of
       // this app. The empty lists are the point, not an oversight.
       defaultIdentity: '',
-      defaultTools: [],
+      /*
+       * The safe core, and nothing with reach. A brand-new install can read,
+       * remember and search; writing, running commands, fetching an arbitrary
+       * URL and spawning helpers are all things the user grants deliberately.
+       *
+       * The list lives beside the tools themselves so a rename cannot leave it
+       * naming something that no longer exists — which would fail silently, as a
+       * capability that is simply never offered.
+       */
+      defaultTools: [...SAFE_DEFAULT_TOOLS],
       defaultSkills: [],
     });
     this.skillStore = new SkillStore({file: options.paths.skills});

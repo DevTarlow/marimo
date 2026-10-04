@@ -57,6 +57,32 @@ import {buildMcpTools} from '../mcp/tools.js';
 import type {McpServerConnection, McpToolInfo} from '../mcp/client.js';
 import type {McpServer} from '@marimo/protocol';
 
+/**
+ * What a brand-new profile may do before the user has chosen anything.
+ *
+ * The line is not "harmless" but *reach*: everything here can look and nothing
+ * here can change the machine or act in the world. Reading a file, listing a
+ * directory, remembering something and searching the web are all things a person
+ * asking a question would expect an assistant to be able to do; writing,
+ * running a command, fetching an arbitrary URL and spawning a helper are all
+ * things they would expect to be asked about first.
+ *
+ * `http_fetch` is the one worth arguing about, since `web_search` also reaches
+ * the network. The difference is the destination: a search goes to one known
+ * engine, and a fetch goes wherever the model points it, including inside the
+ * user's own network.
+ */
+export const SAFE_DEFAULT_TOOLS = [
+  'current_time',
+  'read_file',
+  'list_dir',
+  'search_knowledge_base',
+  'read_memory',
+  'update_memory',
+  'prune_memory',
+  'web_search',
+] as const;
+
 export interface ToolDependencies {
   /** Shared with the agent's instruction provider, so memory stays one file. */
   memory: MemoryStore;

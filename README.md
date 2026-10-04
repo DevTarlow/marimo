@@ -128,6 +128,16 @@ The plan runs M0–M8. What works today:
   server the user has not trusted asks before each call — a gate that survives a
   restart, because it is derived from the stored conversation rather than held in
   memory. `web_search` works with no API key, through a hidden window.
+- **Helper agents.** `spawn_agent` hands a self-contained piece of work to a
+  helper that runs in the same conversation, so its approval requests are visible
+  where the user is looking, and its words are labelled so they are not read as
+  the agent's own. Depth is one by construction, and it is bounded by steps, time
+  and the size of what it hands back.
+
+A fresh profile is granted the **safe core**: read a file, list a directory,
+search the web, and remember things. Everything with reach — writing, running a
+command, fetching an arbitrary URL, spawning a helper — is granted deliberately,
+which is what the capability panels in Settings are for.
 - **The window.** A chat with a conversation rail, streaming answers, tool calls
   that fold away, and approval cards.
 - **Scheduled jobs**, while the app is open *and* while it is closed. The app and

@@ -20,7 +20,12 @@
  * settings change that arrived mid-turn would abort the turn the user is
  * watching.
  */
-import {AgentHost, describeTools, SAFE_DEFAULT_TOOLS} from '@marimo/agent';
+import {
+  AgentHost,
+  describeTools,
+  runReview,
+  SAFE_DEFAULT_TOOLS,
+} from '@marimo/agent';
 import type {
   DeskService,
   DiscordService,
@@ -36,6 +41,7 @@ import type {
   AgentProfile,
   AgentUiEvent,
   CatalogEntry,
+  MemoryProposal,
   TranscriptMessage,
   ProfileCatalog,
   ProfilePatch,
@@ -49,6 +55,7 @@ import type {
 import type {AppPaths} from '../paths.js';
 import {ProfileStore} from '../profiles.js';
 import type {SecretRead} from '../secrets.js';
+import {MemoryProposalStore} from '../memory-proposals.js';
 import {SettingsStore} from '../settings.js';
 import {SkillStore} from '../skills.js';
 import {resolveAgentConfig} from './resolve.js';
@@ -104,6 +111,8 @@ export class AgentRuntime {
   private readonly settingsStore: SettingsStore;
   private readonly profileStore: ProfileStore;
   private readonly skillStore: SkillStore;
+  /** The agent's suggestions, waiting for an answer. */
+  private readonly proposals: MemoryProposalStore;
   private readonly hosts = new Map<string, AgentHost>();
   /** The configuration each host was last built with, so changes are noticed. */
   private readonly applied = new Map<string, string>();
@@ -130,6 +139,7 @@ export class AgentRuntime {
       defaultSkills: [],
     });
     this.skillStore = new SkillStore({file: options.paths.skills});
+    this.proposals = new MemoryProposalStore({file: options.paths.memoryProposals});
   }
 
   /** The settings as they are on disk right now. */
@@ -234,6 +244,116 @@ export class AgentRuntime {
 
   async selectProfile(profileId: string): Promise<AgentProfile> {
     return await this.profileStore.select(profileId);
+  }
+
+  /**
+   * Reads a conversation back and proposes what is worth remembering.
+   *
+   * Answers what it added, so a caller can say so. Does nothing at all when the
+   * agent cannot be built — a review is a background nicety, and an
+   * unconfigured install has nothing to review *with*.
+   *
+   * The watermark is moved whether or not anything was found. That is the
+   * difference between a feature and a nuisance: "I looked and found nothing" is
+   * the answer most of the time, and not recording it means looking again on
+   * every idle moment, forever.
+   */
+  async reviewMemory(
+    profileId: string,
+    sessionId: string,
+  ): Promise<MemoryProposal[]> {
+    const settings = await this.settingsStore.load();
+    const profile = await this.profileFor(profileId);
+    if (profile === undefined) {
+      return [];
+    }
+    const resolved = await resolveAgentConfig({
+      settings,
+      profile,
+      readSecret: this.options.readSecret,
+      skills: await this.skillsFor(profile),
+    });
+    if (!resolved.ok) {
+      return [];
+    }
+
+    const host = await this.ensureHost(profileId);
+    host.updateConfig(resolved.config);
+
+    const events = await host.eventsFor(sessionId);
+    const reviewed = events.filter((event) => event.partial !== true).length;
+    const from = await this.proposals.reviewedUpTo(sessionId);
+    if (reviewed <= from) {
+      // Nothing new since last time. Not asking is the common case and the
+      // reason the watermark exists.
+      return [];
+    }
+
+    const memory = await host.memoryText();
+    const found = await runReview({
+      // Only what has not been read before.
+      events: events.slice(from),
+      memory,
+      ask: async (prompt) => await host.ask(prompt),
+    });
+
+    const recorded = await this.proposals.record(
+      sessionId,
+      reviewed,
+      found.map((proposal) => ({
+        sessionId,
+        profileId,
+        section: proposal.section,
+        text: proposal.text,
+        reason: proposal.reason,
+      })),
+    );
+
+    // The ids the store assigned, so the window can act on them.
+    const added = new Set(found.map((proposal) => proposal.text));
+    return recorded.proposals.filter((proposal) => added.has(proposal.text));
+  }
+
+  /** The suggestions waiting for this agent. */
+  async memoryProposals(profileId?: string): Promise<MemoryProposal[]> {
+    const file = await this.proposals.load();
+    return profileId === undefined
+      ? file.proposals
+      : file.proposals.filter((proposal) => proposal.profileId === profileId);
+  }
+
+  /**
+   * Accepts a suggestion, writing it into the agent's memory.
+   *
+   * Removed from the queue whether it is accepted or dismissed: both are
+   * answers, and a suggestion that stayed after being refused would be asked
+   * again on every look.
+   */
+  async resolveMemoryProposal(
+    proposalId: string,
+    accept: boolean,
+  ): Promise<{ok: boolean; problem?: string}> {
+    const file = await this.proposals.load();
+    const proposal = file.proposals.find((entry) => entry.id === proposalId);
+    if (proposal === undefined) {
+      return {ok: false, problem: 'That suggestion is no longer waiting.'};
+    }
+
+    if (accept) {
+      const result = await this.host(proposal.profileId);
+      if (!result.ok) {
+        /*
+         * Kept in the queue rather than dropped. The agent cannot be built right
+         * now — no key, a bad model — and that is a reason to try again later,
+         * not a reason to throw away something the user just agreed to.
+         */
+        return {ok: false, problem: result.problem};
+      }
+      await result.host.remember(proposal.section, proposal.text);
+    }
+
+    await this.proposals.remove(proposalId);
+    return {ok: true};
   }
 
   /** The catalogue for whichever agent is active, for a window that just opened. */

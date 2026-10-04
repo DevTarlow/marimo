@@ -39,6 +39,15 @@ export interface AppPaths {
   /** Scheduled jobs: what to do, when, and which conversation they report into. */
   jobs: string;
   /**
+   * The agent's memory suggestions, waiting for the user to agree.
+   *
+   * A file of its own rather than part of settings: it is neither a preference
+   * nor a secret, it is written by a background review rather than by a person,
+   * and a document the user never edits should not share a write path with the
+   * one holding their API-key configuration.
+   */
+  memoryProposals: string;
+  /**
    * Where a running app says so.
    *
    * The headless runner reads it to answer one question: is the app already
@@ -83,6 +92,7 @@ export function resolveAppPaths(userData: string): AppPaths {
     providerSecrets,
     profiles: join(userData, 'profiles.json'),
     jobs: join(userData, 'jobs.json'),
+    memoryProposals: join(userData, 'memory-proposals.json'),
     appLock: join(userData, 'app.lock'),
     skills: join(userData, 'skills.json'),
     defaultWorkspace: homedir(),

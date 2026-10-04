@@ -89,8 +89,14 @@ export {
   DEFAULT_SECTION,
   MAX_MEMORY_BYTES,
   MEMORY_FILE_NAME,
+  isNewProposal,
+  MAX_PROPOSALS,
   MemoryStore,
   MemoryTooLargeError,
+  parseProposals,
+  renderConversation,
+  reviewPrompt,
+  runReview,
   resolveAgentDataDir,
   resolveMemoryFile,
 } from './memory/index.js';
@@ -98,6 +104,8 @@ export type {
   MemoryPruneRequest,
   MemoryStoreOptions,
   MemoryUpdate,
+  ReviewEvent,
+  ReviewRequest,
 } from './memory/index.js';
 export {SKILLS, composeInstruction} from './skills/index.js';
 export type {Skill} from './skills/index.js';

@@ -52,6 +52,15 @@ import {BrowserSearchProvider} from './search/search-window.js';
  */
 const MCP_RECONCILE_MS = 30_000;
 
+/**
+ * How long a conversation has to be quiet before it is read back.
+ *
+ * A minute. Long enough that a pause for thought is not the end of a
+ * conversation, short enough that the user sees the suggestion while they still
+ * remember what it is about.
+ */
+const IDLE_REVIEW_MS = 60_000;
+
 export interface AgentServiceOptions {
   paths: AppPaths;
   /** Where a turn's events are sent. */
@@ -83,6 +92,10 @@ export class AgentService {
   /** Held for as long as this process is: "the app is running the jobs". */
   private appLock: ProcessLock | undefined;
   private reconcile: NodeJS.Timeout | undefined;
+  /** The pending idle look, reset by each new turn. */
+  private idleReview: NodeJS.Timeout | undefined;
+  /** Which agent the turn in flight belongs to, for the review that follows. */
+  private busyProfileId: string | undefined;
   private stopped = false;
 
   constructor(private readonly options: AgentServiceOptions) {
@@ -249,12 +262,91 @@ export class AgentService {
       clearInterval(this.reconcile);
       this.reconcile = undefined;
     }
+    this.idleReview = this.clearIdle(this.idleReview);
     this.scheduler.stop();
     await this.appLock?.release();
     this.appLock = undefined;
     await this.mcp.stop();
     this.runtime.dispose();
     this.search.dispose();
+  }
+
+  /**
+   * Queues a look at what was just said, once things go quiet.
+   *
+   * Idle rather than immediate, and it is not a nicety: a review costs a model
+   * call, and running one at the end of every turn would spend a second request
+   * per message and propose things from a conversation that is still going. A
+   * minute of silence means the exchange has finished.
+   *
+   * The timer is reset by each new turn, so a conversation in progress is never
+   * reviewed halfway through — and a turn the user is still having is not a
+   * conversation they have finished.
+   */
+  private noteForReview(event: AgentUiEvent): void {
+    if (
+      event.type !== 'turn.completed' &&
+      event.type !== 'turn.failed' &&
+      event.type !== 'turn.aborted'
+    ) {
+      /*
+       * A new turn cancels the pending look, because the conversation is not
+       * over. Only the turn events carry a session id, and only a turn is a
+       * reason to remember which agent is busy.
+       */
+      if (event.type === 'turn.started') {
+        this.idleReview = this.clearIdle(this.idleReview);
+      }
+      return;
+    }
+
+    const sessionId = event.sessionId;
+    const profileId = this.busyProfileId;
+    this.busyProfileId = undefined;
+    if (sessionId.length === 0 || profileId === undefined) {
+      return;
+    }
+
+    this.idleReview = this.clearIdle(this.idleReview);
+    this.idleReview = setTimeout(() => {
+      this.idleReview = undefined;
+      void this.reviewNow(profileId, sessionId);
+    }, IDLE_REVIEW_MS);
+    // Not a reason to keep the process alive on its own.
+    this.idleReview.unref?.();
+  }
+
+  private clearIdle(handle: NodeJS.Timeout | undefined): undefined {
+    if (handle !== undefined) {
+      clearTimeout(handle);
+    }
+    return undefined;
+  }
+
+  /**
+   * Runs the review, and tells the window when something was found.
+   *
+   * Silent when nothing was — which is most of the time, and the reason this is
+   * not a notification.
+   */
+  private async reviewNow(profileId: string, sessionId: string): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+    try {
+      const found = await this.runtime.reviewMemory(profileId, sessionId);
+      if (found.length > 0) {
+        this.options.sendEvent({type: 'memory.proposed', count: found.length});
+      }
+    } catch (error) {
+      /*
+       * Reported and swallowed. This runs on a timer with nobody waiting, so a
+       * throw would be an unhandled rejection in the main process — and a review
+       * that failed is not something the user can act on.
+       */
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[marimo] the memory review did not finish: ${detail}`);
+    }
   }
 
   /** Re-reads the server list and dials whatever changed. */
@@ -300,6 +392,21 @@ export class AgentService {
   async jobs(): Promise<Job[]> {
     const document = await this.jobsStore.load();
     return document.jobs;
+  }
+
+  /** The agent's memory suggestions, waiting for an answer. */
+  async memoryProposals() {
+    return await this.runtime.memoryProposals();
+  }
+
+  /** Accepts one into memory, or drops it. */
+  async resolveMemoryProposal(proposalId: string, accept: boolean) {
+    return await this.runtime.resolveMemoryProposal(proposalId, accept);
+  }
+
+  /** Reads a conversation back and proposes what is worth remembering. */
+  async reviewMemory(profileId: string, sessionId: string) {
+    return await this.runtime.reviewMemory(profileId, sessionId);
   }
 
   mcpStatuses(): Record<string, McpStatus> {
@@ -390,6 +497,13 @@ export class AgentService {
      * synchronous. A send that is going to be refused should be refused in the
      * reply the window is waiting for, not one event later.
      */
+    /*
+     * Which agent is about to be busy, for the review that follows the turn.
+     * Recorded here because this is the last point at which the profile is
+     * known: the events a turn emits carry a conversation, not an agent.
+     */
+    this.busyProfileId = profileId;
+
     if (this.runtime.isBusy()) {
       this.options.sendEvent({
         type: 'turn.failed',
@@ -411,6 +525,13 @@ export class AgentService {
     callId: string,
     confirmed: boolean,
   ): Promise<{accepted: boolean}> {
+    /*
+     * Which agent is about to be busy, for the review that follows the turn.
+     * Recorded here because this is the last point at which the profile is
+     * known: the events a turn emits carry a conversation, not an agent.
+     */
+    this.busyProfileId = profileId;
+
     if (this.runtime.isBusy()) {
       this.options.sendEvent({
         type: 'turn.failed',
@@ -454,6 +575,7 @@ export class AgentService {
             return;
           }
           this.options.sendEvent(event);
+          this.noteForReview(event);
         }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);

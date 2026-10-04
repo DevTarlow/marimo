@@ -209,6 +209,13 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
      */
     'mcp.test': async (params) => await agent().testMcpServer(params.server),
 
+    'memory.proposals': async () => ({
+      proposals: await agent().memoryProposals(),
+    }),
+
+    'memory.resolve': async (params) =>
+      await agent().resolveMemoryProposal(params.proposalId, params.accept),
+
     'companion.status': () => ({
       visible: dependencies.companion?.()?.isVisible() ?? false,
     }),

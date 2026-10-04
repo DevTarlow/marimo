@@ -19,3 +19,17 @@ export type {
   MemoryStoreOptions,
   MemoryUpdate,
 } from './memory-store.js';
+
+export {
+  isNewProposal,
+  MAX_PROPOSALS,
+  MAX_REVIEW_CHARS,
+  parseProposals,
+  renderConversation,
+  reviewPrompt,
+  runReview,
+} from './review.js';
+export type {
+  ReviewEvent,
+  ReviewRequest,
+} from './review.js';

@@ -546,6 +546,83 @@ export class AgentHost {
    * the state machine — and it is what makes an approval card answerable after a
    * relaunch instead of being a button that silently does nothing.
    */
+  /**
+   * The stored events of a conversation, for something that reads them back.
+   *
+   * Raw rather than projected: the review wants what was actually said, and the
+   * transcript projection is shaped for drawing — it drops reasoning, merges
+   * events into messages and attaches tool calls. Both readers want different
+   * things from the same log, so the log is what is handed out.
+   */
+  async eventsFor(sessionId: string): Promise<Awaited<ReturnType<FileSessionService['listEvents']>>> {
+    return await this.sessionService.listEvents(sessionId);
+  }
+
+  /** What the agent currently remembers, as it would be injected. */
+  async memoryText(): Promise<string> {
+    return await this.memory.readForPrompt();
+  }
+
+  /** Adds a fact to memory, as if the agent had called `update_memory`. */
+  async remember(section: string, text: string): Promise<void> {
+    // `append` is the default and the right one here: accepting a proposal adds
+    // a line, and a mode that could rewrite a section would let one accepted
+    // suggestion quietly replace everything the agent had learned before it.
+    await this.memory.update({section, content: text, mode: 'append'});
+  }
+
+  /**
+   * Asks the model one question, outside any conversation.
+   *
+   * A plain request rather than an agent turn: no tools, no session, no events
+   * written anywhere. A review that ran through the conversation machinery would
+   * appear in the transcript as something the user said, and would be re-reviewed
+   * by the next look — a loop that grows.
+   *
+   * The reply is the concatenation of whatever the model streamed. A refusal or
+   * a network failure throws, and the caller decides what that means; for a
+   * review, it means nothing was found.
+   */
+  async ask(prompt: string, abortSignal?: AbortSignal): Promise<string> {
+    const llm = this.llmFor();
+    const request = {
+      model: this.config.model,
+      contents: [{role: 'user', parts: [{text: prompt}]}],
+    } as unknown as Parameters<typeof llm.generateContentAsync>[0];
+
+    let text = '';
+    for await (const response of llm.generateContentAsync(
+      request,
+      false,
+      abortSignal,
+    )) {
+      for (const part of response.content?.parts ?? []) {
+        if (typeof part.text === 'string') {
+          text += part.text;
+        }
+      }
+    }
+    return text;
+  }
+
+  /** The model client for the current configuration. */
+  private llmFor(): OpenAiCompatLlm {
+    return new OpenAiCompatLlm({
+      model: this.config.model,
+      apiKey: this.config.apiKey,
+      ...(this.config.baseUrl !== undefined
+        ? {baseUrl: this.config.baseUrl}
+        : {}),
+      ...(this.config.provider !== undefined
+        ? {provider: this.config.provider}
+        : {}),
+      temperature: this.config.temperature,
+      ...(this.config.maxOutputTokens !== undefined
+        ? {maxOutputTokens: this.config.maxOutputTokens}
+        : {}),
+    });
+  }
+
   async pendingGates(sessionId: string): Promise<PendingGate[]> {
     const events = await this.sessionService.listEvents(sessionId);
     return pendingGatesIn(events);

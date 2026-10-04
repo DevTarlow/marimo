@@ -26,6 +26,7 @@ import type {
 } from '@marimo/protocol';
 
 import {Connectors} from './Connectors.js';
+import {Memory} from './Memory.js';
 
 interface Loaded {
   settings: PublicSettings;
@@ -275,6 +276,8 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
             />
           ))}
         </section>
+
+        <Memory />
 
         <Connectors
           servers={loaded.settings.mcpServers}

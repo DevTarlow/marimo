@@ -12,7 +12,9 @@ import {
   isNewProposal,
   MAX_PROPOSALS,
   parseProposals,
+  renderConversation,
   reviewPrompt,
+  runReview,
 } from './review.js';
 
 /** A well-formed answer, as the model is asked to give it. */
@@ -239,5 +241,130 @@ describe('whether a fact is already known', () => {
     expect(isNewProposal({section: 'Notes', text: '  ', reason: ''}, '')).toBe(
       false,
     );
+  });
+});
+
+/** A stored event, in the shape the session service writes. */
+function said(author: string, text: string): {
+  author: string;
+  content: {parts: Array<{text: string; thought?: boolean}>};
+} {
+  return {author, content: {parts: [{text}]}};
+}
+
+describe('rendering a conversation for the reviewer', () => {
+  it('marks who said what', () => {
+    expect(renderConversation([said('user', 'hello'), said('marimo', 'hi')])).toBe(
+      'USER: hello\n\nAGENT: hi',
+    );
+  });
+
+  /*
+   * Reasoning is the model's working, not what was said. A review that read it
+   * would propose things nobody stated — and a thought the model had and
+   * discarded is exactly the kind of thing that should not become a belief.
+   */
+  it('leaves out reasoning', () => {
+    const withThought = {
+      author: 'marimo',
+      content: {
+        parts: [{text: 'maybe they like tabs', thought: true}, {text: 'Noted.'}],
+      },
+    };
+    expect(renderConversation([withThought])).toBe('AGENT: Noted.');
+  });
+
+  it('leaves out events with no words', () => {
+    expect(
+      renderConversation([{author: 'marimo', content: {parts: []}}, said('user', 'hi')]),
+    ).toBe('USER: hi');
+  });
+
+  it('is empty for a conversation with nothing in it', () => {
+    expect(renderConversation([])).toBe('');
+  });
+
+  /*
+   * The recent part of a long conversation is where anything worth remembering
+   * was said, and the cap is what stops a review costing as much as the
+   * conversation did.
+   */
+  it('keeps the tail of a very long conversation, and says it did', () => {
+    const long = Array.from({length: 400}, (_, index) =>
+      said('user', `message number ${String(index)} ${'x'.repeat(200)}`),
+    );
+    const rendered = renderConversation(long);
+
+    expect(rendered).toContain('earlier conversation omitted');
+    expect(rendered.length).toBeLessThan(26_000);
+    // The last thing said is what survives.
+    expect(rendered).toContain('message number 399');
+  });
+});
+
+describe('running a review', () => {
+  const events = [said('user', 'I always use pnpm, never npm.')];
+
+  it('asks the model and returns what it proposed', async () => {
+    const proposals = await runReview({
+      events,
+      memory: '',
+      ask: async (prompt) => {
+        // The conversation reached the prompt, which is the whole point.
+        expect(prompt).toContain('never npm');
+        return answer([
+          {section: 'Notes', text: 'Uses pnpm, not npm.', reason: 'they said so'},
+        ]);
+      },
+    });
+
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]?.text).toBe('Uses pnpm, not npm.');
+  });
+
+  it('drops what the memory already holds', async () => {
+    const proposals = await runReview({
+      events,
+      memory: '- Uses pnpm, not npm.',
+      ask: async () =>
+        answer([
+          {section: 'Notes', text: 'Uses pnpm, not npm.', reason: 'they said so'},
+        ]),
+    });
+
+    expect(proposals).toEqual([]);
+  });
+
+  /*
+   * A review happens on its own while nobody is watching. An exception would
+   * surface as an unhandled rejection at an idle moment, and there is nothing to
+   * tell the user, because nothing happened.
+   */
+  it('answers nothing when the model fails', async () => {
+    const proposals = await runReview({
+      events,
+      memory: '',
+      ask: async () => {
+        throw new Error('the provider refused');
+      },
+    });
+
+    expect(proposals).toEqual([]);
+  });
+
+  it('does not ask at all about an empty conversation', async () => {
+    let asked = false;
+    const proposals = await runReview({
+      events: [],
+      memory: '',
+      ask: async () => {
+        asked = true;
+        return answer([]);
+      },
+    });
+
+    expect(proposals).toEqual([]);
+    // Spending a request to be told nothing about nothing.
+    expect(asked).toBe(false);
   });
 });

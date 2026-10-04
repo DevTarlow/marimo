@@ -212,3 +212,84 @@ export function isNewProposal(
     .map(normalise)
     .some((line) => line.length > 20 && target.includes(line));
 }
+
+/** One stored event, as this file reads it. */
+export interface ReviewEvent {
+  author?: string;
+  content?: {parts?: Array<{text?: string; thought?: boolean}>};
+}
+
+export interface ReviewRequest {
+  events: readonly ReviewEvent[];
+  /** The memory as it stands, so nothing already known is proposed again. */
+  memory: string;
+  /** Asks the model. Injected, so the whole review is testable without one. */
+  ask: (prompt: string) => Promise<string>;
+}
+
+/**
+ * Reads a conversation and proposes what is worth remembering.
+ *
+ * The orchestration is here rather than in the host so the whole thing — the
+ * transcript rendering, the prompt, the parse, the filter against memory — can be
+ * tested with a function instead of a provider.
+ *
+ * A failure from the model answers `[]`. A review is something that happens on
+ * its own while nobody is watching, so an exception would surface as an
+ * unhandled rejection at an idle moment; and there is nothing to tell the user,
+ * because nothing happened.
+ */
+export async function runReview(
+  request: ReviewRequest,
+): Promise<MemoryProposal[]> {
+  const conversation = renderConversation(request.events);
+  if (conversation.trim().length === 0) {
+    return [];
+  }
+
+  let answer: string;
+  try {
+    answer = await request.ask(reviewPrompt(conversation));
+  } catch {
+    return [];
+  }
+
+  return parseProposals(answer).filter((proposal) =>
+    isNewProposal(proposal, request.memory),
+  );
+}
+
+/**
+ * The conversation as text for the reviewer.
+ *
+ * Reasoning parts are left out: they are the model's working, not what was said,
+ * and a review that read them would propose things nobody stated. The agent's
+ * tool calls are left out for the same reason — "the agent read a file" is not a
+ * fact about the user.
+ *
+ * Capped at the tail, because the recent part of a long conversation is where
+ * anything worth remembering was said.
+ */
+export function renderConversation(events: readonly ReviewEvent[]): string {
+  const lines: string[] = [];
+
+  for (const event of events) {
+    const text = (event.content?.parts ?? [])
+      .filter((part) => part.thought !== true)
+      .map((part) => part.text ?? '')
+      .filter((part) => part.length > 0)
+      .join('')
+      .trim();
+    if (text.length === 0) {
+      continue;
+    }
+    const who = event.author === 'user' ? 'USER' : 'AGENT';
+    lines.push(`${who}: ${text}`);
+  }
+
+  const joined = lines.join('\n\n');
+  if (joined.length <= MAX_REVIEW_CHARS) {
+    return joined;
+  }
+  return `[earlier conversation omitted]\n\n${joined.slice(joined.length - MAX_REVIEW_CHARS)}`;
+}

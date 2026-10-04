@@ -1395,6 +1395,14 @@ export type AgentUiEvent =
    */
   | {type: 'theme.changed'; mode: ThemeMode}
   /*
+   * An idle look at the conversation turned something up.
+   *
+   * A count rather than the proposals themselves: the window fetches the queue
+   * when it wants to draw it, and a review finds nothing most of the time — so
+   * this is only ever "there is something to see".
+   */
+  | {type: 'memory.proposed'; count: number}
+  /*
    * A helper agent, while it runs.
    *
    * Three events rather than a nested `AgentUiEvent`, deliberately. A child's
@@ -1613,6 +1621,18 @@ export const agentCallSchemas = {
   'companion.setVisible': z.object({visible: z.boolean()}),
   'companion.pointer': z.object({over: z.boolean()}),
 
+  /*
+   * What the agent would remember, waiting for an answer.
+   *
+   * `accept` writes it into memory, `dismiss` does not — and both remove it from
+   * the queue, because both are answers.
+   */
+  'memory.proposals': z.object({}),
+  'memory.resolve': z.object({
+    proposalId: z.string().min(1),
+    accept: z.boolean(),
+  }),
+
   /* Whether jobs run while the app is closed. */
   'service.status': z.object({}),
   'service.enable': z.object({}),
@@ -1666,6 +1686,8 @@ export interface AgentCallResults {
   'mcp.set': {servers: McpServer[]; statuses: Record<string, McpStatus>};
   'mcp.remove': {servers: McpServer[]; statuses: Record<string, McpStatus>};
   'mcp.test': {ok: boolean; detail: string};
+  'memory.proposals': {proposals: MemoryProposal[]};
+  'memory.resolve': {ok: boolean; problem?: string};
   'companion.status': {visible: boolean};
   'companion.setVisible': {visible: boolean};
   'companion.pointer': {ok: boolean};

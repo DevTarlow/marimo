@@ -1134,3 +1134,56 @@
   text-decoration: underline;
   font: inherit;
 }
+
+/* ------------------------------------------------------------ what it knows */
+
+.memory-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  margin-top: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/*
+ * The fact itself, given room. It is the thing being decided about, and the
+ * reasoning is deliberately secondary — a suggestion somebody cannot read at a
+ * glance is one they will accept without reading.
+ */
+.memory-text {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  user-select: text;
+}
+
+.memory-why {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.memory-why summary {
+  cursor: pointer;
+}
+
+.memory-why p {
+  margin: var(--space-1) 0 0;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.memory-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.memory-section {
+  flex: 1;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}

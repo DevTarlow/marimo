@@ -6,7 +6,7 @@
  * hardcodes them silently breaks the first time the provider renames its line
  * up, which is exactly what happened here.
  */
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -704,5 +704,77 @@ describe('SettingsStore window', () => {
       x: -1600,
       y: -200,
     });
+  });
+});
+
+/*
+ * Invariant 12 for the settings document, and the subtlety that makes it
+ * different from every other one.
+ *
+ * The settings file has never carried a version — `storedSettingsSchema` has no
+ * such field — so *every* settings file in existence is version-less, and
+ * treating that as "not mine" would reset every user's providers, connectors and
+ * preferences the first time they upgraded. A version-less file is version 1, and
+ * that is the migration.
+ *
+ * A file from a future build is still refused, which is the half that matters.
+ */
+describe('settings from another build', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-settings-version-'));
+    file = join(dir, 'settings.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): SettingsStore {
+    return new SettingsStore(file);
+  }
+
+  it('opens a version-less file, which is every settings file there is', async () => {
+    // The shape a real install has on disk right now.
+    await writeFile(
+      file,
+      JSON.stringify({temperature: 0.9, sidebarWidth: 321}),
+      'utf8',
+    );
+
+    const settings = await store().load();
+
+    expect(settings.temperature).toBe(0.9);
+    expect(settings.sidebarWidth).toBe(321);
+  });
+
+  it('stamps a version when it writes, so this is only needed once', async () => {
+    await writeFile(file, JSON.stringify({temperature: 0.9}), 'utf8');
+    const settings = store();
+    await settings.load();
+    await settings.patch({temperature: 0.5});
+
+    const written = JSON.parse(await readFile(file, 'utf8')) as {version: number};
+    expect(written.version).toBe(1);
+  });
+
+  it('refuses a file from a newer build, and leaves it alone', async () => {
+    const future = JSON.stringify({version: 99, temperature: 0.9});
+    await writeFile(file, future, 'utf8');
+
+    await expect(store().load()).rejects.toThrow(/newer version/u);
+    expect(await readFile(file, 'utf8')).toBe(future);
+  });
+
+  it('refuses to write over a file from a newer build', async () => {
+    const future = JSON.stringify({version: 99, temperature: 0.9});
+    await writeFile(file, future, 'utf8');
+
+    await expect(store().patch({temperature: 0.1})).rejects.toThrow(
+      /newer version/u,
+    );
+    expect(await readFile(file, 'utf8')).toBe(future);
   });
 });

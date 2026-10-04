@@ -15,7 +15,7 @@
  * old one is corrected by whoever called this.
  */
 import {randomUUID} from 'node:crypto';
-import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
+import {mkdir, rename, writeFile} from 'node:fs/promises';
 import {dirname} from 'node:path';
 
 import {
@@ -24,6 +24,12 @@ import {
   skillsFileSchema,
 } from '@marimo/protocol';
 import type {StoredSkill} from '@marimo/protocol';
+
+import {
+  assertWritable,
+  DocumentTooNewError,
+  readVersionedDocument,
+} from './migrations.js';
 
 export interface SkillStoreOptions {
   file: string;
@@ -94,12 +100,41 @@ export class SkillStore {
   /**
    * The stored skills, or none.
    *
-   * A missing, truncated or newer-versioned file reads as empty rather than
-   * throwing, like the to-do list: the user cannot act on a corrupt JSON file,
-   * and refusing to open the app over one would cost them every other setting.
+   * A missing or truncated file reads as empty rather than throwing: the user
+   * cannot act on a corrupt JSON file, and refusing to open the app over one
+   * would cost them every other setting.
+   *
+   * What it does *not* do is swallow a file from a newer build. Reading one as
+   * empty and then saving would overwrite it with this build's format, and the
+   * user's own procedures would be gone with nothing to point at. It throws, and
+   * `save` refuses before writing.
    */
   async load(): Promise<StoredSkill[]> {
-    const parsed = skillsFileSchema.safeParse(await this.readRaw());
+    const read = await readVersionedDocument(this.options.file, {
+      label: 'The skills file',
+    });
+    if (read.state === 'too-new') {
+      throw new DocumentTooNewError(
+        'The skills file',
+        read.found,
+        read.supported,
+      );
+    }
+    if (read.state === 'migrated') {
+      /*
+       * Written back straight away, so the upgrade is not repeated on every
+       * launch and a user who never edits anything still reaches the newer
+       * format.
+       */
+      const migrated = skillsFileSchema.safeParse(read.document);
+      if (migrated.success) {
+        await this.write(migrated.data.skills);
+        return migrated.data.skills;
+      }
+    }
+    const parsed = skillsFileSchema.safeParse(
+      read.state === 'current' ? read.document : undefined,
+    );
     return parsed.success ? parsed.data.skills : emptySkillsFile().skills;
   }
 
@@ -178,6 +213,12 @@ export class SkillStore {
   }
 
   private async write(skills: StoredSkill[]): Promise<void> {
+    /*
+     * Refused before anything is written. A lenient read plus a write is how a
+     * user's data disappears, and a newer file is exactly the case where the
+     * read had to be lenient.
+     */
+    await assertWritable(this.options.file, {label: 'The skills file'});
     await mkdir(dirname(this.options.file), {recursive: true});
     // Written to a sibling and renamed, so a crash mid-write cannot leave half a
     // file where the user's skills were.
@@ -188,14 +229,6 @@ export class SkillStore {
       'utf8',
     );
     await rename(temporary, this.options.file);
-  }
-
-  private async readRaw(): Promise<unknown> {
-    try {
-      return JSON.parse(await readFile(this.options.file, 'utf8'));
-    } catch {
-      return undefined;
-    }
   }
 
   private async withLock<T>(task: () => Promise<T>): Promise<T> {

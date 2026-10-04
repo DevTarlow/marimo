@@ -5,7 +5,7 @@
  * the active workspace always exists, a folder added twice is not listed twice,
  * and deleting a profile never claims the last one or touches a user's files.
  */
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -304,5 +304,147 @@ describe('ProfileStore', () => {
     // than what a cache remembers.
     const reread = await store().load();
     expect(reread.profiles).toHaveLength(1);
+  });
+});
+
+/*
+ * Invariant 12, for the file that holds the user's agents.
+ *
+ * Both failures here look alike and are not. A profiles file from a newer build
+ * either parses and is then overwritten as version 1 — silently dropping
+ * whatever that build added — or fails to parse and is quarantined, which renames
+ * the user's agents out of the way and starts fresh. The second looks exactly
+ * like having lost them.
+ */
+describe('an agents file from a newer build', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-too-new-'));
+    file = join(dir, 'profiles.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): ProfileStore {
+    return new ProfileStore({
+      file,
+      defaultWorkspaceRoot: join(dir, 'home'),
+      defaultIdentity: 'You are an agent.',
+      defaultTools: TOOLS,
+      defaultSkills: SKILLS,
+    });
+  }
+
+  /** A file a future build wrote: a version this one does not know. */
+  async function writeFuture(): Promise<void> {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 99,
+        profiles: [{id: 'someone', name: 'Their agent'}],
+        activeProfileId: 'someone',
+      }),
+      'utf8',
+    );
+  }
+
+  it('refuses to open it, saying which version it is', async () => {
+    await writeFuture();
+    await expect(store().load()).rejects.toThrow(/newer version/u);
+  });
+
+  /*
+   * The important half. A refusal that has already renamed the file is not a
+   * refusal, and "unreadable-<timestamp>" beside a fresh profiles.json is
+   * indistinguishable from the agents having been deleted.
+   */
+  it('leaves the file exactly where it is', async () => {
+    await writeFuture();
+    const before = await readFile(file, 'utf8');
+
+    await store().load().catch(() => undefined);
+
+    const entries = await readdir(dir);
+    expect(entries.filter((entry) => entry.includes('unreadable'))).toEqual([]);
+    expect(await readFile(file, 'utf8')).toBe(before);
+  });
+
+  it('refuses to write over it, even for a change that would otherwise work', async () => {
+    await writeFuture();
+    const profiles = store();
+
+    await expect(profiles.create('Another')).rejects.toThrow(/newer version/u);
+
+    // And the file is still the newer build's.
+    const after = JSON.parse(await readFile(file, 'utf8')) as {version: number};
+    expect(after.version).toBe(99);
+  });
+});
+
+/*
+ * A profiles file with no version at all.
+ *
+ * This app has always stamped one — `freshFile` writes `version: 1` — so a file
+ * without one is something else: a truncated write, another program's file, or a
+ * hand-edit. The version machinery refuses to guess, which is the safe half of
+ * the trade, and the store preserves the file rather than replacing it.
+ *
+ * Worth being precise about, because an earlier version of this test asserted the
+ * profile came back named "Marimo" — which a *freshly created* profile is also
+ * called, so it passed while the file was being thrown away.
+ */
+describe('an agents file with no version', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-unversioned-'));
+    file = join(dir, 'profiles.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  it('preserves it rather than replacing it, and carries on with a fresh one', async () => {
+    const original = JSON.stringify({
+      profiles: [
+        {
+          id: 'someone-elses-agent',
+          name: 'Theirs',
+          identity: 'You are an agent.',
+          workspaces: [],
+          activeWorkspaceId: null,
+          enabledTools: [],
+          enabledSkills: [],
+        },
+      ],
+      activeProfileId: 'someone-elses-agent',
+    });
+    await writeFile(file, original, 'utf8');
+
+    const snapshot = await new ProfileStore({
+      file,
+      defaultWorkspaceRoot: join(dir, 'home'),
+      defaultIdentity: '',
+      defaultTools: TOOLS,
+      defaultSkills: SKILLS,
+    }).load();
+
+    // A fresh agent, and *not* the id from the file — which is the assertion the
+    // earlier version of this test was missing.
+    expect(snapshot.profiles.map((profile) => profile.id)).not.toContain(
+      'someone-elses-agent',
+    );
+
+    // And the original is still on disk under another name, not gone.
+    const entries = await readdir(dir);
+    const kept = entries.find((entry) => entry.includes('unreadable'));
+    expect(kept).toBeDefined();
+    expect(await readFile(join(dir, kept ?? ''), 'utf8')).toBe(original);
   });
 });

@@ -5,7 +5,7 @@
  * prompt *and* a member of a profile's `enabledSkills`, so two spellings of one
  * procedure have to be one skill rather than two that cannot both be switched on.
  */
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -277,6 +277,63 @@ describe('SkillStore', () => {
 
     // The whole file is one document, so an entry that cannot be parsed loses
     // the file rather than half of it — and the app says so by starting empty.
+    expect(await store().load()).toEqual([]);
+  });
+});
+
+/*
+ * Invariant 12, for the file holding the user's own procedures.
+ *
+ * A skills file from a newer build read as "no skills" and then saved would be
+ * overwritten with this build's format. The user's own written procedures are the
+ * most personal thing this app stores, and they would be gone with nothing to
+ * point at.
+ */
+describe('a skills file from a newer build', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-skills-new-'));
+    file = join(dir, 'skills.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): SkillStore {
+    return new SkillStore({file});
+  }
+
+  async function writeFuture(): Promise<void> {
+    await writeFile(
+      file,
+      JSON.stringify({version: 99, skills: [{name: 'theirs'}]}),
+      'utf8',
+    );
+  }
+
+  it('refuses to read it rather than calling it empty', async () => {
+    await writeFuture();
+    await expect(store().load()).rejects.toThrow(/newer version/u);
+  });
+
+  it('refuses to save over it', async () => {
+    await writeFuture();
+    await expect(
+      store().save({name: 'mine', description: '', instructions: 'do a thing'}),
+    ).rejects.toThrow(/newer version/u);
+
+    const after = JSON.parse(await readFile(file, 'utf8')) as {version: number};
+    expect(after.version).toBe(99);
+  });
+
+  /*
+   * A missing file still reads as empty, which is what a fresh install is — the
+   * refusal above must not have made the ordinary case throw.
+   */
+  it('still opens a fresh install', async () => {
     expect(await store().load()).toEqual([]);
   });
 });

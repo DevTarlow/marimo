@@ -13,6 +13,12 @@ import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {dirname} from 'node:path';
 
 import {
+  assertWritable,
+  DocumentTooNewError,
+  readVersionedDocument,
+} from './migrations.js';
+
+import {
   appearanceSchema,
   defaultAppearance,
   defaultWindowState,
@@ -117,11 +123,50 @@ export class SettingsStore {
       return this.cache;
     }
 
-    let raw: unknown;
-    try {
-      raw = JSON.parse(await readFile(this.file, 'utf8'));
-    } catch {
-      raw = undefined;
+    /*
+     * Versioned like every other document, and refused when it is newer.
+     *
+     * The leniency below is deliberate — a hand-edited block falls back on its
+     * own rather than resetting everything — but leniency plus a write is how a
+     * user's data disappears, and a settings file from a future build is exactly
+     * the case where the read has to guess. Throwing here stops the guess from
+     * becoming a write.
+     */
+    const read = await readVersionedDocument(this.file, {
+      label: 'The settings file',
+      /*
+       * This document has never carried a version — `storedSettingsSchema` has no
+       * such field — so every settings file in existence is version-less, and
+       * treating that as "not mine" would reset every user's providers,
+       * connectors and preferences the first time they upgraded. Naming the
+       * version they are is the migration.
+       *
+       * A *newer* file is still refused, which is the half that matters: a future
+       * build that adds a version number will have its settings left alone.
+       */
+      missingVersion: 1,
+    });
+    if (read.state === 'too-new') {
+      throw new DocumentTooNewError(
+        'The settings file',
+        read.found,
+        read.supported,
+      );
+    }
+    const raw: unknown =
+      read.state === 'current' || read.state === 'migrated'
+        ? read.document
+        : undefined;
+
+    if (read.state === 'migrated') {
+      // Written back once, so the upgrade is not repeated on every launch.
+      const upgraded = storedSettingsSchema.safeParse({
+        ...defaultStoredSettings(),
+        ...(raw as Record<string, unknown>),
+      });
+      if (upgraded.success) {
+        await this.write(upgraded.data);
+      }
     }
 
     const defaults = defaultStoredSettings();
@@ -257,11 +302,17 @@ export class SettingsStore {
   }
 
   private async write(settings: StoredSettings): Promise<void> {
+    // Refused before anything is written: a lenient read plus a write is how a
+    // user's settings disappear.
+    await assertWritable(this.file, {label: 'The settings file'});
     await mkdir(dirname(this.file), {recursive: true});
     const temporary = `${this.file}.tmp`;
     await writeFile(
       temporary,
-      `${JSON.stringify(settings, null, 2)}\n`,
+      // Stamped from here on, so the next build can tell an old file from one
+      // written before versioning existed — which is what `missingVersion` was
+      // for, and what stops it being needed twice.
+      `${JSON.stringify({version: 1, ...settings}, null, 2)}\n`,
       'utf8',
     );
     await rename(temporary, this.file);

@@ -16,8 +16,14 @@
  * never touches a file in the user's own directories.
  */
 import {randomUUID} from 'node:crypto';
-import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
+import {mkdir, rename, writeFile} from 'node:fs/promises';
 import {basename, dirname, resolve} from 'node:path';
+
+import {
+  assertWritable,
+  DocumentTooNewError,
+  readVersionedDocument,
+} from './migrations.js';
 
 import {agentProfileSchema, profilePatchSchema} from '@marimo/protocol';
 import type {AgentProfile, ProfilePatch, Workspace} from '@marimo/protocol';
@@ -120,16 +126,60 @@ export class ProfileStore {
     if (this.cache) {
       return this.cache;
     }
-    const raw = await this.readRaw();
+
+    /*
+     * Read through the version machinery, and *refuse* a file from a newer build
+     * rather than treating it as a stranger.
+     *
+     * This is the difference between two failures that look alike and are not.
+     * Without the version check, a profiles file a future build wrote either
+     * parses and is then overwritten as version 1 — silently dropping whatever
+     * that build added — or fails to parse at all and is quarantined, which
+     * renames the user's agents out of the way and starts fresh. The second is
+     * the worse one: it looks exactly like having lost them.
+     */
+    const read = await readVersionedDocument(this.options.file, {
+      label: 'The agents file',
+    });
+    if (read.state === 'too-new') {
+      /*
+       * The cached answer is a fresh profile, so the window opens and is usable.
+       * What it must not do is *write* — and it cannot, because every mutation
+       * goes through `assertWritable` below and refuses.
+       */
+      throw new DocumentTooNewError(
+        'The agents file',
+        read.found,
+        read.supported,
+      );
+    }
+
+    const raw =
+      read.state === 'current' || read.state === 'migrated'
+        ? read.document
+        : undefined;
     const parsed = parseFile(raw);
     if (parsed) {
       this.cache = parsed;
+      /*
+       * A file that was upgraded is written back now rather than at the next
+       * edit. Leaving it means the upgrade runs again on every launch, and a
+       * user who never edits anything never gets the newer format — which is
+       * invisible until a later version's migration assumes it.
+       */
+      if (read.state === 'migrated') {
+        await this.writeFile(parsed);
+      }
       return parsed;
     }
-    // A file we cannot read is preserved before anything replaces it: the
-    // profiles it held are the user's agents, and a parse bug must not be the
-    // end of them.
-    if (raw !== undefined) {
+    /*
+     * A file we cannot read is preserved before anything replaces it: the
+     * profiles it held are the user's agents, and a parse bug must not be the
+     * end of them. That covers both kinds of unusable — something that parsed
+     * but is not a profile document, and something the version machinery could
+     * not make sense of at all.
+     */
+    if (raw !== undefined || read.state === 'unreadable') {
       await rename(
         this.options.file,
         `${this.options.file}.unreadable-${Date.now()}`,
@@ -372,15 +422,13 @@ export class ProfileStore {
     return {version: 1, profiles: [profile], activeProfileId: profile.id};
   }
 
-  private async readRaw(): Promise<unknown> {
-    try {
-      return JSON.parse(await readFile(this.options.file, 'utf8'));
-    } catch {
-      return undefined;
-    }
-  }
-
   private async writeFile(file: ProfileFile): Promise<void> {
+    /*
+     * Refused before anything is written. The rule the whole document apparatus
+     * exists for: a lenient read plus a write is how a user's data disappears,
+     * and "the read was lenient" is precisely what a newer file causes.
+     */
+    await assertWritable(this.options.file, {label: 'The agents file'});
     await mkdir(dirname(this.options.file), {recursive: true});
     const temporary = `${this.options.file}.${randomUUID()}.tmp`;
     await writeFile(temporary, `${JSON.stringify(file, null, 2)}\n`, 'utf8');

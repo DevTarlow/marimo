@@ -89,6 +89,20 @@ export interface ReadVersionedOptions {
   migrations?: readonly DocumentMigration[];
   /** Overrides the version this build expects, for a migration's own tests. */
   current?: number;
+  /**
+   * The version to assume when the document carries none.
+   *
+   * Absent by default, and that default is the safe one: guessing would let a
+   * file belonging to some other program — or a truncated write — be accepted and
+   * then overwritten.
+   *
+   * Set only where a version-less file is a format this app genuinely wrote. The
+   * settings document is the case: it has never carried a version, so every
+   * settings file in existence looks like this, and refusing them would reset
+   * every user's providers, connectors and preferences on upgrade. Naming the
+   * version they are is the migration.
+   */
+  missingVersion?: number;
 }
 
 /**
@@ -136,6 +150,13 @@ export async function readVersionedDocument(
    * mean a file that is actually a different tool's, or a truncated write, gets
    * accepted and then overwritten. Saying so is the safer half of the trade.
    */
+  if (
+    (version === undefined || version === null) &&
+    options.missingVersion !== undefined
+  ) {
+    return {state: 'migrated', document, from: 0, steps: []};
+  }
+
   if (typeof version !== 'number' || !Number.isInteger(version)) {
     return {
       state: 'unreadable',

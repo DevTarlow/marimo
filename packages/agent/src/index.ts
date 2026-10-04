@@ -1,5 +1,26 @@
 export {AgentHost} from './host/agent-host.js';
 export type {AgentHostOptions, ApproveParams} from './host/agent-host.js';
+
+/*
+ * MCP servers: one connection each, and the tools they offer.
+ */
+export {
+  buildMcpTools,
+  MAX_TOOL_NAME_CHARS,
+  McpError,
+  McpServerConnection,
+  McpToolNameError,
+  mcpToolNameFor,
+  renderResult,
+  sanitiseSchema,
+} from './mcp/index.js';
+export type {
+  McpConnectionOptions,
+  McpErrorKind,
+  McpResolvedSecrets,
+  McpToolBuildOptions,
+  McpToolInfo,
+} from './mcp/index.js';
 /*
  * One OpenAI-compatible client serves every provider. `DeepSeekLlm` remains as
  * an alias of it, because the class was named after the only backend the app had

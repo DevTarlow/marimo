@@ -24,6 +24,7 @@
     "@google/adk": "^2.0.0",
     "@google/genai": "^2.22.0",
     "@marimo/protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "zod": "^4.6.4"
   },
   "devDependencies": {

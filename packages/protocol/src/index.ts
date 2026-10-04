@@ -10,6 +10,7 @@
 import {z} from 'zod';
 
 import {parseCron} from './cron.js';
+import {mcpServerSchema, mcpServersAreDistinct} from './mcp.js';
 
 export {describeCron, nextCronRun, nextRunAfter, parseCron} from './cron.js';
 export type {CronSpec} from './cron.js';
@@ -20,6 +21,21 @@ export type {CronSpec} from './cron.js';
  */
 export {meaningfulHint, summarizeApproval} from './approval.js';
 export type {ApprovalPreview} from './approval.js';
+
+/*
+ * MCP servers, the documents that describe them, and the naming rule that keeps
+ * their tools from colliding with this app's own.
+ */
+export {
+  MCP_SERVER_NAME_HELP,
+  MCP_SERVER_NAME_PATTERN,
+  mcpSecretRefSchema,
+  mcpServerSchema,
+  mcpToolName,
+  mcpToolPrefix,
+  mcpTransportSchema,
+} from './mcp.js';
+export type {McpSecretRef, McpServer, McpTransport} from './mcp.js';
 
 /* -------------------------------------------------------------------------- */
 /* Settings                                                                    */
@@ -375,25 +391,14 @@ export function backgroundUrl(name: string): string {
   return `${BACKGROUND_SCHEME}://background/${encodeURIComponent(name)}`;
 }
 
-export const mcpTransportSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('stdio'),
-    command: z.string().min(1),
-    args: z.array(z.string()).default([]),
-    env: z.record(z.string(), z.string()).optional(),
-  }),
-  z.object({
-    kind: z.literal('http'),
-    url: z.string().min(1),
-  }),
-]);
-
-export const mcpServerSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  enabled: z.boolean(),
-  transport: mcpTransportSchema,
-});
+/*
+ * MCP server documents used to be declared here, as a stub with an `id`, a
+ * `name`, an `enabled` flag and a transport. They now live in `./mcp.ts` with
+ * the two things the stub could not express and the plan needs: a per-server
+ * `trusted` flag, which is what decides whether that server's tools ask before
+ * they run, and `headers`, which is the only way to authenticate against a
+ * remote server at all.
+ */
 
 /**
  * What the settings file holds about Discord.
@@ -541,7 +546,23 @@ export const settingsSchema = z.object({
    * refuses to write the API key to disk in plaintext.
    */
   allowPlaintextApiKey: z.boolean(),
-  mcpServers: z.array(mcpServerSchema),
+  /**
+   * The MCP servers this install knows about.
+   *
+   * Uniqueness is enforced here rather than on the entry schema because neither
+   * rule is a property of one server — it takes the whole list to see a
+   * duplicate name or a repeated id — and both are worth catching at the door: a
+   * duplicated name would offer two sets of identically-named tools.
+   */
+  mcpServers: z.array(mcpServerSchema).superRefine((servers, context) => {
+    for (const problem of mcpServersAreDistinct(servers)) {
+      context.addIssue({
+        code: 'custom',
+        path: [problem.index, problem.field],
+        message: problem.message,
+      });
+    }
+  }),
   /**
    * The Discord bot. Here rather than on a profile because there is one token,
    * one gateway connection and one watched channel for the whole app; whether an
@@ -634,8 +655,12 @@ export const storedSettingsSchema = settingsSchema.extend({
   availableModels: z.record(providerIdSchema, z.array(z.string())),
 });
 
-export type McpTransport = z.infer<typeof mcpTransportSchema>;
-export type McpServer = z.infer<typeof mcpServerSchema>;
+/*
+ * `McpServer` and `McpTransport` are inferred in `./mcp.ts` and re-exported
+ * above, rather than declared here as they used to be. Two ways to name one
+ * shape is two ways for them to disagree, and the settings schema below is what
+ * makes the shape load-bearing.
+ */
 export type Settings = z.infer<typeof settingsSchema>;
 export type SettingsPatch = z.infer<typeof settingsPatchSchema>;
 export type StoredSettings = z.infer<typeof storedSettingsSchema>;

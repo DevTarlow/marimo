@@ -15,6 +15,7 @@ import {useEffect, useState} from 'react';
 import type {AppInfo, Theme} from '@marimo/protocol';
 
 import {Composer} from './components/Composer.js';
+import {Settings} from './components/Settings.js';
 import {SessionRail} from './components/SessionRail.js';
 import {Transcript} from './components/Transcript.js';
 import {useAgent} from './hooks/useAgent.js';
@@ -24,6 +25,7 @@ import './styles/chat.css';
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [preview, setPreview] = useState<Theme | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   const agent = useAgent();
 
   useEffect(() => {
@@ -52,6 +54,23 @@ export function App(): React.JSX.Element {
   const busy = agent.live?.running === true;
   const disabled = agent.profile === undefined;
 
+  if (showSettings) {
+    return (
+      <Settings
+        onClose={() => {
+          setShowSettings(false);
+          /*
+           * The pane is re-read on the way back. A grant changed in Settings is
+           * not visible in the conversation, and coming back to a window built
+           * from settings that no longer apply is how a change looks like it did
+           * not take.
+           */
+          void agent.reload();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="app">
       <SessionRail
@@ -77,6 +96,15 @@ export function App(): React.JSX.Element {
               </p>
             )}
           </div>
+          <button
+            type="button"
+            className="button button-quiet button-small"
+            onClick={() => {
+              setShowSettings(true);
+            }}
+          >
+            Settings
+          </button>
           <div className="head-theme">
             {(['light', 'dark'] as const).map((value) => (
               <button

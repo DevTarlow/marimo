@@ -81,6 +81,8 @@ export interface AgentController {
   decide: (callId: string, confirmed: boolean) => Promise<void>;
   stop: () => Promise<void>;
   open: (sessionId: string) => Promise<void>;
+  /** Re-reads the agent and the conversation, after settings may have changed. */
+  reload: () => Promise<void>;
   newSession: () => Promise<void>;
   dismissError: () => void;
 }
@@ -494,6 +496,7 @@ export function useAgent(): AgentController {
     decide,
     stop,
     open,
+    reload: boot,
     newSession,
     dismissError: () => {
       setError(null);

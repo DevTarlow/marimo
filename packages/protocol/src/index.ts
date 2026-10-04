@@ -1575,8 +1575,26 @@ export interface AgentCallResults {
  * rather than from a list somebody typed out twice.
  */
 export interface ProfileCatalog {
-  tools: CatalogEntry[];
+  tools: CatalogTool[];
   skills: CatalogEntry[];
+}
+
+/** One tool as the settings screen offers it. */
+export interface CatalogTool extends CatalogEntry {
+  /**
+   * What granting this lets the agent do.
+   *
+   * `act` means it can change something — the machine, the user's files, the
+   * network, or another agent. The settings screen draws the two apart because
+   * a list of twenty checkboxes with no distinction between reading a file and
+   * running a command is a list nobody can make a decision from.
+   *
+   * Anything the tools do not classify is `act`. An unknown tool presented as
+   * harmless is the one direction this can fail in that matters.
+   */
+  reach: 'look' | 'act';
+  /** Whether a brand-new agent is granted it. */
+  byDefault: boolean;
 }
 
 /**

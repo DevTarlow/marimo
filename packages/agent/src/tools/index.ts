@@ -52,7 +52,7 @@ import type {SkillService} from './skill-tools.js';
 import {createHttpFetchTool} from './web-tools.js';
 import {createWebSearchTool} from './web-search-tool.js';
 import type {WebSearchProvider} from './web-search-tool.js';
-import type {CatalogEntry} from '@marimo/protocol';
+import type {CatalogTool} from '@marimo/protocol';
 
 import {buildMcpTools} from '../mcp/tools.js';
 import type {McpServerConnection, McpToolInfo} from '../mcp/client.js';
@@ -102,7 +102,7 @@ export function describeTools(options: {
   model: string;
   webSearch?: WebSearchProvider;
   subagent?: boolean;
-}): CatalogEntry[] {
+}): CatalogTool[] {
   const built = createTools(
     {
       apiKey: '',
@@ -125,11 +125,47 @@ export function describeTools(options: {
     },
   );
 
+  const granted = new Set<string>(SAFE_DEFAULT_TOOLS);
   return built.map((tool) => ({
     name: tool.name,
     description: tool.description,
+    /*
+     * Acting if it is on the list *or* if a fresh profile is not granted it.
+     * The second half is what makes this fail safe: a tool nobody classified is
+     * shown as something to decide about, rather than as harmless.
+     */
+    reach:
+      ACTING_TOOLS.has(tool.name) || !granted.has(tool.name) ? 'act' : 'look',
+    byDefault: granted.has(tool.name),
   }));
 }
+
+/**
+ * The tools that can change something, named rather than inferred.
+ *
+ * A list rather than a rule — "does it write?" is not answerable from a tool's
+ * shape, and a rule that guessed would eventually guess wrong in the direction
+ * of calling something harmless. Anything absent from this set is presented as
+ * merely looking, so a new tool has to be *added* here to be described as
+ * acting... which is the wrong way round, and is why `describeTools` unions this
+ * with everything outside `SAFE_DEFAULT_TOOLS`.
+ */
+const ACTING_TOOLS = new Set<string>([
+  'write_file',
+  'run_shell',
+  'http_fetch',
+  'spawn_agent',
+  'create_job',
+  'update_job',
+  'delete_job',
+  'save_skill',
+  'create_discord_channel',
+  'post_to_discord',
+  'read_discord_messages',
+  'add_todo',
+  'complete_todo',
+  'save_note',
+]);
 
 export interface ToolDependencies {
   /** Shared with the agent's instruction provider, so memory stays one file. */

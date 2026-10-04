@@ -30,6 +30,20 @@ export type {
   SecretWriterOptions,
 } from './secrets.js';
 
+/* A lock that works between processes, for the files they share. */
+export {
+  FileLockTimeoutError,
+  holdProcessLock,
+  isProcessHeld,
+  processIsAlive,
+  withFileLock,
+} from './lock.js';
+export type {
+  FileLockOptions,
+  ProcessLock,
+  ProcessLockOptions,
+} from './lock.js';
+
 /* Format versions, and refusing to overwrite a document we cannot read. */
 export {
   assertWritable,
@@ -56,6 +70,8 @@ export {
   parseProfile,
   resolveAgentConfig,
 } from './agent/resolve.js';
+export {createJobRunner} from './agent/job-runner.js';
+export type {JobRunnerOptions} from './agent/job-runner.js';
 export type {
   ResolvedAgent,
   ResolveAgentOptions,

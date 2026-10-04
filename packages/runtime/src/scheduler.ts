@@ -229,6 +229,41 @@ export class JobScheduler {
   }
 
   /**
+   * Looks once, waits for everything it started, and arms nothing.
+   *
+   * For a process that runs the due jobs and then exits — the headless runner.
+   * `tick` is close to this and is not it: `tick` is written for a caller that
+   * will be back, and the timer path deliberately does *not* wait for dispatch,
+   * because blocking the loop on a job would stop every other job's clock.
+   *
+   * Here the opposite is true. A one-shot runner that returned before its turn
+   * finished would exit with the conversation half-written and the job's
+   * outcome unrecorded — and the next tick a minute later would see the
+   * occurrence as still due, because the claim that consumes it happens inside
+   * the dispatch.
+   */
+  async runOnce(): Promise<void> {
+    this.waiting.clear();
+    this.running = true;
+    try {
+      const jobs = await this.pendingForLook();
+      if (jobs === null) {
+        return;
+      }
+      await this.retireStale(jobs);
+      const due = jobs.filter((job) => this.isDue(job));
+      if (due.length === 0) {
+        return;
+      }
+      this.enqueue(due);
+      // The whole difference from the timer path.
+      await this.dispatchQueue;
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /**
    * Re-arms after something changed the jobs or the active agent.
    *
    * Called on every jobs mutation and every profile switch, so the timer is
@@ -379,7 +414,14 @@ export class JobScheduler {
       // Through the same line as a dispatched occurrence: a look still holding
       // this snapshot must not treat it as due while the write lands.
       this.dispatchedThrough = Math.max(this.dispatchedThrough, at);
-      await this.store.advanceDue(job.id, new Date(now).toISOString());
+      /*
+       * Claimed against the occurrence this look actually saw, and moved to the
+       * next one *from now* — a job missed for a week should skip the week, not
+       * step forward one occurrence per look until it catches up.
+       */
+      await this.store.advanceDue(job.id, job.dueAt ?? '', {
+        after: new Date(now),
+      });
     }
   }
 
@@ -505,7 +547,18 @@ export class JobScheduler {
           this.outstanding -= 1;
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        /*
+         * Reported, not swallowed. `dispatch` already turns a failed *run* into
+         * a recorded outcome, so reaching here means something threw outside
+         * that — and a scheduler whose work vanishes without a word is the
+         * failure this whole file keeps having to be defended against.
+         *
+         * Still not re-thrown: this runs on a timer, and an exception escaping
+         * would end the loop and stop every future job as well.
+         */
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(`[marimo] a scheduled job could not be dispatched: ${detail}`);
         this.outstanding = 0;
       });
   }
@@ -537,9 +590,21 @@ export class JobScheduler {
     }
     this.waiting.delete(job.id);
 
-    // The occurrence is consumed before anything else: it has to move whether
-    // the run happens or fails, or the same moment would be retried forever.
-    await this.store.advanceDue(job.id, at);
+    /*
+     * The occurrence is consumed before anything else: it has to move whether
+     * the run happens or fails, or the same moment would be retried forever.
+     *
+     * And it is a claim. `null` means the marker had already moved past this
+     * occurrence — another process got there first, which is exactly what the
+     * app and the headless runner look like to each other. Running it anyway is
+     * the one failure this whole arrangement exists to prevent: the user gets
+     * the same scheduled message twice.
+     */
+    const claimed = await this.store.advanceDue(job.id, at);
+    if (claimed === null) {
+      this.waiting.delete(job.id);
+      return;
+    }
 
     const prompt = [
       `[scheduled job "${job.name}" — ${at}]`,

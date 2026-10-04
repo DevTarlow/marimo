@@ -20,6 +20,7 @@ import {dirname} from 'node:path';
 import {emptyJobs, jobsFileSchema, nextCronRun} from '@marimo/protocol';
 import type {Job, JobPatch, JobStatus, Jobs} from '@marimo/protocol';
 
+import {withFileLock} from './lock.js';
 import {
   DocumentTooNewError,
   quarantineDocument,
@@ -287,8 +288,17 @@ export class JobStore {
    * *removed* rather than left where it is. A stale marker on a job whose
    * schedule can no longer move it reads as an occurrence that is still due, and
    * every look would rewrite the document trying to retire it.
+   *
+   * Returns the advanced job, or `null` when this call did *not* consume the
+   * occurrence — either because the job is gone, or because the marker had
+   * already moved past `from`. The caller must not run the job in that case:
+   * somebody else already has it.
    */
-  async advanceDue(jobId: string, from: string): Promise<Job | null> {
+  async advanceDue(
+    jobId: string,
+    from: string,
+    options: {after?: Date} = {},
+  ): Promise<Job | null> {
     let updated: Job | null = null;
     await this.mutate((current) => {
       const index = current.jobs.findIndex((job) => job.id === jobId);
@@ -296,13 +306,38 @@ export class JobStore {
         return current;
       }
       const before = current.jobs[index]!;
-      // The occurrence being consumed is a whole minute, and the cron walk only
-      // reports times strictly after its start — so the search begins a
-      // millisecond later, which is the same minute and the next occurrence
-      // along, rather than a day after it.
-      const consumed = Number.isFinite(Date.parse(from))
-        ? new Date(Date.parse(from) + 1)
-        : this.now();
+      /*
+       * Consuming an occurrence is a compare-and-set, and that is what makes a
+       * job run once.
+       *
+       * Two processes can both see the same occurrence as due — the app and the
+       * headless runner are exactly this case — and without this check both
+       * would advance the marker and both would run the turn. Nothing about a
+       * lock is needed for that: the document is the arbiter, and the winner is
+       * whoever's read-modify-write lands first. The loser is told so by the
+       * `null`, and must not run.
+       */
+      if (before.dueAt !== from) {
+        return current;
+      }
+      /*
+       * Where the search for the next occurrence begins.
+       *
+       * Normally a millisecond after the one being consumed: the occurrence is
+       * a whole minute, and the cron walk only reports times strictly after its
+       * start, so this lands on the *next* occurrence rather than a whole
+       * schedule later.
+       *
+       * `after` is for the other caller — retiring an occurrence that was missed
+       * while nothing was running. There the point is to skip everything that
+       * was missed and land on the next one from now, rather than walking
+       * forward an occurrence per look until the schedule catches up.
+       */
+      const consumed =
+        options.after ??
+        (Number.isFinite(Date.parse(from))
+          ? new Date(Date.parse(from) + 1)
+          : this.now());
       const dueAt = occurrenceAfter(before, consumed);
       const job: Job =
         dueAt === undefined ? withoutDue(before) : {...before, dueAt};
@@ -390,6 +425,14 @@ export class JobStore {
   private async mutate(edit: (current: Jobs) => Jobs): Promise<Jobs> {
     return await this.withLock(async () => {
       /*
+       * And then the filesystem's lock, because the queue above is only this
+       * process's. The app and the headless runner both read and write this
+       * document, and read-modify-write without exclusion loses whichever write
+       * lands second — which for a job marker means the same occurrence being
+       * consumed twice and the run happening twice.
+       */
+      return await withFileLock(`${this.options.file}.lock`, async () => {
+      /*
        * Before anything is written, decide what the file on disk deserves.
        *
        * The read below is lenient by design — an unreadable document becomes an
@@ -429,6 +472,7 @@ export class JobStore {
       }
       await this.writeFile(validated.data.jobs);
       return validated.data.jobs;
+      });
     });
   }
 

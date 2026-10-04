@@ -8,7 +8,7 @@
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "tsc -b && tsx scripts/dev.ts",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b tsconfig.runner.json && vite build",
     "start": "tsx scripts/dev.ts",
     "run-due": "node dist/runner/run-due.js --run-due",
     "typecheck": "tsc -b tsconfig.runner.json && tsc -p tsconfig.renderer.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.test.json",

@@ -9,8 +9,7 @@
  * conversation files without shipping a second runtime or a second copy of the
  * logic.
  *
- * Two consequences of that choice are worth stating plainly, because they are
- * the shape of the whole feature:
+ * Three consequences of that choice are the shape of the whole feature:
  *
  * **No display is required.** A plain Electron process needs a display server,
  * so it cannot be the thing a boot-time timer launches. Running as Node means
@@ -21,39 +20,47 @@
  * requires the plain-text opt-in, and why a run that cannot read the key records
  * that as its outcome instead of failing obscurely at the provider.
  *
- * At this stage it reports what it finds rather than running turns: the agent
- * host is wired in with the rest of the capabilities, and a runner that silently
- * did nothing would be indistinguishable from one that worked.
+ * **No web search.** That runs in a browser engine, and there is none here.
+ * `web_search` is simply not offered, and the operating rules have the model say
+ * a capability is missing rather than pretend.
+ *
+ * It does not need to avoid running while the app is open: the store's own
+ * claim on an occurrence is what makes a job run once. Checking the app's lock
+ * first is an optimisation — it saves building an agent and dialling every MCP
+ * server beside an app doing the same — not a correctness measure.
  */
 import {pathToFileURL} from 'node:url';
 
-import {defaultUserDataDir, JobStore, resolveAppPaths} from '@marimo/runtime';
+import {
+  AgentRuntime,
+  createJobRunner,
+  defaultUserDataDir,
+  FileSecretStore,
+  isProcessHeld,
+  JobScheduler,
+  JobStore,
+  resolveAppPaths,
+} from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
-import type {Job} from '@marimo/protocol';
+
+import {PROVIDERS} from '@marimo/protocol';
 
 import {PRODUCT_NAME, USER_DATA_ENV} from '../shared/product.js';
 
-export interface DueJob {
-  id: string;
-  name: string;
-  profileId: string;
-  /** The occurrence that has passed and has not been dealt with yet. */
-  dueAt: string;
-}
-
 export interface RunDueReport {
   userData: string;
-  /** Jobs across every agent, not only the one the window happens to show. */
+  /** Whether the app was already running the jobs. */
+  appIsRunning: boolean;
   total: number;
   enabled: number;
-  due: DueJob[];
+  due: number;
+  ran: string[];
   /**
-   * Why the jobs could not be read, when they could not be.
+   * Why the runner could not do its job, when it could not.
    *
-   * Present means "this process could not do its job", which is a different
-   * thing from "there was nothing to do" and has to look different: a runner
-   * that reported an unreadable file as an empty one would exit 0 every minute
-   * for a week and never run anything, with nothing anywhere to say so.
+   * Present means trouble, and it is what makes the exit code non-zero: for a
+   * timer, "exit 0, nothing happened" and "exit 0, I could not read the file"
+   * are the same observation, and the second one is the failure nobody notices.
    */
   problem?: string;
 }
@@ -76,94 +83,137 @@ export function resolveRunnerPaths(env: NodeJS.ProcessEnv = process.env): AppPat
 }
 
 /**
- * The jobs that are due, across every agent.
+ * Reads the key the way a process with no keychain can.
  *
- * `dueAt` is the occurrence the scheduler is watching and it is deliberately not
- * `nextRunAt`: the latter is always in the future — it is what the card promises
- * — so it cannot also be the moment that says "this one is now". A job is due
- * when its watched occurrence has passed, which is what stops a daily job firing
- * once a minute all day.
- *
- * A paused job is never due, and that is the only reason `enabled` is consulted
- * here rather than left to the caller.
+ * No cipher, so a key the app encrypted is reported as unreadable rather than as
+ * missing — and the difference matters, because "add a key" sent to somebody who
+ * already has one is how a working install comes to look broken. The message
+ * that comes back names the setting that fixes it.
  */
-export function dueJobs(jobs: readonly Job[], now: Date): DueJob[] {
-  const due: DueJob[] = [];
-
-  for (const job of jobs) {
-    if (!job.enabled || job.dueAt === undefined) {
-      continue;
-    }
-    const at = Date.parse(job.dueAt);
-    if (!Number.isFinite(at) || at > now.getTime()) {
-      continue;
-    }
-    due.push({
-      id: job.id,
-      name: job.name,
-      profileId: job.profileId,
-      dueAt: job.dueAt,
-    });
-  }
-
-  return due;
+function readSecretWithoutKeychain(paths: AppPaths) {
+  return async (providerId: keyof AppPaths['providerSecrets']) => {
+    const store = new FileSecretStore(
+      paths.providerSecrets[providerId],
+      `${PROVIDERS[providerId].label} API key`,
+      // No cipher, and that is the whole point: there is no keychain to reach
+      // from a process with no `app`. A key the app encrypted reads as
+      // unreadable, with the message that names the setting which fixes it.
+    );
+    return await store.read();
+  };
 }
 
 /**
- * Reads the jobs document and works out what is due, without running anything.
+ * Looks at the clock once and runs whatever is due.
  *
- * Separated from the entry point so it can be called by a test with a fixed
- * clock, and later by the app itself when it wants to know whether the background
- * service has anything waiting.
+ * One look rather than a loop: the OS timer is the loop. `tick()` awaits the
+ * dispatch queue, so by the time this returns, every job it started has
+ * finished, and the process can exit without leaving a turn half-written.
  */
-export async function inspectDueJobs(options: {
+export async function runDue(options: {
   paths: AppPaths;
-  now?: Date;
+  /** Told about each job as it starts, for a log a person reads. */
+  onRun?: (jobId: string) => void;
 }): Promise<RunDueReport> {
-  const store = new JobStore({file: options.paths.jobs});
-  const {jobs, problem} = await store.loadChecked();
-  const now = options.now ?? new Date();
+  const {paths} = options;
 
+  if (await isProcessHeld(paths.appLock)) {
+    return {
+      userData: paths.userData,
+      appIsRunning: true,
+      total: 0,
+      enabled: 0,
+      due: 0,
+      ran: [],
+    };
+  }
+
+  const jobs = new JobStore({file: paths.jobs});
+  const {problem} = await jobs.loadChecked();
+  if (problem !== undefined) {
+    return {
+      userData: paths.userData,
+      appIsRunning: false,
+      total: 0,
+      enabled: 0,
+      due: 0,
+      ran: [],
+      problem,
+    };
+  }
+
+  const runtime = new AgentRuntime({
+    paths,
+    readSecret: readSecretWithoutKeychain(paths),
+    appName: PRODUCT_NAME,
+  });
+
+  /*
+   * `onChange` is the scheduler saying it recorded something about a job —
+   * which is every dispatch outcome, including a deferral and a gate. A `Set`
+   * because one job can record twice in a run: once when it starts, once when
+   * it ends.
+   */
+  const ran = new Set<string>();
+  const scheduler = new JobScheduler({
+    store: jobs,
+    runner: createJobRunner({runtime, jobs}),
+    onChange: (jobId) => {
+      ran.add(jobId);
+      options.onRun?.(jobId);
+    },
+  });
+
+  try {
+    // One look, waited for. Not `start`, which arms a timer this process will
+    // never reach, and not `tick`, which is written for a caller that will be
+    // back — this process is about to exit, and a turn still running would be
+    // killed mid-write.
+    await scheduler.runOnce();
+  } finally {
+    runtime.dispose();
+  }
+
+  const after = await jobs.load();
   return {
-    userData: options.paths.userData,
-    total: jobs.jobs.length,
-    enabled: jobs.jobs.filter((job) => job.enabled).length,
-    due: dueJobs(jobs.jobs, now),
-    ...(problem === undefined ? {} : {problem}),
+    userData: paths.userData,
+    appIsRunning: false,
+    total: after.jobs.length,
+    enabled: after.jobs.filter((job) => job.enabled).length,
+    due: ran.size,
+    ran: [...ran],
   };
 }
 
 /** The report as lines a person reads in a log. */
 export function describeReport(report: RunDueReport): string[] {
-  const lines = [
-    `Marimo Agent job runner`,
-    `  data directory: ${report.userData}`,
-  ];
+  const lines = ['Marimo Agent job runner'];
 
   if (report.problem !== undefined) {
-    /*
-     * Printed before the counts and phrased as a failure, because that is what
-     * it is: the job list below is empty only because nothing could be read.
-     */
     lines.push(`  FAILED: ${report.problem}`);
     return lines;
   }
 
-  lines.push(`  jobs: ${report.total} (${report.enabled} enabled)`);
-
-  if (report.due.length === 0) {
-    lines.push('  nothing due.');
+  if (report.appIsRunning) {
+    /*
+     * Not a failure, and said plainly rather than logged as an error: the app
+     * runs the jobs while it is open, so there was nothing for this process to
+     * do.
+     */
+    lines.push('  the app is running, so it is looking after the jobs.');
     return lines;
   }
 
-  lines.push(`  due now: ${report.due.length}`);
-  for (const job of report.due) {
-    lines.push(`    - ${job.name} (${job.id}), due ${job.dueAt}`);
+  lines.push(`  data directory: ${report.userData}`);
+  if (report.ran.length === 0) {
+    lines.push(`  jobs: ${report.total} (${report.enabled} enabled), none due.`);
+    return lines;
   }
-  lines.push(
-    '  This build reports due jobs rather than running them: the agent host is',
-    '  wired in with the rest of the capabilities. Nothing was run.',
-  );
+
+  lines.push(`  ran ${report.ran.length} job(s):`);
+  for (const jobId of report.ran) {
+    lines.push(`    - ${jobId}`);
+  }
   return lines;
 }
 
@@ -181,11 +231,13 @@ function parseArguments(argv: readonly string[]): Options {
  * Exported so the app can call it directly when it is the one that came due, and
  * so a test can assert on the code rather than on a spawned process.
  */
-export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
+export async function main(
+  argv: readonly string[] = process.argv.slice(2),
+): Promise<number> {
   const options = parseArguments(argv);
 
   try {
-    const report = await inspectDueJobs({paths: resolveRunnerPaths()});
+    const report = await runDue({paths: resolveRunnerPaths()});
     if (options.json) {
       process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     } else {

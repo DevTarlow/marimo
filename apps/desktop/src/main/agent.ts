@@ -17,12 +17,15 @@
  */
 import {
   AgentRuntime,
+  createJobRunner,
+  holdProcessLock,
   JobScheduler,
   JobStore,
   McpManager,
   secretReaderFor,
 } from '@marimo/runtime';
-import type {AppPaths, JobRunner} from '@marimo/runtime';
+import type {ProcessLock} from '@marimo/runtime';
+import type {AppPaths} from '@marimo/runtime';
 
 import {PROVIDERS} from '@marimo/protocol';
 import type {
@@ -75,6 +78,8 @@ export class AgentService {
    */
   private readonly jobs: JobStore;
   private readonly scheduler: JobScheduler;
+  /** Held for as long as this process is: "the app is running the jobs". */
+  private appLock: ProcessLock | undefined;
   private reconcile: NodeJS.Timeout | undefined;
   private stopped = false;
 
@@ -119,49 +124,17 @@ export class AgentService {
     this.jobs = new JobStore({file: paths.jobs});
     this.scheduler = new JobScheduler({
       store: this.jobs,
-      runner: this.jobRunner(),
+      runner: createJobRunner({
+        runtime: this.runtime,
+        jobs: this.jobs,
+        onEvent: (event) => {
+          options.sendEvent(event);
+        },
+      }),
       onChange: (jobId) => {
         options.sendEvent({type: 'job.changed', jobId});
       },
     });
-  }
-
-  /**
-   * How a scheduled job becomes a turn.
-   *
-   * Two things are worth reading closely. The conversation: a job with none —
-   * or with one the user has since deleted — gets a fresh one named after the
-   * job, and the job is re-pointed at it, so the schedule survives the
-   * conversation being tidied away. And the events: they are forwarded to the
-   * window as well as drained by the scheduler, so a job that runs while its
-   * conversation is open streams into it like any other turn rather than
-   * appearing all at once when it finishes.
-   */
-  private jobRunner(): JobRunner {
-    return {
-      isBusy: () => this.runtime.isBusy(),
-      run: async ({jobId, profileId, sessionId, onSession, prompt, title}) => {
-        let id = sessionId;
-        if (id !== null && !(await this.hasSession(profileId, id))) {
-          // The conversation was deleted from the sidebar. A schedule is not a
-          // conversation, so the job outlives it and starts a new one.
-          id = null;
-        }
-        if (id === null) {
-          const created = await this.runtime.createSession(profileId, title);
-          if (created === undefined) {
-            throw new Error(`There is no agent called "${profileId}".`);
-          }
-          id = created.id;
-          await this.jobs.setSession(jobId, id);
-          onSession(id);
-        }
-        return {
-          sessionId: id,
-          events: this.forward(this.runtime.run(profileId, id, prompt)),
-        };
-      },
-    };
   }
 
   /**
@@ -198,8 +171,8 @@ export class AgentService {
       /*
        * Ownership is checked rather than assumed. The agent names a job id from
        * its own conversation, and a stale one — or one belonging to another
-       * agent — must not be editable through it: the id is the only thing
-       * tying the request to a document.
+       * agent — must not be editable through it: the id is the only thing tying
+       * the request to a document.
        */
       update: async (jobId, patch, profileId) => {
         if (!(await owns(jobId, profileId))) {
@@ -225,28 +198,14 @@ export class AgentService {
     };
   }
 
-  /** Whether a conversation still exists for this agent. */
-  private async hasSession(
-    profileId: string,
-    sessionId: string,
-  ): Promise<boolean> {
-    const sessions = await this.runtime.listSessions(profileId);
-    return sessions.some((session) => session.id === sessionId);
-  }
-
-  /** Yields every event onward, and to the window. */
-  private async *forward(
-    stream: AsyncGenerator<AgentUiEvent>,
-  ): AsyncGenerator<AgentUiEvent> {
-    for await (const event of stream) {
-      if (!this.stopped) {
-        this.options.sendEvent(event);
-      }
-      yield event;
-    }
-  }
-
   async start(): Promise<void> {
+    /*
+     * Claimed before anything else, so a headless run that is already in
+     * progress knows to leave the jobs alone. Not being able to take it is not a
+     * failure: it means a runner got there first, and it will be finished in
+     * seconds.
+     */
+    this.appLock = await holdProcessLock(this.options.paths.appLock);
     await this.applyMcpServers();
     /*
      * Started after the servers, so a job whose prompt needs an MCP tool is not
@@ -269,6 +228,8 @@ export class AgentService {
       this.reconcile = undefined;
     }
     this.scheduler.stop();
+    await this.appLock?.release();
+    this.appLock = undefined;
     await this.mcp.stop();
     this.runtime.dispose();
     this.search.dispose();

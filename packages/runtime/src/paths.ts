@@ -38,6 +38,15 @@ export interface AppPaths {
   profiles: string;
   /** Scheduled jobs: what to do, when, and which conversation they report into. */
   jobs: string;
+  /**
+   * Where a running app says so.
+   *
+   * The headless runner reads it to answer one question: is the app already
+   * running the jobs? It is not what makes a job run once — the store's own
+   * claim does that — but it is what stops the runner building an agent, dialling
+   * every MCP server and ticking, once a minute, beside an app doing the same.
+   */
+  appLock: string;
   /** Skills the user wrote, which ride in every request. */
   skills: string;
   /**
@@ -74,6 +83,7 @@ export function resolveAppPaths(userData: string): AppPaths {
     providerSecrets,
     profiles: join(userData, 'profiles.json'),
     jobs: join(userData, 'jobs.json'),
+    appLock: join(userData, 'app.lock'),
     skills: join(userData, 'skills.json'),
     defaultWorkspace: homedir(),
   };

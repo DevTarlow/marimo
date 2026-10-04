@@ -10,7 +10,7 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import type {AgentUiEvent, Job, Jobs} from '@marimo/protocol';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {JobStore} from './jobs.js';
 import {JobScheduler} from './scheduler.js';
@@ -49,6 +49,16 @@ class FakeClock {
   clearTimer = (handle: unknown): void => {
     this.timers = this.timers.filter((timer) => timer.handle !== handle);
   };
+
+  /**
+   * Moves the clock without running anything.
+   *
+   * For `runOnce`, which takes no timers: a test has to say what time it is
+   * rather than ask to be woken at it.
+   */
+  setNow(when: Date): void {
+    this.current = new Date(when.getTime());
+  }
 
   /** The one timer the scheduler keeps armed, or `null`. */
   armedIn(): number | null {
@@ -215,6 +225,62 @@ describe('JobScheduler', () => {
     });
     return {...job, ...overrides};
   }
+
+  /*
+   * The other half of the claim. A scheduler that is told "somebody else got
+   * there first" has to *not run*: the occurrence is gone, and running it anyway
+   * is the duplicate this arrangement exists to prevent.
+   */
+  it('does not run an occurrence it failed to claim', async () => {
+    await jobAt('0 9 * * *');
+    // Stands in for the app and the headless runner racing for one occurrence.
+    const refused = vi
+      .spyOn(store, 'advanceDue')
+      .mockResolvedValue(null);
+    try {
+      await scheduler.start();
+      await clock.runUntil(scheduler, afterStart(2 * 3_600_000));
+      expect(runner.runs).toEqual([]);
+    } finally {
+      refused.mockRestore();
+    }
+  });
+
+  /*
+   * The one-shot path, for a process that runs the due jobs and exits.
+   *
+   * Its defining property is that it *waits*: the timer path deliberately does
+   * not, because blocking the loop on one job would stop every other job's
+   * clock. A headless runner that returned early would exit with the turn
+   * half-written and the occurrence unconsumed.
+   */
+  it('runs what is due and waits for it, without arming a timer', async () => {
+    await jobAt('0 9 * * *');
+
+    await clock.setNow(afterStart(3_600_000));
+    await scheduler.runOnce();
+
+    expect(runner.runs).toHaveLength(1);
+    // Nothing armed: this caller is not coming back.
+    expect(scheduler.nextLookIn()).toBeNull();
+    expect(scheduler.isIdle()).toBe(true);
+  });
+
+  it('is safe to call with nothing due', async () => {
+    await expect(scheduler.runOnce()).resolves.toBeUndefined();
+    expect(runner.runs).toEqual([]);
+  });
+
+  it('does not run a second occurrence in the same one-shot look', async () => {
+    await jobAt('0 9 * * *');
+    await clock.setNow(afterStart(3_600_000));
+
+    await scheduler.runOnce();
+    await scheduler.runOnce();
+
+    // The second look finds the marker moved on, so nothing is due.
+    expect(runner.runs).toHaveLength(1);
+  });
 
   it('runs a job when its time comes, with a prompt that says what it is', async () => {
     await jobAt('0 9 * * *');

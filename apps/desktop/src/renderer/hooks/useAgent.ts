@@ -39,12 +39,30 @@ import type {
  */
 export type LiveToolCall = ToolCallRecord;
 
+/**
+ * A helper agent, while it works.
+ *
+ * Keyed by call id rather than by name: the model may spawn two helpers under
+ * one name in a turn, and merging them would show one helper doing two things at
+ * once.
+ */
+export interface LiveSubagent {
+  callId: string;
+  name: string;
+  task: string;
+  text: string;
+  /** Absent while it runs. */
+  ok?: boolean;
+  error?: string;
+}
+
 /** The turn in flight, assembled from the stream. */
 export interface LiveTurn {
   messageId: string;
   text: string;
   reasoning: string;
   toolCalls: LiveToolCall[];
+  subagents: LiveSubagent[];
   running: boolean;
 }
 
@@ -191,6 +209,7 @@ export function useAgent(): AgentController {
               text: '',
               reasoning: '',
               toolCalls: [],
+              subagents: [],
               running: true,
             });
           }
@@ -243,6 +262,72 @@ export function useAgent(): AgentController {
                       call.callId === event.callId
                         ? {...call, ok: event.ok, result: event.result}
                         : call,
+                    ),
+                  },
+            );
+          }
+          return;
+
+        /*
+         * A helper's work arrives out of band — a tool call cannot yield into the
+         * stream that is awaiting it — so it is matched to the open turn by
+         * conversation and folded in here.
+         */
+        case 'subagent.started':
+          if (forUs) {
+            setLive((turn) =>
+              turn === null
+                ? turn
+                : {
+                    ...turn,
+                    subagents: [
+                      ...turn.subagents,
+                      {
+                        callId: event.callId,
+                        name: event.name,
+                        task: event.task,
+                        text: '',
+                      },
+                    ],
+                  },
+            );
+          }
+          return;
+
+        case 'subagent.event':
+          if (forUs) {
+            setLive((turn) =>
+              turn === null
+                ? turn
+                : {
+                    ...turn,
+                    subagents: turn.subagents.map((helper) =>
+                      helper.callId === event.callId
+                        ? {...helper, text: helper.text + event.text}
+                        : helper,
+                    ),
+                  },
+            );
+          }
+          return;
+
+        case 'subagent.finished':
+          if (forUs) {
+            setLive((turn) =>
+              turn === null
+                ? turn
+                : {
+                    ...turn,
+                    subagents: turn.subagents.map((helper) =>
+                      helper.callId === event.callId
+                        ? {
+                            ...helper,
+                            ok: event.ok,
+                            ...(event.error === undefined
+                              ? {}
+                              : {error: event.error}),
+                          }
+                        : helper,
                     ),
                   },
             );

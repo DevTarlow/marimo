@@ -555,3 +555,85 @@
 .keep-error {
   color: var(--danger);
 }
+
+/* ------------------------------------------------------------ helper agents */
+
+/*
+ * A helper is deliberately quieter than the conversation it sits in: it exists to
+ * keep detail out of the transcript, so drawing it as loudly as the agent would
+ * undo the reason it was spawned.
+ */
+.helper {
+  border-left: 2px solid var(--border-strong);
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.helper-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.helper-head::-webkit-details-marker {
+  display: none;
+}
+
+.helper-mark {
+  width: 1em;
+  color: var(--text-faint);
+}
+
+.helper[data-state='failed'] .helper-mark {
+  color: var(--danger);
+}
+
+.helper-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.helper-name::after {
+  content: ' ·';
+  color: var(--text-faint);
+}
+
+.helper-task {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+}
+
+.helper-text {
+  margin: var(--space-1) 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.helper-error {
+  margin: var(--space-1) 0 0;
+  color: var(--danger);
+}
+
+/* The stored copy, once the turn has ended and the live view is gone. */
+.helper-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.message[data-subagent] .bubble {
+  border-left: 2px solid var(--border-strong);
+  padding-left: var(--space-3);
+  color: var(--text-muted);
+}

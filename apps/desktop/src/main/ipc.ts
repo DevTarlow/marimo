@@ -9,7 +9,8 @@
  *
  * Errors are thrown rather than returned, because Electron already propagates a
  * rejected `invoke` to the caller: an envelope would be a second error channel
- * to keep in step with the first.
+ * to keep in step with the first. The one exception is a turn's *own* refusal,
+ * which is not an error in this sense — see `AgentService.send`.
  */
 import {app, ipcMain, nativeTheme} from 'electron';
 
@@ -23,10 +24,13 @@ import type {
 } from '@marimo/protocol';
 import type {AppPaths} from '@marimo/runtime';
 
+import type {AgentService} from './agent.js';
 import {safeStorageCipher} from './secrets.js';
 
 export interface IpcDependencies {
   paths: AppPaths;
+  /** The agent, once it has started. Absent if it failed to. */
+  agent: () => AgentService | undefined;
   /**
    * The theme the user chose.
    *
@@ -47,6 +51,17 @@ type Handlers = {
 export function registerIpcHandler(dependencies: IpcDependencies): void {
   const themeMode = dependencies.themeMode ?? ((): ThemeMode => 'system');
 
+  /** The agent, or a thrown sentence naming what went wrong at startup. */
+  const agent = (): AgentService => {
+    const service = dependencies.agent();
+    if (service === undefined) {
+      throw new Error(
+        'The agent did not start. Check the app log, then reopen Marimo Agent.',
+      );
+    }
+    return service;
+  };
+
   const handlers: Handlers = {
     'app.info': (): AppInfo => ({
       name: app.getName(),
@@ -63,6 +78,35 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       themeMode: themeMode(),
       theme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light',
     }),
+
+    'profiles.list': async () => await agent().profiles(),
+
+    'sessions.list': async (params) => ({
+      sessions: await agent().listSessions(params.profileId),
+    }),
+
+    'sessions.create': async (params) => ({
+      session: await agent().createSession(params.profileId),
+    }),
+
+    'sessions.get': async (params) =>
+      await agent().transcript(params.profileId, params.sessionId),
+
+    'chat.send': async (params) =>
+      await agent().send(params.profileId, params.sessionId, params.text),
+
+    'chat.approve': async (params) =>
+      await agent().approve(
+        params.profileId,
+        params.sessionId,
+        params.callId,
+        params.confirmed,
+      ),
+
+    'chat.abort': async (params) =>
+      agent().abort(params.profileId, params.sessionId),
+
+    'mcp.statuses': async () => agent().mcpStatuses(),
   };
 
   ipcMain.handle(

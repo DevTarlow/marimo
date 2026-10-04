@@ -1712,7 +1712,13 @@ export type AgentUiEvent =
    * list on `profile` (conversations are per profile) and drops the turn in
    * flight on either.
    */
-  | {type: 'scope.changed'; scope: 'profile' | 'workspace'};
+  | {type: 'scope.changed'; scope: 'profile' | 'workspace'}
+  /**
+   * An MCP server changed state on its own: it connected, dropped, or was
+   * refused. Carries the whole status rather than a diff, because the badge is
+   * drawn from it and there is nothing to reconcile.
+   */
+  | {type: 'mcp.status'; serverId: string; status: McpStatus};
 
 /* -------------------------------------------------------------------------- */
 /* Bridge surface exposed by the preload script                                */
@@ -1762,6 +1768,31 @@ export type ThemeMode = z.infer<typeof themeModeSchema>;
 /** Which way the OS (or the user) actually went. */
 export const themeSchema = z.enum(['light', 'dark']);
 export type Theme = z.infer<typeof themeSchema>;
+
+/**
+ * A gate a conversation is still waiting on.
+ *
+ * A wire shape rather than an agent-internal one, because it is exactly what a
+ * card is drawn from and a card outlives the process that raised it: the window
+ * asks for the pending gates of whatever conversation it is showing, and gets
+ * them from the event log rather than from memory.
+ */
+export const pendingGateSchema = z.object({
+  callId: z.string(),
+  tool: z.string(),
+  args: z.unknown(),
+  hint: z.string(),
+  /**
+   * When the question was asked, so a card can say how long it has waited.
+   *
+   * There is deliberately no expiry: a desktop agent's user may be away for
+   * hours, and a gate that lapsed while they were out would silently throw away
+   * the work they asked for.
+   */
+  askedAt: z.string(),
+});
+
+export type PendingGate = z.infer<typeof pendingGateSchema>;
 
 /**
  * What the window needs to describe this install.
@@ -1817,6 +1848,41 @@ export interface AppInfo {
  */
 export const agentCallSchemas = {
   'app.info': z.object({}),
+
+  /* The agents this install has. */
+  'profiles.list': z.object({}),
+
+  /* Conversations. */
+  'sessions.list': z.object({profileId: z.string().min(1).optional()}),
+  'sessions.create': z.object({profileId: z.string().min(1)}),
+  'sessions.get': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+  }),
+
+  /*
+   * A turn. The call returns as soon as the turn is *accepted*; the answer
+   * arrives as `AgentUiEvent`s on the event channel, because a turn is a stream
+   * and an `invoke` is not.
+   */
+  'chat.send': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+    text: z.string().min(1),
+  }),
+  'chat.approve': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+    callId: z.string().min(1),
+    confirmed: z.boolean(),
+  }),
+  'chat.abort': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+  }),
+
+  /* What the agent can reach right now. */
+  'mcp.statuses': z.object({}),
 } as const;
 
 export type AgentCallMethod = keyof typeof agentCallSchemas;
@@ -1827,6 +1893,32 @@ export type AgentCallParams<M extends AgentCallMethod> = z.infer<
 /** What each call answers with. */
 export interface AgentCallResults {
   'app.info': AppInfo;
+  'profiles.list': {profiles: AgentProfile[]; activeProfileId: string};
+  'sessions.list': {sessions: SessionSummary[]};
+  'sessions.create': {session: SessionSummary};
+  'sessions.get': {
+    messages: TranscriptMessage[];
+    pending: PendingGate[];
+  };
+  /** Accepted, not finished: the turn itself arrives on the event channel. */
+  'chat.send': {accepted: boolean};
+  'chat.approve': {accepted: boolean};
+  'chat.abort': {aborted: boolean};
+  'mcp.statuses': Record<string, McpStatus>;
+}
+
+/**
+ * How an MCP server is doing, as the window draws it.
+ *
+ * Structurally the manager's own status type — declared here because the window
+ * reads it and the manager writes it, and two shapes for one badge is two
+ * shapes that can disagree.
+ */
+export interface McpStatus {
+  state: 'off' | 'connecting' | 'online' | 'error';
+  /** One sentence, shown under the server's name. */
+  detail: string;
+  toolCount: number;
 }
 
 /**

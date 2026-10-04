@@ -1,0 +1,260 @@
+/**
+ * The agent, running in this process.
+ *
+ * Everything the window can ask an agent to do goes through here: list the
+ * agents, list and open conversations, send a message, answer a card, stop a
+ * turn. The agent itself lives in `@marimo/runtime`, which is Electron-free and
+ * is the same class the headless job runner hosts — this file is the part that
+ * is specific to being inside Electron, which is three things:
+ *
+ * - **Where secrets come from.** Provider keys are decrypted with `safeStorage`,
+ *   which only exists here. The runner passes the plain-text reader instead.
+ * - **Where web search comes from.** `web_search` needs a browser engine, and
+ *   Electron ships one; without it the tool is simply not offered, which is why
+ *   this is allowed to be absent.
+ * - **Where events go.** A turn is a stream, and this process turns it into
+ *   broadcasts the window listens for.
+ */
+import {AgentRuntime, McpManager, secretReaderFor} from '@marimo/runtime';
+import type {AppPaths} from '@marimo/runtime';
+
+import {PROVIDERS} from '@marimo/protocol';
+import type {
+  AgentProfile,
+  AgentUiEvent,
+  McpStatus,
+  PendingGate,
+  SessionSummary,
+  TranscriptMessage,
+} from '@marimo/protocol';
+
+import {safeStorageCipher, secretStore} from './secrets.js';
+
+/**
+ * How often a dropped MCP server is considered for a reconnect.
+ *
+ * Not a retry interval — the manager keeps its own backoff and will not dial a
+ * server that is inside it. This is only how often it is *asked*, so it can be
+ * lazy without a server sitting dead for want of a nudge.
+ */
+const MCP_RECONCILE_MS = 30_000;
+
+export interface AgentServiceOptions {
+  paths: AppPaths;
+  /** Where a turn's events are sent. */
+  sendEvent: (event: AgentUiEvent) => void;
+}
+
+export class AgentService {
+  private readonly runtime: AgentRuntime;
+  private readonly mcp: McpManager;
+  private reconcile: NodeJS.Timeout | undefined;
+  private stopped = false;
+
+  constructor(private readonly options: AgentServiceOptions) {
+    const {paths} = options;
+
+    this.mcp = new McpManager({
+      readSecrets: secretReaderFor(paths, (file, label) =>
+        secretStore(file, label),
+      ),
+      clientName: 'marimo-agent',
+      clientVersion: '0.1.0',
+      // The window redraws a badge from this. It is one field, so it travels
+      // whole rather than as a diff the renderer would have to reconcile.
+      onStatus: (serverId, status) => {
+        options.sendEvent({
+          type: 'mcp.status',
+          serverId,
+          status,
+        } as AgentUiEvent);
+      },
+    });
+
+    this.runtime = new AgentRuntime({
+      paths,
+      readSecret: async (providerId) => {
+        // Asked every time rather than cached: on Linux a keyring that was
+        // locked at launch can become usable later in the session, and the
+        // difference between "no key" and "cannot read the key" is the
+        // difference between two different things the user has to do.
+        const store = secretStore(
+          paths.providerSecrets[providerId],
+          `${PROVIDERS[providerId].label} API key`,
+        );
+        return await store.read();
+      },
+      mcpServers: () => this.mcp.toolsets(),
+    });
+  }
+
+  async start(): Promise<void> {
+    await this.applyMcpServers();
+    this.reconcile = setInterval(() => {
+      void this.mcp.reconcile();
+    }, MCP_RECONCILE_MS);
+    // A timer must not be the reason the process stays alive: the app decides
+    // when it quits, and an interval holding the loop open would turn a quit
+    // into a hang.
+    this.reconcile.unref?.();
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.reconcile !== undefined) {
+      clearInterval(this.reconcile);
+      this.reconcile = undefined;
+    }
+    await this.mcp.stop();
+    this.runtime.dispose();
+  }
+
+  /** Re-reads the server list and dials whatever changed. */
+  async applyMcpServers(): Promise<void> {
+    const settings = await this.runtime.settings();
+    await this.mcp.apply(settings.mcpServers);
+  }
+
+  async profiles(): Promise<{
+    profiles: AgentProfile[];
+    activeProfileId: string;
+  }> {
+    const profiles = await this.runtime.profiles();
+    const active = await this.runtime.activeProfile();
+    return {profiles, activeProfileId: active.id};
+  }
+
+  async listSessions(profileId?: string): Promise<SessionSummary[]> {
+    return await this.runtime.listSessions(profileId);
+  }
+
+  async createSession(profileId: string): Promise<SessionSummary> {
+    const session = await this.runtime.createSession(profileId);
+    if (session === undefined) {
+      throw new Error(`There is no agent called "${profileId}".`);
+    }
+    return session;
+  }
+
+  async transcript(
+    profileId: string,
+    sessionId: string,
+  ): Promise<{messages: TranscriptMessage[]; pending: PendingGate[]}> {
+    const result = await this.runtime.host(profileId);
+    if (!result.ok) {
+      // A conversation with no working provider can still be *read*, which is
+      // what lets the window show the refusal beside the history rather than
+      // instead of it.
+      return {messages: [], pending: []};
+    }
+    const {messages} = await result.host.getTranscript(sessionId, profileId);
+    const pending = await result.host.pendingGates(sessionId);
+    return {messages, pending};
+  }
+
+  /**
+   * Starts a turn.
+   *
+   * Answers as soon as the turn has been *started*, because a turn is a stream
+   * and an `invoke` is not: the answer arrives on the event channel. A refusal —
+   * a turn already running, no key, an unknown conversation — comes back as
+   * `turn.failed` on that same channel, which is the shape the window already
+   * draws, so nothing here has to invent a second way to say no.
+   */
+  async send(
+    profileId: string,
+    sessionId: string,
+    text: string,
+  ): Promise<{accepted: boolean}> {
+    /*
+     * Checked here as well as inside the agent, purely so the answer is
+     * synchronous. A send that is going to be refused should be refused in the
+     * reply the window is waiting for, not one event later.
+     */
+    if (this.runtime.isBusy()) {
+      this.options.sendEvent({
+        type: 'turn.failed',
+        sessionId,
+        messageId: '',
+        code: 'busy',
+        message: 'A turn is already running. Wait for it to finish, or stop it.',
+      });
+      return {accepted: false};
+    }
+
+    this.pump(this.runtime.run(profileId, sessionId, text));
+    return {accepted: true};
+  }
+
+  async approve(
+    profileId: string,
+    sessionId: string,
+    callId: string,
+    confirmed: boolean,
+  ): Promise<{accepted: boolean}> {
+    if (this.runtime.isBusy()) {
+      this.options.sendEvent({
+        type: 'turn.failed',
+        sessionId,
+        messageId: '',
+        code: 'busy',
+        message: 'A turn is already running. Wait for it to finish, or stop it.',
+      });
+      return {accepted: false};
+    }
+
+    this.pump(this.runtime.approve(profileId, {sessionId, callId, confirmed}));
+    return {accepted: true};
+  }
+
+  abort(profileId: string, sessionId: string): {aborted: boolean} {
+    return {aborted: this.runtime.abort(profileId, sessionId)};
+  }
+
+  mcpStatuses(): Record<string, McpStatus> {
+    return this.mcp.statuses() as Record<string, McpStatus>;
+  }
+
+  /** Whether any agent is mid-turn. */
+  isBusy(): boolean {
+    return this.runtime.isBusy();
+  }
+
+  /**
+   * Drains a turn's events to the window.
+   *
+   * The generator is consumed to completion in the background: a turn outlives
+   * the call that started it, and the window may well have been closed and
+   * reopened by the time it finishes.
+   *
+   * A throw is turned into a `turn.failed` event rather than being left to
+   * reject an unawaited promise, which would be an unhandled rejection in the
+   * main process — a crash with nothing on screen to explain it.
+   */
+  private pump(stream: AsyncGenerator<AgentUiEvent>): void {
+    void (async () => {
+      try {
+        for await (const event of stream) {
+          if (this.stopped) {
+            return;
+          }
+          this.options.sendEvent(event);
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.options.sendEvent({
+          type: 'turn.failed',
+          sessionId: '',
+          messageId: '',
+          code: 'internal',
+          message: `The turn failed: ${detail}`,
+        });
+      }
+    })();
+  }
+}
+
+/** Whether an OS keychain is available to encrypt secrets on this machine. */
+export function canEncryptSecrets(): boolean {
+  return safeStorageCipher.available();
+}

@@ -20,6 +20,7 @@ import {
 import type {Content, Part} from '@google/genai';
 import type {
   AgentUiEvent,
+  PendingGate,
   ProviderId,
   SessionSource,
   SessionSummary,
@@ -102,28 +103,11 @@ interface GateDecision {
   payload?: unknown;
 }
 
-/**
- * A gate a conversation is still waiting on.
- *
- * The same three facts an `approval.request` carries, because they are the three
- * a card needs to be drawn and to be answerable: which call, what it would do,
- * and the one line that says what that means.
+/*
+ * `PendingGate` is the contract's, not this file's. It is what a card is drawn
+ * from, so the window has to be able to name it — and a second declaration here
+ * would be a second shape that could drift from the one on the wire.
  */
-export interface PendingGate {
-  callId: string;
-  tool: string;
-  args: unknown;
-  hint: string;
-  /**
-   * When the question was asked, so a card can say how long it has waited.
-   *
-   * There is deliberately no expiry. A desktop agent's user may be away for
-   * hours, and a gate that lapsed while they were out would silently throw away
-   * the work they asked for — the turn would simply never finish, with nothing
-   * on screen to say why. The age is reported and the decision stays with them.
-   */
-  askedAt: string;
-}
 
 /**
  * The gates of one paused round, and the decisions taken so far.

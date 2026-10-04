@@ -137,6 +137,31 @@ async function main() {
     ok(`the preload bridge answered: ${probe.product} ${probe.version}`);
     ok(`the renderer mounted with ${probe.rootChildren} child element(s)`);
 
+    /*
+     * The agent's own spine. A preload that loads proves nothing about whether
+     * the runtime, the stores and the IPC handlers behind it are connected —
+     * these three calls are what prove it.
+     */
+    if (typeof probe.profileCount !== 'number' || probe.profileCount < 1) {
+      fail('the app has no agent profiles, so the agent did not start');
+    } else {
+      ok(`the agent is running with ${probe.profileCount} profile(s)`);
+    }
+
+    if (typeof probe.sessionId !== 'string' || probe.sessionId.length === 0) {
+      fail('a conversation could not be started');
+    } else {
+      ok(`a conversation was created (${probe.sessionId})`);
+    }
+
+    if (probe.sessionCount !== 1) {
+      fail(
+        `after creating one conversation the agent reports ${probe.sessionCount}`,
+      );
+    } else {
+      ok('the conversation was listed and read back');
+    }
+
     if (probe.theme !== 'dark' && probe.theme !== 'light') {
       fail(`the theme attribute is "${probe.theme}", not light or dark`);
     } else {
@@ -259,6 +284,12 @@ async function attach(socket) {
  *
  * `mounted` is the gate: it is only true once the bridge answered *and* React
  * rendered. Anything else is a partial start that would otherwise pass.
+ *
+ * It goes past `app.info` on purpose. That call proves the preload is loaded; it
+ * says nothing about whether the agent behind it came up. Asking for the agents
+ * and starting a conversation is what proves the whole spine — the runtime, the
+ * stores, and the IPC handlers — is connected, and it does it without needing a
+ * provider, because a conversation is a file and does not require one.
  */
 const PROBE = `(async () => {
   const result = {
@@ -277,6 +308,27 @@ const PROBE = `(async () => {
     result.version = info.version;
     result.userData = info.userData;
     result.secretsEncrypted = info.secretsEncrypted;
+
+    const {profiles, activeProfileId} = await window.marimo.call('profiles.list', {});
+    result.profileCount = profiles.length;
+    result.activeProfileId = activeProfileId;
+
+    const {session} = await window.marimo.call('sessions.create', {
+      profileId: activeProfileId,
+    });
+    result.sessionId = session.id;
+
+    const {sessions} = await window.marimo.call('sessions.list', {
+      profileId: activeProfileId,
+    });
+    result.sessionCount = sessions.length;
+
+    const {messages, pending} = await window.marimo.call('sessions.get', {
+      profileId: activeProfileId,
+      sessionId: session.id,
+    });
+    result.messageCount = messages.length;
+    result.pendingCount = pending.length;
   } catch (error) {
     result.error = String(error && error.message ? error.message : error);
     return result;

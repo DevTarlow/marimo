@@ -22,6 +22,7 @@ import {IPC_EVENT_CHANNEL, defaultWindowState} from '@marimo/protocol';
 import type {AgentUiEvent, WindowState} from '@marimo/protocol';
 
 import {registerIpcHandler} from './ipc.js';
+import {AgentService} from './agent.js';
 import {
   applyUserDataOverride,
   resolvePaths,
@@ -75,6 +76,7 @@ const windowIcon = join(moduleDir, '..', '..', 'assets', 'marimo-logo.png');
 const SETTLE_MS = 200;
 
 let mainWindow: BrowserWindow | undefined;
+let agent: AgentService | undefined;
 
 /**
  * The geometry to open with.
@@ -173,7 +175,24 @@ async function bootstrap(): Promise<void> {
     console.warn(`[marimo] ${disagreement}`);
   }
 
-  registerIpcHandler({paths});
+  /*
+   * The agent starts before the window, and a failure here does not stop the
+   * window opening. A broken settings file, an unreadable profile or a server
+   * that will not dial must leave the user with an app they can fix — the
+   * alternative is a process with no window and nothing to click, which is the
+   * one failure a desktop app cannot recover from.
+   */
+  agent = new AgentService({paths, sendEvent: broadcast});
+  try {
+    await agent.start();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('[marimo] the agent failed to start:', detail);
+    await agent.stop().catch(() => undefined);
+    agent = undefined;
+  }
+
+  registerIpcHandler({paths, agent: () => agent});
 
   mainWindow = await createWindow();
 
@@ -210,6 +229,27 @@ async function bootstrap(): Promise<void> {
   });
 }
 
+/**
+ * Stops the agent before the process goes.
+ *
+ * Awaited rather than fired and forgotten, because the agent holds MCP child
+ * processes and a half-written conversation: quitting out from under it leaves
+ * both behind. Idempotent, because `window-all-closed` and `before-quit` can
+ * both arrive.
+ */
+let shuttingDown = false;
+async function shutdown(): Promise<void> {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  const service = agent;
+  agent = undefined;
+  await service?.stop().catch((error: unknown) => {
+    console.error('[marimo] the agent did not stop cleanly:', error);
+  });
+}
+
 const hasLock = app.requestSingleInstanceLock();
 if (!hasLock) {
   // Another copy owns the user-data directory. Hand over and leave, rather than
@@ -233,7 +273,28 @@ if (!hasLock) {
      * get it back from, and a process with no window and no tray is a process
      * the user cannot quit.
      */
-    app.quit();
+    void shutdown().then(() => {
+      app.quit();
+    });
+  });
+
+  /*
+   * Every other way out — a signal, a menu, `app.quit()` from anywhere — arrives
+   * here, and the agent has to be stopped before the process goes: it holds MCP
+   * child processes and a conversation that may be mid-write.
+   *
+   * The quit is held once while that happens and then allowed through. The
+   * `shuttingDown` flag is what makes that terminate rather than loop: the second
+   * pass finds the work already done and lets the quit proceed.
+   */
+  app.on('before-quit', (event) => {
+    if (shuttingDown) {
+      return;
+    }
+    event.preventDefault();
+    void shutdown().then(() => {
+      app.quit();
+    });
   });
 
   void app.whenReady().then(bootstrap);

@@ -1,9 +1,11 @@
 export {AgentHost, pendingGatesIn} from './host/agent-host.js';
-export type {
-  AgentHostOptions,
-  ApproveParams,
-  PendingGate,
-} from './host/agent-host.js';
+export type {AgentHostOptions, ApproveParams} from './host/agent-host.js';
+/*
+ * `PendingGate` is re-exported from the contract rather than declared here: it
+ * is what the window draws a card from, so the protocol owns the shape and this
+ * package reads it like everything else on the wire.
+ */
+export type {PendingGate} from '@marimo/protocol';
 
 /*
  * MCP servers: one connection each, and the tools they offer.

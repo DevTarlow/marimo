@@ -139,14 +139,17 @@ export class AgentRuntime {
    * The profile and its folder are stamped on at creation, which is what files
    * the conversation under the right agent and the right folder in the sidebar.
    */
-  async createSession(profileId: string): Promise<SessionSummary | undefined> {
+  async createSession(
+    profileId: string,
+    title?: string,
+  ): Promise<SessionSummary | undefined> {
     const profile = await this.profileFor(profileId);
     if (!profile) {
       return undefined;
     }
     const host = await this.ensureHost(profileId);
     return await host.createSession(
-      undefined,
+      title,
       undefined,
       profileId,
       profile.activeWorkspaceId ?? undefined,

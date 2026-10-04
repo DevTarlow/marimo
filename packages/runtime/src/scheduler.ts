@@ -35,6 +35,15 @@ export interface JobRunner {
    */
   run(request: {
     jobId: string;
+    /**
+     * The agent that owns the job, and therefore the one that answers it.
+     *
+     * Passed per run rather than read from "the active agent", because a job
+     * belongs to the agent that was asked for it: leaving the others dormant
+     * until somebody happens to switch to them is how a schedule quietly stops
+     * being a schedule.
+     */
+    profileId: string;
     sessionId: string | null;
     /** The conversation the run happens in, once one exists. */
     onSession: (sessionId: string) => void;
@@ -48,8 +57,6 @@ export interface JobRunner {
 export interface JobSchedulerOptions {
   store: JobStore;
   runner: JobRunner;
-  /** The agent whose jobs may run, resolved fresh on every tick. */
-  activeProfileId: () => Promise<string>;
   /** How the app tells the window that a card changed. */
   onChange: (jobId: string) => void;
   /** Injected for tests; production uses the real clock and `setTimeout`. */
@@ -82,7 +89,6 @@ interface RunOutcome {
 export class JobScheduler {
   private readonly store: JobStore;
   private readonly runner: JobRunner;
-  private readonly activeProfileId: () => Promise<string>;
   private readonly onChange: (jobId: string) => void;
   private readonly now: () => Date;
   private readonly setTimer: (task: () => void, delayMs: number) => unknown;
@@ -130,7 +136,6 @@ export class JobScheduler {
   constructor(options: JobSchedulerOptions) {
     this.store = options.store;
     this.runner = options.runner;
-    this.activeProfileId = options.activeProfileId;
     this.onChange = options.onChange;
     this.now = options.now ?? (() => new Date());
     this.setTimer =
@@ -388,7 +393,18 @@ export class JobScheduler {
   private async pendingForLook(): Promise<Job[] | null> {
     try {
       return await this.pending();
-    } catch {
+    } catch (error) {
+      /*
+       * Reported rather than swallowed. A scheduler that cannot read its own
+       * file looks exactly like a scheduler with nothing to do — the same
+       * exit-0-having-done-nothing problem the headless runner had — and the
+       * only place that difference can surface is here.
+       *
+       * It is not re-thrown: the look is on a timer, and an exception escaping
+       * would end the loop and stop every future job too.
+       */
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`[marimo] the job list could not be read: ${detail}`);
       return null;
     }
   }
@@ -422,13 +438,19 @@ export class JobScheduler {
     return Math.max(250, Math.min(next - now, this.idleMs));
   }
 
-  /** The jobs this agent may run, in due order. */
+  /**
+   * Every enabled job, in due order — whichever agent owns it.
+   *
+   * Not just the active agent's. A job belongs to the agent it was asked of, and
+   * a user with two agents should not find that one of them only works while
+   * they are looking at it. Each run names its own profile, so the turn is
+   * answered by the right agent in the right conversation.
+   */
   private async pending(): Promise<Job[]> {
     const jobs = await this.store.load();
     this.updateRegistry(jobs);
-    const profileId = await this.activeProfileId();
     return jobs.jobs
-      .filter((job) => job.enabled && job.profileId === profileId)
+      .filter((job) => job.enabled)
       .sort(
         (left, right) =>
           Date.parse(left.dueAt ?? '') - Date.parse(right.dueAt ?? ''),
@@ -533,6 +555,7 @@ export class JobScheduler {
     try {
       const started = await this.runner.run({
         jobId: job.id,
+        profileId: job.profileId,
         sessionId: job.sessionId,
         onSession: (sessionId) => {
           this.registry.set(sessionId, job.id);

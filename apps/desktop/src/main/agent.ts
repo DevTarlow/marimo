@@ -15,8 +15,14 @@
  * - **Where events go.** A turn is a stream, and this process turns it into
  *   broadcasts the window listens for.
  */
-import {AgentRuntime, McpManager, secretReaderFor} from '@marimo/runtime';
-import type {AppPaths} from '@marimo/runtime';
+import {
+  AgentRuntime,
+  JobScheduler,
+  JobStore,
+  McpManager,
+  secretReaderFor,
+} from '@marimo/runtime';
+import type {AppPaths, JobRunner} from '@marimo/runtime';
 
 import {PROVIDERS} from '@marimo/protocol';
 import type {
@@ -27,6 +33,7 @@ import type {
   SessionSummary,
   TranscriptMessage,
 } from '@marimo/protocol';
+import type {JobService} from '@marimo/agent';
 
 import {safeStorageCipher, secretStore} from './secrets.js';
 import {BrowserSearchProvider} from './search/search-window.js';
@@ -58,6 +65,16 @@ export class AgentService {
    * call: it is a window, and a window per search would be a window per search.
    */
   private readonly search = new BrowserSearchProvider();
+  /**
+   * Scheduled jobs, and the clock that runs them.
+   *
+   * Owned here so a job is an ordinary turn: it is answered by the agent that
+   * owns it, in that agent's conversation, with that agent's tools — and it
+   * asks for approval the same way, which is why an unattended run can park on a
+   * gate rather than going ahead without one.
+   */
+  private readonly jobs: JobStore;
+  private readonly scheduler: JobScheduler;
   private reconcile: NodeJS.Timeout | undefined;
   private stopped = false;
 
@@ -96,11 +113,146 @@ export class AgentService {
       },
       webSearch: this.search,
       mcpServers: () => this.mcp.toolsets(),
+      services: () => ({jobService: this.jobService()}),
     });
+
+    this.jobs = new JobStore({file: paths.jobs});
+    this.scheduler = new JobScheduler({
+      store: this.jobs,
+      runner: this.jobRunner(),
+      onChange: (jobId) => {
+        options.sendEvent({type: 'job.changed', jobId});
+      },
+    });
+  }
+
+  /**
+   * How a scheduled job becomes a turn.
+   *
+   * Two things are worth reading closely. The conversation: a job with none —
+   * or with one the user has since deleted — gets a fresh one named after the
+   * job, and the job is re-pointed at it, so the schedule survives the
+   * conversation being tidied away. And the events: they are forwarded to the
+   * window as well as drained by the scheduler, so a job that runs while its
+   * conversation is open streams into it like any other turn rather than
+   * appearing all at once when it finishes.
+   */
+  private jobRunner(): JobRunner {
+    return {
+      isBusy: () => this.runtime.isBusy(),
+      run: async ({jobId, profileId, sessionId, onSession, prompt, title}) => {
+        let id = sessionId;
+        if (id !== null && !(await this.hasSession(profileId, id))) {
+          // The conversation was deleted from the sidebar. A schedule is not a
+          // conversation, so the job outlives it and starts a new one.
+          id = null;
+        }
+        if (id === null) {
+          const created = await this.runtime.createSession(profileId, title);
+          if (created === undefined) {
+            throw new Error(`There is no agent called "${profileId}".`);
+          }
+          id = created.id;
+          await this.jobs.setSession(jobId, id);
+          onSession(id);
+        }
+        return {
+          sessionId: id,
+          events: this.forward(this.runtime.run(profileId, id, prompt)),
+        };
+      },
+    };
+  }
+
+  /**
+   * The job tools, over the same store the scheduler runs from.
+   *
+   * One store, so a job the agent creates is a job that runs: a second copy of
+   * the document would leave the model describing a schedule that the clock had
+   * never heard of.
+   *
+   * Every mutation calls `sync`, which is what tells the scheduler to look now
+   * rather than at its next idle tick. A job asked for in a conversation should
+   * appear on the clock immediately, not up to thirty seconds later.
+   */
+  private jobService(): JobService {
+    const owns = async (jobId: string, profileId: string): Promise<boolean> => {
+      const document = await this.jobs.load();
+      return document.jobs.some(
+        (job) => job.id === jobId && job.profileId === profileId,
+      );
+    };
+
+    return {
+      list: async (profileId) => {
+        const document = await this.jobs.load();
+        return document.jobs.filter((job) => job.profileId === profileId);
+      },
+
+      create: async (input) => {
+        const {job} = await this.jobs.create(input);
+        this.scheduler.sync();
+        return job;
+      },
+
+      /*
+       * Ownership is checked rather than assumed. The agent names a job id from
+       * its own conversation, and a stale one — or one belonging to another
+       * agent — must not be editable through it: the id is the only thing
+       * tying the request to a document.
+       */
+      update: async (jobId, patch, profileId) => {
+        if (!(await owns(jobId, profileId))) {
+          return null;
+        }
+        const job = await this.jobs.update(jobId, patch);
+        if (job !== null) {
+          this.scheduler.sync();
+        }
+        return job;
+      },
+
+      remove: async (jobId, profileId) => {
+        if (!(await owns(jobId, profileId))) {
+          return false;
+        }
+        const removed = await this.jobs.remove(jobId);
+        if (removed) {
+          this.scheduler.sync();
+        }
+        return removed;
+      },
+    };
+  }
+
+  /** Whether a conversation still exists for this agent. */
+  private async hasSession(
+    profileId: string,
+    sessionId: string,
+  ): Promise<boolean> {
+    const sessions = await this.runtime.listSessions(profileId);
+    return sessions.some((session) => session.id === sessionId);
+  }
+
+  /** Yields every event onward, and to the window. */
+  private async *forward(
+    stream: AsyncGenerator<AgentUiEvent>,
+  ): AsyncGenerator<AgentUiEvent> {
+    for await (const event of stream) {
+      if (!this.stopped) {
+        this.options.sendEvent(event);
+      }
+      yield event;
+    }
   }
 
   async start(): Promise<void> {
     await this.applyMcpServers();
+    /*
+     * Started after the servers, so a job whose prompt needs an MCP tool is not
+     * dispatched before that tool exists.
+     */
+    await this.scheduler.start();
     this.reconcile = setInterval(() => {
       void this.mcp.reconcile();
     }, MCP_RECONCILE_MS);
@@ -116,6 +268,7 @@ export class AgentService {
       clearInterval(this.reconcile);
       this.reconcile = undefined;
     }
+    this.scheduler.stop();
     await this.mcp.stop();
     this.runtime.dispose();
     this.search.dispose();

@@ -99,7 +99,12 @@ class FakeClock {
 
 /** A runner that records what it was asked to do and streams a fixed outcome. */
 interface FakeRunner extends JobRunner {
-  runs: Array<{jobId: string; sessionId: string | null; prompt: string}>;
+  runs: Array<{
+    jobId: string;
+    profileId: string;
+    sessionId: string | null;
+    prompt: string;
+  }>;
   busy: boolean;
   /** What the next run's stream will do. */
   outcome: 'completed' | 'failed' | 'aborted' | 'approval';
@@ -111,8 +116,8 @@ function fakeRunner(): FakeRunner {
     busy: false,
     outcome: 'completed',
     isBusy: () => runner.busy,
-    run: async ({jobId, sessionId, onSession, prompt}) => {
-      runner.runs.push({jobId, sessionId, prompt});
+    run: async ({jobId, profileId, sessionId, onSession, prompt}) => {
+      runner.runs.push({jobId, profileId, sessionId, prompt});
       const resolved = sessionId ?? `session-for-${jobId}`;
       onSession(resolved);
       return {sessionId: resolved, events: stream(runner.outcome)};
@@ -179,7 +184,6 @@ describe('JobScheduler', () => {
     scheduler = new JobScheduler({
       store,
       runner,
-      activeProfileId: async () => profileId,
       onChange: (jobId) => changed.push(jobId),
       now: clock.now,
       setTimer: clock.setTimer,
@@ -249,28 +253,47 @@ describe('JobScheduler', () => {
     expect(runner.runs).toEqual([]);
   });
 
-  it('never runs a job that belongs to another agent', async () => {
+  /*
+   * A job belongs to the agent it was asked of, and runs for that agent —
+   * whichever one the user happens to be looking at.
+   *
+   * The version this is extracted from only ran the active agent's jobs, so a
+   * second agent's schedule quietly stopped being a schedule: it fired when you
+   * switched to that agent and not otherwise. There is no way to tell that apart
+   * from "the job is broken", which is why it is worth a test.
+   */
+  it('runs a job that belongs to another agent', async () => {
     await jobAt('0 9 * * *', {profileId: 'profile-2'});
     await scheduler.start();
 
     await clock.runUntil(scheduler, afterStart(6 * 3_600_000));
-    expect(runner.runs).toEqual([]);
-  });
-
-  it('runs it after the agent it belongs to becomes active', async () => {
-    await jobAt('*/5 * * * *', {profileId: 'profile-2'});
-    await scheduler.start();
-    await clock.runUntil(scheduler, afterStart(10 * 60_000));
-    expect(runner.runs).toEqual([]);
-
-    profileId = 'profile-2';
-    scheduler.sync();
-    // The look that notices the agent changed. The occurrence that passed while
-    // another agent was active is skipped; the next one five minutes along is
-    // what runs.
-    await clock.runUntil(scheduler, afterStart(6 * 60_000));
 
     expect(runner.runs).toHaveLength(1);
+  });
+
+  it('tells the runner which agent the job belongs to', async () => {
+    // The whole point of lifting the restriction: the turn has to be answered
+    // by the right agent, in that agent's conversation and with that agent's
+    // tools — not by whoever is on screen.
+    await jobAt('0 9 * * *', {profileId: 'profile-2'});
+    await scheduler.start();
+
+    await clock.runUntil(scheduler, afterStart(6 * 3_600_000));
+
+    expect(runner.runs[0]?.profileId).toBe('profile-2');
+  });
+
+  it('runs two agents\' due jobs in one look', async () => {
+    await jobAt('0 9 * * *', {profileId: 'profile-1'});
+    await jobAt('0 9 * * *', {profileId: 'profile-2'});
+
+    await scheduler.start();
+    await clock.runUntil(scheduler, afterStart(6 * 3_600_000));
+
+    expect(runner.runs.map((entry) => entry.profileId).sort()).toEqual([
+      'profile-1',
+      'profile-2',
+    ]);
   });
 
   /*

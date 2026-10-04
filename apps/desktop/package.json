@@ -13,7 +13,8 @@
     "run-due": "node dist/runner/run-due.js --run-due",
     "typecheck": "tsc -b tsconfig.runner.json && tsc -p tsconfig.renderer.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.test.json",
     "test": "vitest run",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "jobs-check": "node scripts/jobs-check.mjs"
   },
   "dependencies": {
     "@marimo/agent": "workspace:*",

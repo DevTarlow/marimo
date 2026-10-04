@@ -271,7 +271,6 @@ async function main() {
         );
         setTimeout(() => { resolve(''); }, 5_000);
       });
-      petSocket.close();
       const state = answer.length > 0 ? JSON.parse(answer) : {};
       if (state.moss !== true || state.input !== true || state.transparent !== true) {
         fail(`the companion is wrong: ${answer}`);
@@ -280,6 +279,83 @@ async function main() {
       } else {
         ok('the desktop companion is up, transparent, and shaped answers → moss → bar');
       }
+
+      /*
+       * And now the thing that actually broke: does the pet *hear* the turn?
+       *
+       * The companion is not a decoration of the main window — it has no
+       * transcript of its own to fall back on. Bubbles come from the event
+       * stream, so a window that is broadcast to but not broadcast *at* looks
+       * perfectly healthy and completely silent, while the same conversation
+       * visibly progresses next door. Nothing about that is visible from the
+       * main window, from the stores, or from any unit test: the pet's calls all
+       * work, and only the answers were missing.
+       *
+       * A fresh install has no API key, so the honest expectation is not an
+       * answer — it is a reaction. Sending from the pet must produce *something*
+       * in the pet, and on this install that something is the refusal. Either
+       * outcome passes; silence does not.
+       */
+      const reacted = await new Promise((resolve) => {
+        const timer = setTimeout(() => { resolve('timed out'); }, 20_000);
+        let step = 0;
+        petSocket.addEventListener('message', (event) => {
+          const message = JSON.parse(event.data);
+          const value = message.result?.result?.value;
+          if (message.id === 2) {
+            // The send is away; give the turn a moment to be refused.
+            setTimeout(() => {
+              petSocket.send(JSON.stringify({
+                id: 3,
+                method: 'Runtime.evaluate',
+                params: {
+                  expression: `JSON.stringify({
+                    bubbles: document.querySelectorAll('.pet-bubble').length,
+                    error: !!document.querySelector('.pet-error'),
+                    text: [...document.querySelectorAll('.pet-bubble')].map((b) => b.textContent).join(' ').slice(0, 80),
+                  })`,
+                  returnByValue: true,
+                },
+              }));
+            }, 6_000);
+          }
+          if (message.id === 3) {
+            clearTimeout(timer);
+            resolve(value ?? 'no value');
+          }
+        });
+        // Type and press Enter the way a person does, through the real input.
+        petSocket.send(JSON.stringify({
+          id: 2,
+          method: 'Runtime.evaluate',
+          params: {
+            expression: `(() => {
+              const input = document.querySelector('.pet-input');
+              const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+              setter.call(input, 'smoke: does the pet hear the answer?');
+              input.dispatchEvent(new Event('input', {bubbles: true}));
+              input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+              return 'sent';
+            })()`,
+            returnByValue: true,
+          },
+        }));
+      });
+      if (reacted === 'timed out' || reacted === 'no value') {
+        fail(`the companion never answered the check: ${reacted}`);
+      } else {
+        const seen = JSON.parse(reacted);
+        if (seen.bubbles === 0 && seen.error !== true) {
+          fail(
+            'the companion received no events at all — it drew nothing after a ' +
+              'turn was started from its own chat bar, which is what a window ' +
+              'missing from broadcast() looks like',
+          );
+        } else {
+          ok(`the companion hears the turn stream (${seen.text || 'shown as an error'})`);
+        }
+      }
+      petSocket.close();
     }
 
     /*

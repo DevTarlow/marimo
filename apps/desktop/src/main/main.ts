@@ -180,7 +180,18 @@ async function createWindow(): Promise<BrowserWindow> {
 }
 
 /**
- * Broadcast to the open window, if there is one.
+ * Broadcast to every window that can draw it.
+ *
+ * **Two windows, and the companion is not a decoration of the main one.** An
+ * event that reaches only the main window is not merely late in the pet — the
+ * pet is *built* from this stream. It has no transcript of its own to fall back
+ * on: bubbles are drawn from `turn.started` and `text.delta`, and the few stored
+ * messages above them are re-read when `turn.completed` arrives. A companion
+ * that hears nothing therefore looks completely healthy and completely silent,
+ * and the conversation it is sharing is visibly progressing in the other window
+ * — which is exactly the report that found this. It went unnoticed because the
+ * pet's *calls* all work: it can create a conversation, send a turn, and list
+ * what was said. Only the answers were missing.
  *
  * Also where the tray and the notifications learn what happened, because this is
  * the one place every event passes through: a job finishing, a connector coming
@@ -191,6 +202,9 @@ export function broadcast(event: AgentUiEvent): void {
   if (mainWindow !== undefined && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(IPC_EVENT_CHANNEL, event);
   }
+  // Through the companion's own sender, which is already how it is written to —
+  // and which tolerates a pet that has not been created yet.
+  companion?.send(IPC_EVENT_CHANNEL, event);
 
   switch (event.type) {
     case 'job.changed':

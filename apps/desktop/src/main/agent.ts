@@ -29,6 +29,7 @@ import type {
 } from '@marimo/protocol';
 
 import {safeStorageCipher, secretStore} from './secrets.js';
+import {BrowserSearchProvider} from './search/search-window.js';
 
 /**
  * How often a dropped MCP server is considered for a reconnect.
@@ -48,6 +49,15 @@ export interface AgentServiceOptions {
 export class AgentService {
   private readonly runtime: AgentRuntime;
   private readonly mcp: McpManager;
+  /**
+   * Keyless web search, through a hidden window.
+   *
+   * A plain `fetch` cannot search any more — DuckDuckGo answers a scripted
+   * challenge and Mojeek refuses outright — so the search runs in a browser
+   * engine, and Electron already ships one. Owned here rather than made per
+   * call: it is a window, and a window per search would be a window per search.
+   */
+  private readonly search = new BrowserSearchProvider();
   private reconcile: NodeJS.Timeout | undefined;
   private stopped = false;
 
@@ -84,6 +94,7 @@ export class AgentService {
         );
         return await store.read();
       },
+      webSearch: this.search,
       mcpServers: () => this.mcp.toolsets(),
     });
   }
@@ -107,6 +118,7 @@ export class AgentService {
     }
     await this.mcp.stop();
     this.runtime.dispose();
+    this.search.dispose();
   }
 
   /** Re-reads the server list and dials whatever changed. */

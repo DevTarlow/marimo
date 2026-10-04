@@ -7,6 +7,8 @@
  */
 import type {SessionSummary} from '@marimo/protocol';
 
+import {KeepRunning} from './KeepRunning.js';
+
 export function SessionRail({
   sessions,
   activeId,
@@ -57,6 +59,7 @@ export function SessionRail({
           </button>
         ))}
       </nav>
+      <KeepRunning />
     </aside>
   );
 }

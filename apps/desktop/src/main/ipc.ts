@@ -26,6 +26,8 @@ import type {AppPaths} from '@marimo/runtime';
 
 import type {AgentService} from './agent.js';
 import {safeStorageCipher} from './secrets.js';
+import {disable, enable, statusOf} from './service.js';
+import type {ServiceContext} from './service.js';
 
 export interface IpcDependencies {
   paths: AppPaths;
@@ -47,6 +49,14 @@ export interface IpcDependencies {
    * deciding what is wrong with the install.
    */
   warning?: string;
+  /**
+   * Running jobs while the app is closed.
+   *
+   * Injected rather than built here: it names the app's own binary and decides
+   * whether the stored key is one a windowless process could read, and neither
+   * is a question about answering IPC calls.
+   */
+  service?: ServiceContext;
 }
 
 /** Every call this app answers, with its result type pinned to the protocol. */
@@ -89,6 +99,21 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       themeMode: themeMode(),
       theme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light',
     }),
+
+    'service.status': async () =>
+      dependencies.service === undefined
+        ? {installed: false, keysReadable: false, definitionPath: ''}
+        : await statusOf(dependencies.service),
+
+    'service.enable': async () =>
+      dependencies.service === undefined
+        ? {installed: false, notes: [], failures: []}
+        : await enable(dependencies.service),
+
+    'service.disable': async () =>
+      dependencies.service === undefined
+        ? {installed: false, notes: [], failures: []}
+        : await disable(dependencies.service),
 
     'profiles.list': async () => await agent().profiles(),
 

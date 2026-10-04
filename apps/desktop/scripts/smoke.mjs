@@ -176,7 +176,20 @@ async function main() {
     if (probe.theme !== 'dark' && probe.theme !== 'light') {
       fail(`the theme attribute is "${probe.theme}", not light or dark`);
     } else {
-      ok(`the theme resolved to ${probe.theme}`);
+      /*
+     * A fresh data directory has no timer installed and no key to encrypt, so
+     * this is what the row should say on a first run.
+     */
+    if (probe.serviceInstalled !== false || probe.serviceKeysReadable !== true) {
+      fail(
+        `the background-service row is wrong: installed=${String(probe.serviceInstalled)} ` +
+          `keysReadable=${String(probe.serviceKeysReadable)}`,
+      );
+    } else {
+      ok('the background-service row answered, and is off on a fresh install');
+    }
+
+    ok(`the theme resolved to ${probe.theme}`);
     }
 
     if (probe.userData !== userData) {
@@ -372,6 +385,15 @@ const PROBE = `(async () => {
     });
     result.sessionCount = sessions.length;
     result.listedIds = sessions.map((entry) => entry.id);
+
+    /*
+     * The background-service row. Asked here rather than only photographed: the
+     * switch is the one control in the window that reaches outside the app's own
+     * files, and a call that threw would leave a row that silently never appears.
+     */
+    const service = await window.marimo.call('service.status', {});
+    result.serviceInstalled = service.installed;
+    result.serviceKeysReadable = service.keysReadable;
 
     const {messages, pending} = await window.marimo.call('sessions.get', {
       profileId: activeProfileId,

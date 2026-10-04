@@ -13,6 +13,7 @@
  * relocating the user-data directory has to happen before it is taken.
  */
 import {existsSync} from 'node:fs';
+import {homedir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -203,6 +204,24 @@ async function bootstrap(): Promise<void> {
     paths,
     agent: () => agent,
     ...(startupWarning === undefined ? {} : {warning: startupWarning}),
+    service: {
+      paths,
+      // The app's own binary. Asked to be Node by the unit, this is the same
+      // process image the runner runs as.
+      execPath: process.execPath,
+      appPath: app.getAppPath(),
+      home: homedir(),
+      // Resolved now and written into the definition rather than read when the
+      // timer fires: a service started at login may not have these.
+      configHome:
+        process.env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config'),
+      providers: async () => {
+        if (agent === undefined) {
+          throw new Error('The agent is not running.');
+        }
+        return await agent.providers();
+      },
+    },
   });
 
   mainWindow = await createWindow();

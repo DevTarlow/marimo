@@ -1801,6 +1801,29 @@ export type PendingGate = z.infer<typeof pendingGateSchema>;
  * renderer cannot know them: it has no `process`, no `app`, and no business
  * reading either.
  */
+/**
+ * Whether jobs run while the app is closed.
+ *
+ * Three facts rather than one boolean, because each has a different remedy and a
+ * single "off" would leave the user guessing which one they have.
+ */
+export interface ServiceStatus {
+  /** Whether the OS is set up to wake the runner. */
+  installed: boolean;
+  /**
+   * Whether the keys this install holds could be read by a process with no
+   * keychain.
+   *
+   * The runner has no `safeStorage`, so an encrypted key is one it cannot
+   * decrypt. False here means a background run would start, refuse for want of a
+   * key, and record that — every time, unattended, with nobody watching. Worth
+   * knowing *before* switching it on rather than after.
+   */
+  keysReadable: boolean;
+  /** The definition's location, shown so a user can go and look. */
+  definitionPath: string;
+}
+
 export interface AppInfo {
   /** The product name, which is also the user-data directory's name. */
   name: string;
@@ -1894,6 +1917,11 @@ export const agentCallSchemas = {
 
   /* What the agent can reach right now. */
   'mcp.statuses': z.object({}),
+
+  /* Whether jobs run while the app is closed. */
+  'service.status': z.object({}),
+  'service.enable': z.object({}),
+  'service.disable': z.object({}),
 } as const;
 
 export type AgentCallMethod = keyof typeof agentCallSchemas;
@@ -1916,6 +1944,24 @@ export interface AgentCallResults {
   'chat.approve': {accepted: boolean};
   'chat.abort': {aborted: boolean};
   'mcp.statuses': Record<string, McpStatus>;
+  'service.status': ServiceStatus;
+  'service.enable': ServiceChange;
+  'service.disable': ServiceChange;
+}
+
+/**
+ * The result of asking the OS to start or stop waking the runner.
+ *
+ * Failures are listed rather than thrown, so a partly-successful install can say
+ * which step refused — which is the difference between "it did not work" and
+ * "loginctl needs root, everything else is in place".
+ */
+export interface ServiceChange {
+  installed: boolean;
+  /** Steps that failed and did not matter. */
+  notes: string[];
+  /** Steps that failed and did. */
+  failures: Array<{what: string; detail: string}>;
 }
 
 /**

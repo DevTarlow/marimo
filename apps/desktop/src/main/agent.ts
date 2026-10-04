@@ -198,6 +198,11 @@ export class AgentService {
     };
   }
 
+  /** The settings as they are on disk, for the callers that need to ask. */
+  async providers(): Promise<Awaited<ReturnType<AgentRuntime['settings']>>['providers']> {
+    return (await this.runtime.settings()).providers;
+  }
+
   async start(): Promise<void> {
     /*
      * Claimed before anything else, so a headless run that is already in

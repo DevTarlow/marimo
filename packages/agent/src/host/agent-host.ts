@@ -27,7 +27,7 @@ import type {
   TokenUsage,
   TranscriptMessage,
 } from '@marimo/protocol';
-import {PROVIDERS} from '@marimo/protocol';
+import {MAIN_AGENT_NAME, PROVIDERS} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
@@ -39,7 +39,11 @@ import type {
 } from '../sessions/file-session-service.js';
 import {composeInstruction} from '../skills/index.js';
 import {createTools} from '../tools/index.js';
-import type {McpToolsetSource} from '../tools/index.js';
+import type {
+  McpToolsetSource,
+  SubagentDeps,
+  SubagentLimits,
+} from '../tools/index.js';
 import type {DeskService} from '../tools/desk-tools.js';
 import type {SkillService} from '../tools/skill-tools.js';
 import type {DiscordService} from '../tools/discord-tools.js';
@@ -88,6 +92,16 @@ export interface AgentHostOptions {
    * {@link AgentHost.setMcpServers} when a server connects or drops.
    */
   mcpServers?: readonly McpToolsetSource[];
+  /**
+   * Where a helper agent's words go while it runs.
+   *
+   * Out of band rather than through the turn's generator, because a tool call
+   * cannot yield into the stream that is awaiting it. The same channel the MCP
+   * status events use, for the same reason.
+   */
+  onSubagentEvent?: (event: AgentUiEvent) => void;
+  /** Ceilings on a helper: steps, time, and the size of what it hands back. */
+  subagentLimits?: Partial<SubagentLimits>;
 }
 
 export interface ApproveParams {
@@ -142,7 +156,7 @@ function confirmationResponse(callId: string, decision: GateDecision): Part {
 }
 
 export class AgentHost {
-  static readonly APP_NAME = 'marimo';
+  static readonly APP_NAME = MAIN_AGENT_NAME;
   static readonly USER_ID = 'local';
 
   private readonly sessionService: FileSessionService;
@@ -166,6 +180,10 @@ export class AgentHost {
    * next turn has to be offered what is actually reachable now.
    */
   private mcpServers: readonly McpToolsetSource[];
+  private readonly onSubagentEvent:
+    | ((event: AgentUiEvent) => void)
+    | undefined;
+  private readonly subagentLimits: Partial<SubagentLimits> | undefined;
   private config: AgentConfig;
   /**
    * One runner per model. ADK binds the model into the agent, so a per-session
@@ -213,6 +231,8 @@ export class AgentHost {
     this.deskService = options.deskService;
     this.skillService = options.skillService;
     this.mcpServers = options.mcpServers ?? [];
+    this.onSubagentEvent = options.onSubagentEvent;
+    this.subagentLimits = options.subagentLimits;
   }
 
   /** Prepares the runner cache. There is nothing to build until a turn runs. */
@@ -662,7 +682,7 @@ export class AgentHost {
     }
 
     const agent = new LlmAgent({
-      name: 'marimo',
+      name: MAIN_AGENT_NAME,
       description: 'Marimo, a local desktop assistant.',
       model: new OpenAiCompatLlm({
         model,
@@ -701,6 +721,7 @@ export class AgentHost {
         ...(this.mcpServers.length > 0
           ? {mcpServers: this.mcpServers}
           : {}),
+        subagent: this.subagentDeps(),
       }),
     });
 
@@ -711,6 +732,62 @@ export class AgentHost {
     });
     this.runners.set(model, runner);
     return runner;
+  }
+
+  /**
+   * How a helper agent is built, when the profile allows one.
+   *
+   * The child is built by this same function's tools, minus this dependency —
+   * which is what makes depth one, rather than a number to compare. It gets the
+   * same model, the same tools and the same approval rules, and it cannot see
+   * the conversation it was called from.
+   */
+  private subagentDeps(): SubagentDeps {
+    return {
+      build: ({name, task}) => {
+        const tools = createTools(this.config, {
+          memory: this.memory,
+          model: this.config.model,
+          ...(this.webSearch ? {webSearch: this.webSearch} : {}),
+          /*
+           * Deliberately *not* the job, Discord or desk services. A helper is a
+           * short-lived thing answering one question; giving it the ability to
+           * schedule jobs or post to a chat server is reach it was not asked
+           * for, and the user has no way to see it coming.
+           */
+        });
+        return new LlmAgent({
+          name,
+          description: `A helper agent doing: ${task}`,
+          model: new OpenAiCompatLlm({
+            model: this.config.model,
+            apiKey: this.config.apiKey,
+            ...(this.config.baseUrl !== undefined
+              ? {baseUrl: this.config.baseUrl}
+              : {}),
+            ...(this.config.provider !== undefined
+              ? {provider: this.config.provider}
+              : {}),
+            temperature: this.config.temperature,
+            ...(this.config.maxOutputTokens !== undefined
+              ? {maxOutputTokens: this.config.maxOutputTokens}
+              : {}),
+          }),
+          instruction:
+            'You are a helper agent. You cannot see the conversation that asked ' +
+            'for you and you cannot ask questions back, so work only from the ' +
+            'task you were given and say plainly if it is not enough. Answer ' +
+            'with the result itself, not with a description of what you did.',
+          tools,
+        });
+      },
+      ...(this.onSubagentEvent === undefined
+        ? {}
+        : {onEvent: this.onSubagentEvent}),
+      ...(this.subagentLimits === undefined
+        ? {}
+        : {limits: this.subagentLimits}),
+    };
   }
 
   private async *drive(

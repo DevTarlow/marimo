@@ -45,6 +45,8 @@ import {
   createUpdateMemoryTool,
 } from './memory-tools.js';
 import {createShellTool} from './shell-tool.js';
+import {createSpawnAgentTool} from './subagent-tool.js';
+import type {SubagentDeps} from './subagent-tool.js';
 import {createSaveSkillTool} from './skill-tools.js';
 import type {SkillService} from './skill-tools.js';
 import {createHttpFetchTool} from './web-tools.js';
@@ -91,6 +93,14 @@ export interface ToolDependencies {
    * retry. This function only decides what the model is offered.
    */
   mcpServers?: readonly McpToolsetSource[];
+  /**
+   * How to build a helper agent, when the host offers them at all.
+   *
+   * Absent means the tool is absent — not "present and discouraged". A helper
+   * the profile has switched off must not be something the model can be talked
+   * into trying.
+   */
+  subagent?: SubagentDeps;
 }
 
 /** One connected MCP server and what it said it can do. */
@@ -104,6 +114,19 @@ export function createTools(
   config: AgentConfig,
   deps: ToolDependencies,
 ): BaseTool[] {
+  const tools = baseTools(config, deps);
+  /*
+   * Offered last, and only when the host can build a child. Depth is one by
+   * construction: `deps.subagent.build` builds an agent from this same function
+   * without this dependency, so a helper has no way to ask for one of its own.
+   */
+  if (deps.subagent) {
+    tools.push(createSpawnAgentTool(deps.subagent));
+  }
+  return tools;
+}
+
+function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
   const tools: BaseTool[] = [
     createCurrentTimeTool(),
     createReadFileTool({workspaceRoot: config.workspaceRoot}),
@@ -227,3 +250,9 @@ function filterTools(
 }
 
 export {resolveInsideWorkspace, PathOutsideWorkspaceError} from './paths.js';
+export {
+  createSpawnAgentTool,
+  DEFAULT_SUBAGENT_LIMITS,
+  SUBAGENT_NAME_PATTERN,
+} from './subagent-tool.js';
+export type {SubagentDeps, SubagentLimits} from './subagent-tool.js';

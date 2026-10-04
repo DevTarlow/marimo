@@ -119,6 +119,16 @@ export class AgentService {
       webSearch: this.search,
       mcpServers: () => this.mcp.toolsets(),
       services: () => ({jobService: this.jobService()}),
+      /*
+       * A helper agent's words, while the turn that asked for it is still
+       * awaiting the tool call. The same channel the MCP status events use, for
+       * the same reason: a tool call cannot yield into the stream awaiting it,
+       * and a helper that says nothing until it finishes is a turn that looks
+       * hung.
+       */
+      onEvent: (event) => {
+        options.sendEvent(event);
+      },
     });
 
     this.jobs = new JobStore({file: paths.jobs});

@@ -77,6 +77,14 @@ export interface AgentRuntimeOptions {
    * what was reachable when the runtime was built.
    */
   mcpServers?: () => readonly McpToolsetSource[];
+  /**
+   * Where a helper agent's words go while it runs.
+   *
+   * Out of band, because a tool call cannot yield into the stream that is
+   * awaiting it. The window draws them as a labelled group inside the turn; the
+   * headless runner passes nothing and simply does not have this view.
+   */
+  onEvent?: (event: AgentUiEvent) => void;
   appName?: string;
 }
 
@@ -332,6 +340,9 @@ export class AgentRuntime {
       ...(services.discordService
         ? {discordService: services.discordService}
         : {}),
+      ...(this.options.onEvent === undefined
+        ? {}
+        : {onSubagentEvent: this.options.onEvent}),
     });
     host.init();
     this.hosts.set(profileId, host);

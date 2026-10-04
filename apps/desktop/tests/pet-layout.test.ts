@@ -51,4 +51,26 @@ describe('the companion window', () => {
      */
     expect(source).toContain("origin: 'pet'");
   });
+
+  it('leads the bar with a new-chat button, and refuses it mid-turn', async () => {
+    const source = await readFile(pet, 'utf8');
+    const bar = source.slice(source.lastIndexOf('<div className="pet-bar">'));
+
+    const button = bar.indexOf('className="pet-new"');
+    const input = bar.indexOf('className="pet-input"');
+    expect(button).toBeGreaterThanOrEqual(0);
+    // Leading edge: the user asked for the left of the input, and a control that
+    // ended up on the right is the send button twice.
+    expect(input).toBeGreaterThan(button);
+    expect(bar.slice(button, input)).toContain('agent.newSession');
+
+    /*
+     * Disabled during a turn, which the window's own New button is not. This
+     * window shows the newest few bubbles and nothing else, so switching away
+     * mid-turn would hide the answer being written with nothing on screen to say
+     * where it went — the state this asserts against is a half-written answer
+     * vanishing behind a button the user just pressed.
+     */
+    expect(bar.slice(button, input)).toContain('disabled={busy');
+  });
 });

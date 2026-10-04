@@ -215,6 +215,37 @@ body.companion-body {
   -webkit-app-region: no-drag;
 }
 
+/* Leading edge of the bar, so the row reads: new conversation, what you are
+   going to say, then send. Neutral rather than accent-coloured — it is not the
+   action the bar is for, and two blue circles at either end of the input would
+   leave the eye nowhere to land. */
+.pet-new {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  /* Large enough for the glyph to read as a plus rather than a speck inside a
+     32px circle. */
+  font-size: var(--text-lg);
+  line-height: 1;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 30%);
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.pet-new:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.pet-new:disabled {
+  opacity: 0.4;
+}
+
 .pet-input {
   flex: 1;
   min-width: 0;

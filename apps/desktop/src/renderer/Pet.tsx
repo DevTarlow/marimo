@@ -248,6 +248,31 @@ export function Pet(): React.JSX.Element {
       </div>
 
       <div className="pet-bar">
+        {/*
+          New conversation, at the leading edge of the bar — the one control
+          this window has beyond asking, and the one a companion needs: the
+          thread it shares can be long, and "start again" should not mean
+          opening the window you were avoiding.
+
+          Disabled during a turn, which the window's own New button is not. The
+          reason is the shape of this window: it shows the newest few bubbles
+          and nothing else, so switching conversations mid-turn would hide the
+          answer being written with nothing left on screen to say where it
+          went. Once the turn ends the button is back, and the answer is in the
+          window.
+        */}
+        <button
+          type="button"
+          className="pet-new"
+          aria-label="New chat"
+          title="New chat"
+          disabled={busy || agent.profile === undefined}
+          onClick={() => {
+            void agent.newSession();
+          }}
+        >
+          +
+        </button>
         <input
           className="pet-input"
           value={draft}

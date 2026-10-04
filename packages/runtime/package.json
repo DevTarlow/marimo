@@ -21,6 +21,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@marimo/agent": "workspace:*",
     "@marimo/protocol": "workspace:*"
   },
   "devDependencies": {

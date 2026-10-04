@@ -107,6 +107,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@marimo/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@marimo/protocol':
         specifier: workspace:*
         version: link:../protocol

@@ -44,7 +44,7 @@ export type {
 } from './sessions/file-session-service.js';
 export {projectTranscript} from './host/transcript.js';
 export {createTools} from './tools/index.js';
-export type {ToolDependencies} from './tools/index.js';
+export type {McpToolsetSource, ToolDependencies} from './tools/index.js';
 export {
   createCreateJobTool,
   createDeleteJobTool,

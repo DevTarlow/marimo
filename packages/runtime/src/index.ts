@@ -44,6 +44,24 @@ export type {
   ReadVersionedOptions,
 } from './migrations.js';
 
+/* The agent, assembled from what the user configured. */
+export {AgentRuntime} from './agent/runtime.js';
+export type {
+  AgentRuntimeOptions,
+  HostResult,
+  RuntimeServices,
+} from './agent/runtime.js';
+export {
+  activeWorkspaceRoot,
+  parseProfile,
+  resolveAgentConfig,
+} from './agent/resolve.js';
+export type {
+  ResolvedAgent,
+  ResolveAgentOptions,
+  StoredSkillForPrompt,
+} from './agent/resolve.js';
+
 /* Scheduled jobs. */
 export {
   DEFAULT_SCHEDULE,

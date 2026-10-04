@@ -38,6 +38,7 @@ import type {
 } from '../sessions/file-session-service.js';
 import {composeInstruction} from '../skills/index.js';
 import {createTools} from '../tools/index.js';
+import type {McpToolsetSource} from '../tools/index.js';
 import type {DeskService} from '../tools/desk-tools.js';
 import type {SkillService} from '../tools/skill-tools.js';
 import type {DiscordService} from '../tools/discord-tools.js';
@@ -77,6 +78,15 @@ export interface AgentHostOptions {
    * `/learn` has nothing to write with.
    */
   skillService?: SkillService;
+  /**
+   * The MCP servers that are currently connected.
+   *
+   * Passed as connections rather than as configuration, because that is what
+   * they are: the app owns enabling a server, dialling it and giving up on it,
+   * and this host only decides what the model is offered. Change them with
+   * {@link AgentHost.setMcpServers} when a server connects or drops.
+   */
+  mcpServers?: readonly McpToolsetSource[];
 }
 
 export interface ApproveParams {
@@ -164,6 +174,14 @@ export class AgentHost {
   private readonly discordService?: DiscordService;
   private readonly deskService?: DeskService;
   private readonly skillService?: SkillService;
+  /**
+   * The MCP servers in play, replaced wholesale when one connects or drops.
+   *
+   * Mutable, unlike the services beside it, because a connection is not a
+   * setting: a server can die and come back while the app is running, and the
+   * next turn has to be offered what is actually reachable now.
+   */
+  private mcpServers: readonly McpToolsetSource[];
   private config: AgentConfig;
   /**
    * One runner per model. ADK binds the model into the agent, so a per-session
@@ -210,6 +228,7 @@ export class AgentHost {
     this.discordService = options.discordService;
     this.deskService = options.deskService;
     this.skillService = options.skillService;
+    this.mcpServers = options.mcpServers ?? [];
   }
 
   /** Prepares the runner cache. There is nothing to build until a turn runs. */
@@ -255,6 +274,24 @@ export class AgentHost {
       // than letting it finish against settings the user just replaced.
       this.abortActive();
     }
+  }
+
+  /**
+   * Replaces the connected MCP servers.
+   *
+   * The cached runners are dropped because a runner holds the tool closures it
+   * was built with: a server that connected after that build would be invisible
+   * until something rebuilt, which is exactly the "I added it and nothing
+   * happened" complaint this avoids.
+   *
+   * A turn in flight is deliberately *not* aborted. Tools are chosen when a turn
+   * begins, and the request already in flight is carrying the old list — killing
+   * it to deliver a new server's tools mid-sentence would lose the answer the
+   * user is reading. The next turn has them.
+   */
+  setMcpServers(sources: readonly McpToolsetSource[]): void {
+    this.mcpServers = sources;
+    this.runners.clear();
   }
 
   /**
@@ -677,6 +714,9 @@ export class AgentHost {
         ...(this.discordService ? {discordService: this.discordService} : {}),
         ...(this.deskService ? {deskService: this.deskService} : {}),
         ...(this.skillService ? {skillService: this.skillService} : {}),
+        ...(this.mcpServers.length > 0
+          ? {mcpServers: this.mcpServers}
+          : {}),
       }),
     });
 

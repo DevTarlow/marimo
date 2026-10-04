@@ -208,6 +208,11 @@ export class AgentService {
     };
   }
 
+  /** The settings as they are on disk, for the callers that need to read them. */
+  async settings() {
+    return await this.runtime.settings();
+  }
+
   /** The settings as they are on disk, for the callers that need to ask. */
   async providers(): Promise<Awaited<ReturnType<AgentRuntime['settings']>>['providers']> {
     return (await this.runtime.settings()).providers;
@@ -263,6 +268,35 @@ export class AgentService {
     const profiles = await this.runtime.profiles();
     const active = await this.runtime.activeProfile();
     return {profiles, activeProfileId: active.id};
+  }
+
+  async catalog(profileId?: string) {
+    return profileId === undefined
+      ? await this.runtime.catalogForActive()
+      : {profileId, catalog: await this.runtime.catalog(profileId)};
+  }
+
+  async selectProfile(profileId: string): Promise<void> {
+    await this.runtime.selectProfile(profileId);
+  }
+
+  async updateProfile(
+    profileId: string,
+    patch: Parameters<AgentRuntime['updateProfile']>[1],
+  ): Promise<void> {
+    await this.runtime.updateProfile(profileId, patch);
+  }
+
+  async createProfile(name?: string) {
+    const created = await this.runtime.createProfile(name);
+    await this.runtime.selectProfile(created.id);
+    return created;
+  }
+
+  async updateSettings(
+    patch: Parameters<AgentRuntime['updateSettings']>[0],
+  ): Promise<void> {
+    await this.runtime.updateSettings(patch);
   }
 
   async listSessions(profileId?: string): Promise<SessionSummary[]> {

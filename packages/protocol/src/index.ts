@@ -790,40 +790,20 @@ export type PublicSettings = Settings & {
    * so switching provider does not mean re-entering the previous key.
    */
   providerKeys: Record<ProviderId, boolean>;
+  /**
+   * Whether this machine can encrypt a secret at rest.
+   *
+   * The window needs it to explain the plain-text choice honestly: on a machine
+   * with no keychain there is no encryption to give up, and the warning should
+   * say so rather than reading as a scare.
+   */
   encryptionAvailable: boolean;
-  /**
-   * Whether a Discord bot token is stored. Like `hasApiKey`, the token itself
-   * never crosses this boundary: the settings screen only ever needs to know
-   * whether there is one, and whether it is currently connected.
-   */
-  hasDiscordToken: boolean;
-  /**
-   * The live connection state, as of this answer. It also arrives on its own as
-   * a `discord.status` event, because it changes without anything being asked.
-   */
-  discordStatus: DiscordConnectionStatus;
-  /**
-   * Model ids the *active* provider reported, in the order it returned them.
-   * Derived from the provider rather than chosen by the user, so it is
-   * read-only on this side and persisted by the main process for offline use.
-   */
+  /** What the active provider reported, or the placeholder list before it has. */
   availableModels: string[];
-  /**
-   * Background files the user has imported, newest first. Names rather than
-   * paths: the renderer builds a `BACKGROUND_SCHEME` URL from a name, and the
-   * directory itself never crosses this boundary.
-   */
-  backgrounds: string[];
-  /** Every agent profile, for the picker in Settings. */
   profiles: AgentProfile[];
-  /**
-   * Folder used when the active profile has no workspace of its own. Shown to
-   * the user rather than hidden: the agent is confined to *something*, and the
-   * window must not imply it has no file access at all.
-   */
-  defaultWorkspace: string;
-  /** The profile every call is currently answered as. */
   activeProfileId: string;
+  /** Where an agent with no folder of its own would work. */
+  defaultWorkspace: string;
 };
 
 /* -------------------------------------------------------------------------- */
@@ -1534,6 +1514,29 @@ export const agentCallSchemas = {
   'service.status': z.object({}),
   'service.enable': z.object({}),
   'service.disable': z.object({}),
+
+  /* What this agent is allowed to do, and what it is. */
+  'profiles.catalog': z.object({}),
+  'profiles.update': z.object({
+    profileId: z.string().min(1),
+    patch: profilePatchSchema,
+  }),
+  'profiles.create': z.object({
+    name: z.string().trim().min(1).optional(),
+  }),
+
+  /* Preferences, including the two that decide whether hidden jobs can run. */
+  'settings.get': z.object({}),
+  'settings.set': z.object({patch: settingsPatchSchema}),
+  /*
+   * Stored separately from the rest of settings because it is a secret: written
+   * through the same store the agent reads, never returned, and reported back as
+   * a boolean.
+   */
+  'settings.setApiKey': z.object({
+    apiKey: z.string(),
+    provider: providerIdSchema.optional(),
+  }),
 } as const;
 
 export type AgentCallMethod = keyof typeof agentCallSchemas;
@@ -1559,6 +1562,21 @@ export interface AgentCallResults {
   'service.status': ServiceStatus;
   'service.enable': ServiceChange;
   'service.disable': ServiceChange;
+  'profiles.catalog': ProfileCatalog;
+  'profiles.update': {profiles: AgentProfile[]; activeProfileId: string};
+  'profiles.create': {profiles: AgentProfile[]; activeProfileId: string};
+  'settings.get': {settings: PublicSettings};
+  'settings.set': {settings: PublicSettings};
+  'settings.setApiKey': {settings: PublicSettings};
+}
+
+/**
+ * What this install can offer, so a pick-list can be built from what exists
+ * rather than from a list somebody typed out twice.
+ */
+export interface ProfileCatalog {
+  tools: CatalogEntry[];
+  skills: CatalogEntry[];
 }
 
 /**

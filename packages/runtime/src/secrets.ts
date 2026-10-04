@@ -160,7 +160,18 @@ export class FileSecretStore {
 
     await mkdir(dirname(this.file), {recursive: true});
 
-    if (this.isEncryptionAvailable()) {
+    /*
+     * Consent first, and it wins over the keychain.
+     *
+     * The only reason to accept a readable secret is that something without a
+     * keychain has to read it — the headless job runner. Encrypting anyway
+     * because a keychain happens to be available would take the consent and
+     * produce the opposite of what was consented to: a key the background
+     * service cannot use, while the settings screen says it can. That is the
+     * worst shape a security setting can take, so the ordering here is the
+     * point rather than an accident of the branches.
+     */
+    if (!options.allowPlaintext && this.isEncryptionAvailable()) {
       const encrypted = this.cipher!.encrypt(trimmed).toString('base64');
       await writeFile(this.file, `${ENCRYPTED_PREFIX}${encrypted}\n`, {
         encoding: 'utf8',

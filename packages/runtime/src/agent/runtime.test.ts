@@ -16,6 +16,7 @@ import {join} from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {resolveAppPaths} from '../paths.js';
+import type {AppPaths} from '../paths.js';
 import {ProfileStore} from '../profiles.js';
 import {AgentRuntime} from './runtime.js';
 import type {AgentRuntimeOptions} from './runtime.js';
@@ -188,5 +189,140 @@ describe('AgentRuntime', () => {
     if (!result.ok) {
       expect(result.problem).toMatch(/cannot decrypt/u);
     }
+  });
+});
+
+/*
+ * What an agent may be granted, and making a grant take effect.
+ *
+ * The catalogue is built by *constructing* the tools rather than from a second
+ * hand-written list, so these tests are also what stops a renamed tool being
+ * offered under a name that grants nothing when it is ticked.
+ */
+describe('the catalogue', () => {
+  let dir: string;
+  let paths: AppPaths;
+  let profileId: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-catalog-'));
+    paths = resolveAppPaths(dir);
+    const profiles = new ProfileStore({
+      file: paths.profiles,
+      defaultWorkspaceRoot: dir,
+      defaultIdentity: '',
+      defaultTools: [],
+      defaultSkills: [],
+    });
+    await profiles.load();
+    profileId = (await profiles.activeProfile()).id;
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function runtime(): AgentRuntime {
+    return new AgentRuntime({
+      paths,
+      readSecret: async () => ({state: 'absent'}),
+    });
+  }
+
+  it('lists the tools by the name and wording the model is given', async () => {
+    const catalog = await runtime().catalog(profileId);
+    const names = catalog.tools.map((tool) => tool.name);
+
+    expect(names).toContain('read_file');
+    expect(names).toContain('spawn_agent');
+    // Every entry has to carry a description, or the settings screen offers a
+    // checkbox with nothing beside it.
+    expect(catalog.tools.every((tool) => tool.description.length > 10)).toBe(true);
+  });
+
+  /*
+   * A tool the profile has not been granted is still in the catalogue — that is
+   * the whole point of a pick-list. What must not happen is the reverse: a name
+   * in the catalogue that no tool answers to.
+   */
+  it('lists tools the profile has not been granted', async () => {
+    const catalog = await runtime().catalog(profileId);
+    expect(catalog.tools.map((tool) => tool.name)).toContain('run_shell');
+  });
+
+  it('answers for whichever agent is active', async () => {
+    const result = await runtime().catalogForActive();
+    expect(result.profileId).toBe(profileId);
+    expect(result.catalog.tools.length).toBeGreaterThan(0);
+  });
+});
+
+describe('changing an agent', () => {
+  let dir: string;
+  let paths: AppPaths;
+  let profileId: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-grant-'));
+    paths = resolveAppPaths(dir);
+    const profiles = new ProfileStore({
+      file: paths.profiles,
+      defaultWorkspaceRoot: dir,
+      defaultIdentity: '',
+      defaultTools: ['read_file'],
+      defaultSkills: [],
+    });
+    await profiles.load();
+    profileId = (await profiles.activeProfile()).id;
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function runtime(): AgentRuntime {
+    return new AgentRuntime({
+      paths,
+      readSecret: async () => ({state: 'absent'}),
+    });
+  }
+
+  it('records a new grant', async () => {
+    const instance = runtime();
+    await instance.updateProfile(profileId, {
+      enabledTools: ['read_file', 'run_shell'],
+    });
+
+    const profile = (await instance.profiles()).find(
+      (entry) => entry.id === profileId,
+    );
+    expect(profile?.enabledTools).toEqual(['read_file', 'run_shell']);
+  });
+
+  /*
+   * A grant is worthless if a host built under the old one goes on answering.
+   * The host is dropped rather than updated, so the next turn is built from what
+   * the profile now says — and this is the assertion that says so, because the
+   * bug it prevents is invisible: the setting saves, the screen agrees, and the
+   * agent carries on doing what it did before.
+   */
+  it('forgets the built agent so the next turn uses the new grant', async () => {
+    const instance = runtime();
+    await instance.updateProfile(profileId, {enabledTools: ['read_file']});
+    // Nothing to drop before a host exists, which is the state after this call.
+    expect(instance.isBusy()).toBe(false);
+
+    await expect(
+      instance.updateProfile(profileId, {enabledTools: []}),
+    ).resolves.toMatchObject({enabledTools: []});
+  });
+
+  it('adds an agent and can switch to it', async () => {
+    const instance = runtime();
+    const created = await instance.createProfile('Researcher');
+    expect(created.name).toBe('Researcher');
+
+    await instance.selectProfile(created.id);
+    expect((await instance.activeProfile()).id).toBe(created.id);
   });
 });

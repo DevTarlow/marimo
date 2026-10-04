@@ -19,7 +19,7 @@
 import type {BaseTool} from '@google/adk';
 
 import type {AgentConfig} from '../config.js';
-import type {MemoryStore} from '../memory/index.js';
+import {MemoryStore} from '../memory/index.js';
 import {deskTools} from './desk-tools.js';
 import type {DeskService} from './desk-tools.js';
 import {discordTools} from './discord-tools.js';
@@ -52,6 +52,7 @@ import type {SkillService} from './skill-tools.js';
 import {createHttpFetchTool} from './web-tools.js';
 import {createWebSearchTool} from './web-search-tool.js';
 import type {WebSearchProvider} from './web-search-tool.js';
+import type {CatalogEntry} from '@marimo/protocol';
 
 import {buildMcpTools} from '../mcp/tools.js';
 import type {McpServerConnection, McpToolInfo} from '../mcp/client.js';
@@ -82,6 +83,53 @@ export const SAFE_DEFAULT_TOOLS = [
   'prune_memory',
   'web_search',
 ] as const;
+
+/**
+ * Every tool this install can offer, described the way the model is told about
+ * it.
+ *
+ * Built by constructing the tools rather than by keeping a second list of names
+ * and descriptions. A hand-written catalogue drifts: somebody renames a tool or
+ * rewrites its description for the model and the settings screen goes on
+ * offering the old wording — or worse, the old name, which grants nothing when
+ * it is ticked.
+ *
+ * Nothing here runs: a tool's description is a property of the tool, and the
+ * memory store it is handed is not read until `execute`.
+ */
+export function describeTools(options: {
+  workspaceRoot: string;
+  model: string;
+  webSearch?: WebSearchProvider;
+  subagent?: boolean;
+}): CatalogEntry[] {
+  const built = createTools(
+    {
+      apiKey: '',
+      baseUrl: '',
+      model: options.model,
+      temperature: 0,
+      systemPrompt: '',
+      workspaceRoot: options.workspaceRoot,
+      allowPrivateNetworkFetch: false,
+    },
+    {
+      memory: new MemoryStore({workspaceRoot: options.workspaceRoot}),
+      model: options.model,
+      ...(options.webSearch ? {webSearch: options.webSearch} : {}),
+      // Present when the host offers helpers at all; the profile decides whether
+      // this profile may use them, which is what the pick-list is for.
+      ...(options.subagent === true
+        ? {subagent: {build: () => ({}) as never}}
+        : {}),
+    },
+  );
+
+  return built.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+  }));
+}
 
 export interface ToolDependencies {
   /** Shared with the agent's instruction provider, so memory stays one file. */

@@ -14,18 +14,26 @@
  */
 import {app, ipcMain, nativeTheme} from 'electron';
 
-import {agentCallSchemas, IPC_CALL_CHANNEL} from '@marimo/protocol';
+import {
+  agentCallSchemas,
+  IPC_CALL_CHANNEL,
+  PROVIDERS,
+  providerIdSchema,
+} from '@marimo/protocol';
 import type {
   AgentCallMethod,
   AgentCallParams,
   AgentCallResults,
   AppInfo,
+  ProviderId,
+  PublicSettings,
   ThemeMode,
 } from '@marimo/protocol';
+import {defaultAvailableModels} from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
 
 import type {AgentService} from './agent.js';
-import {safeStorageCipher} from './secrets.js';
+import {providerSecretStore, safeStorageCipher} from './secrets.js';
 import {disable, enable, statusOf} from './service.js';
 import type {ServiceContext} from './service.js';
 
@@ -80,6 +88,54 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     return service;
   };
 
+  /**
+   * The settings a window may see.
+   *
+   * The key itself never crosses this boundary — only whether there is one, per
+   * provider, and whether this machine could encrypt it. A renderer that could
+   * read the key would make every XSS in the chat a key disclosure.
+   */
+  async function publicSettings(): Promise<PublicSettings> {
+    const service = dependencies.agent();
+    if (service === undefined) {
+      throw new Error('The agent is not running.');
+    }
+    const settings = await service.settings();
+
+    const providerKeys = {} as Record<ProviderId, boolean>;
+    for (const id of providerIdSchema.options) {
+      providerKeys[id] = await providerSecretStore(
+        dependencies.paths,
+        id,
+        `${PROVIDERS[id].label} API key`,
+      ).has();
+    }
+
+    const profiles = await service.profiles();
+    return {
+      ...settings,
+      hasApiKey:
+        !PROVIDERS[settings.providers.active].requiresApiKey ||
+        providerKeys[settings.providers.active],
+      providerKeys,
+      encryptionAvailable: safeStorageCipher.available(),
+      availableModels: defaultAvailableModels()[settings.providers.active],
+      profiles: profiles.profiles,
+      activeProfileId: profiles.activeProfileId,
+      // The folder an agent with none of its own would work in. Shown rather
+      // than hidden: the agent is confined to *something*, and a window that
+      // implied it had no file access at all would be lying in the other
+      // direction.
+      defaultWorkspace: dependencies.paths.defaultWorkspace,
+    };
+  }
+
+  /** Both halves of what the window needs after an agent changes. */
+  async function profileState(service: AgentService) {
+    const {profiles, activeProfileId} = await service.profiles();
+    return {profiles, activeProfileId};
+  }
+
   const handlers: Handlers = {
     'app.info': (): AppInfo => ({
       name: app.getName(),
@@ -100,6 +156,30 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       theme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light',
     }),
 
+    'settings.set': async (params) => {
+      await agent().updateSettings(params.patch);
+      return {settings: await publicSettings()};
+    },
+
+    'settings.setApiKey': async (params) => {
+      const settings = await agent().settings();
+      const providerId = params.provider ?? settings.providers.active;
+      const store = providerSecretStore(
+        dependencies.paths,
+        providerId,
+        `${PROVIDERS[providerId].label} API key`,
+      );
+      /*
+       * The consent flag reaches the write here, and this is the only place it
+       * can: it decides whether a process with no keychain — the headless job
+       * runner — will be able to read what was just stored.
+       */
+      await store.set(params.apiKey, {
+        allowPlaintext: settings.allowPlaintextApiKey,
+      });
+      return {settings: await publicSettings()};
+    },
+
     'service.status': async () =>
       dependencies.service === undefined
         ? {installed: false, keysReadable: false, definitionPath: ''}
@@ -116,6 +196,24 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
         : await disable(dependencies.service),
 
     'profiles.list': async () => await agent().profiles(),
+
+    'profiles.catalog': async () => (await agent().catalog()).catalog,
+
+    'profiles.update': async (params) => {
+      await agent().updateProfile(params.profileId, params.patch);
+      return await profileState(agent());
+    },
+
+    'profiles.create': async (params) => {
+      const agent0 = agent();
+      const created = await agent0.createProfile(params.name);
+      // Switched to straight away: somebody who adds an agent wants to be
+      // looking at it, not at the one they were on.
+      await agent0.selectProfile(created.id);
+      return await profileState(agent0);
+    },
+
+    'settings.get': async () => ({settings: await publicSettings()}),
 
     'sessions.list': async (params) => ({
       sessions: await agent().listSessions(params.profileId),

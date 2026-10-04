@@ -60,6 +60,40 @@ describe('FileSecretStore', () => {
     expect(mode).toBe(0o600);
   });
 
+  /*
+   * The case the background service depends on, and the one the flag used to get
+   * wrong. On a normal desktop a keychain *is* available, so encrypting whenever
+   * possible meant the key was always encrypted — and a headless runner has no
+   * keychain, so "run jobs while the app is closed" could never work while the
+   * settings screen said it could.
+   *
+   * A security setting that produces the opposite of what it promises is the
+   * worst shape one can take.
+   */
+  it('writes a readable secret even when a keychain is available, if asked', async () => {
+    const store = new FileSecretStore(file, 'API key', cipher);
+    await store.set('sk-secret', {allowPlaintext: true});
+
+    const raw = await readFile(file, 'utf8');
+    expect(raw).toContain('plaintext:');
+    expect(raw).not.toContain('encrypted:');
+    // ...and the keychain-less reader is the one that has to be able to read it.
+    const headless = new FileSecretStore(file, 'API key');
+    expect(await headless.get()).toBe('sk-secret');
+  });
+
+  it('encrypts by default even when plaintext would be permitted elsewhere', async () => {
+    const store = new FileSecretStore(file, 'API key', cipher);
+    await store.set('sk-secret', {allowPlaintext: false});
+
+    const raw = await readFile(file, 'utf8');
+    expect(raw).toContain('encrypted:');
+    // And a process with no keychain — the runner — cannot read it.
+    expect(await new FileSecretStore(file, 'API key').read()).toMatchObject({
+      state: 'unreadable',
+    });
+  });
+
   it('round-trips an encrypted secret through the cipher', async () => {
     const store = new FileSecretStore(file, 'API key', cipher);
     await store.set('sk-secret', {allowPlaintext: false});

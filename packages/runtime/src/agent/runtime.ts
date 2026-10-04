@@ -20,7 +20,7 @@
  * settings change that arrived mid-turn would abort the turn the user is
  * watching.
  */
-import {AgentHost, SAFE_DEFAULT_TOOLS} from '@marimo/agent';
+import {AgentHost, describeTools, SAFE_DEFAULT_TOOLS} from '@marimo/agent';
 import type {
   DeskService,
   DiscordService,
@@ -31,11 +31,17 @@ import type {
   SkillService,
   WebSearchProvider,
 } from '@marimo/agent';
+import {activeProvider} from '@marimo/protocol';
 import type {
   AgentProfile,
   AgentUiEvent,
+  CatalogEntry,
+  ProfileCatalog,
+  ProfilePatch,
   ProviderId,
   SessionSummary,
+  SettingsPatch,
+  StoredSettings,
   StoredSkill,
 } from '@marimo/protocol';
 
@@ -128,6 +134,102 @@ export class AgentRuntime {
   /** The settings as they are on disk right now. */
   async settings() {
     return await this.settingsStore.load();
+  }
+
+  /**
+   * What this install can offer, so the settings screen builds its pick-lists
+   * from what exists rather than from a list typed out a second time.
+   *
+   * The tools are described by *constructing* them, which is the only way the
+   * wording is guaranteed to be the wording the model is given — and the only
+   * way a renamed tool cannot go on being offered under its old name, which
+   * would grant nothing when ticked.
+   */
+  async catalog(profileId: string): Promise<ProfileCatalog> {
+    const profile = await this.profileFor(profileId);
+    const workspace = profile?.workspaces.find(
+      (entry) => entry.id === profile.activeWorkspaceId,
+    );
+    const settings = await this.settingsStore.load();
+
+    return {
+      tools: describeTools({
+        workspaceRoot:
+          workspace?.path ?? this.options.paths.defaultWorkspace,
+        model: activeProvider(settings.providers).model,
+        ...(this.options.webSearch ? {webSearch: this.options.webSearch} : {}),
+        // The host always builds the helper tool; the profile decides whether
+        // this agent may use it, which is what the pick-list is for.
+        subagent: true,
+      }),
+      skills: await this.skillCatalog(),
+    };
+  }
+
+  /** The skills a profile can be granted: the ones that ship, plus the user's. */
+  private async skillCatalog(): Promise<CatalogEntry[]> {
+    const stored = await this.skillStore.load();
+    return stored.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+    }));
+  }
+
+  /**
+   * Changes a preference.
+   *
+   * Hosts are dropped when the change is one an agent was built around — its
+   * model, its tool reach, whether it may fetch from the private network — so
+   * the next turn is built from what the settings now say rather than from what
+   * they said when the host was made.
+   */
+  async updateSettings(patch: SettingsPatch): Promise<StoredSettings> {
+    const before = await this.settingsStore.load();
+    const after = await this.settingsStore.patch(patch);
+
+    const rebuild =
+      before.providers.active !== after.providers.active ||
+      before.temperature !== after.temperature ||
+      before.maxOutputTokens !== after.maxOutputTokens ||
+      before.allowPrivateNetworkFetch !== after.allowPrivateNetworkFetch ||
+      JSON.stringify(before.providers.configs) !==
+        JSON.stringify(after.providers.configs);
+
+    if (rebuild) {
+      for (const profileId of [...this.hosts.keys()]) {
+        this.dropHost(profileId);
+      }
+    }
+    return after;
+  }
+
+  async updateProfile(
+    profileId: string,
+    patch: ProfilePatch,
+  ): Promise<AgentProfile> {
+    /*
+     * A profile whose tools changed has a host holding the old tool set, so the
+     * host is dropped rather than updated. It is rebuilt with the new grant on
+     * the next turn, which is the same path a first turn takes — a cheaper and
+     * better-tested route than pushing a new tool list into a live agent.
+     */
+    const updated = await this.profileStore.update(profileId, patch);
+    this.dropHost(profileId);
+    return updated;
+  }
+
+  async createProfile(name?: string): Promise<AgentProfile> {
+    return await this.profileStore.create(name);
+  }
+
+  async selectProfile(profileId: string): Promise<AgentProfile> {
+    return await this.profileStore.select(profileId);
+  }
+
+  /** The catalogue for whichever agent is active, for a window that just opened. */
+  async catalogForActive(): Promise<{profileId: string; catalog: ProfileCatalog}> {
+    const profile = await this.profileStore.activeProfile();
+    return {profileId: profile.id, catalog: await this.catalog(profile.id)};
   }
 
   async profiles(): Promise<AgentProfile[]> {
@@ -276,6 +378,16 @@ export class AgentRuntime {
       }
     }
     return undefined;
+  }
+
+  /** Forgets a profile's host, so the next turn builds one from current state. */
+  private dropHost(profileId: string): void {
+    const host = this.hosts.get(profileId);
+    if (host !== undefined) {
+      host.dispose();
+      this.hosts.delete(profileId);
+      this.applied.delete(profileId);
+    }
   }
 
   dispose(): void {

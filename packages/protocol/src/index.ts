@@ -1215,6 +1215,54 @@ export const jobsFileSchema = z.object({
 });
 
 /* -------------------------------------------------------------------------- */
+/* Memory proposals                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Something the agent would remember, waiting for the user to agree.
+ *
+ * Proposed rather than written, because long-term memory is injected into every
+ * future system prompt: a wrong entry is not a wrong answer once, it is a wrong
+ * belief the agent carries into every later conversation.
+ */
+export const memoryProposalSchema = z.object({
+  id: z.string().min(1),
+  /** Which conversation it came from, so the user can go and look. */
+  sessionId: z.string().min(1).nullable(),
+  /** Where it would go in `memory.md`. */
+  section: z.string().trim().min(1).max(48),
+  /** The fact, as it would be written. */
+  text: z.string().trim().min(3).max(400),
+  /** Why the model thought it worth keeping, for the user to judge by. */
+  reason: z.string().max(200),
+  /** The agent it would be remembered by. */
+  profileId: z.string().min(1),
+  createdAt: z.string().min(1),
+});
+
+export type MemoryProposal = z.infer<typeof memoryProposalSchema>;
+
+/**
+ * The proposals, and how far the review has read.
+ *
+ * The watermark is per conversation and lives here rather than in memory: a
+ * review that forgot how far it had read would re-propose the same facts every
+ * time the app went quiet, and a queue that refills itself is one nobody reads.
+ */
+export const memoryProposalsFileSchema = z.object({
+  version: z.literal(1),
+  proposals: z.array(memoryProposalSchema),
+  /** Conversation id to the number of events already reviewed. */
+  reviewed: z.record(z.string(), z.number().int().nonnegative()),
+});
+
+export type MemoryProposalsFile = z.infer<typeof memoryProposalsFileSchema>;
+
+export function emptyMemoryProposals(): MemoryProposalsFile {
+  return {version: 1, proposals: [], reviewed: {}};
+}
+
+/* -------------------------------------------------------------------------- */
 /* Calls: renderer -> main                                                     */
 /* -------------------------------------------------------------------------- */
 

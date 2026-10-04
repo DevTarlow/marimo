@@ -1,0 +1,61 @@
+# What has to be true before this can be released.
+#
+# The two checks at the end are the ones worth the runner minutes. A unit test
+# cannot see a preload bridge that stopped matching the contract, a renderer that
+# no longer mounts, a second window that does not open, or a job runner that
+# cannot start from a packaged build — and every one of those has been a real bug
+# in this repository rather than a hypothetical.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Test
+        run: pnpm -r test
+
+      # Boots a real window over the DevTools protocol and asserts the bridge
+      # answers, React mounted, the conversation round-trips, the companion
+      # window is up and transparent, and a fresh install asks for a key.
+      - name: Smoke
+        run: xvfb-run --auto-servernum pnpm --filter @marimo/desktop smoke
+        env:
+          MARIMO_NO_SANDBOX: '1'
+
+      # The packaged runner is the one thing that works in development and can
+      # be broken by packaging alone: `ELECTRON_RUN_AS_NODE=1` has no asar
+      # support, so an archive it cannot read leaves the background service
+      # silently unable to start.
+      - name: Package, and prove the runner still starts
+        run: |
+          pnpm --filter @marimo/desktop package
+          APP="apps/desktop/release/linux-unpacked"
+          ELECTRON_RUN_AS_NODE=1 "$APP/marimo-agent" \
+            "$PWD/$APP/resources/app/dist/runner/run-due.js" --json
+        env:
+          MARIMO_USER_DATA_DIR: ${{ runner.temp }}/marimo-ci

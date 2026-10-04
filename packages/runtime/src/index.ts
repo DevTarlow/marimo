@@ -30,6 +30,16 @@ export type {
   SecretWriterOptions,
 } from './secrets.js';
 
+/* The agent's memory suggestions, waiting for an answer. */
+export {
+  MAX_PENDING_PROPOSALS,
+  MemoryProposalStore,
+} from './memory-proposals.js';
+export type {
+  MemoryProposalStoreOptions,
+  NewProposal,
+} from './memory-proposals.js';
+
 /* Waking the job runner when the app is closed. */
 export {
   planService,

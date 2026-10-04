@@ -110,6 +110,22 @@ to that list.
 That is the whole rule, and the rest of this section is what makes it cheap to
 follow.
 
+**CI exists, and it is `.github/workflows/ci.yml`.** Nothing in this file used to
+mention it, which is how a push went up against a workflow whose first step could
+not run. It re-runs what you just ran — `pnpm -r build`, `typecheck`, `test` —
+and then does the two things a local shell usually skips: the smoke check under
+`xvfb-run`, and a real `electron-builder` package whose unpacked runner is
+started to prove asar is still off. Read it before changing a build script, a
+dependency's version, or anything the package step assumes about
+`apps/desktop/release/`.
+
+Two consequences worth internalising. **A green local run is not a green CI run**
+— the steps above are the difference, so a packaging or preload change is not
+verified until CI has said so. And **a version belongs in exactly one place**:
+`package.json`'s `packageManager` is the pnpm version, and the workflow
+deliberately does not repeat it, because `pnpm/action-setup` fails outright when
+both are present rather than picking one.
+
 ```bash
 # 1. While working: the narrow loop, a few seconds each.
 pnpm --filter @marimo/runtime exec vitest --watch   # one package, watching

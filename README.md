@@ -27,7 +27,7 @@ whether or not the app is open.
 | ✅ | The stores: jobs, profiles, settings, skills, memory proposals — with format versioning that refuses to overwrite a document it cannot read |
 | ✅ | Secrets in the OS keychain, with a plain-text opt-in for the machine with no keychain and for running jobs while the app is closed |
 | ✅ | Scheduled jobs while the app is open, and a headless runner plus an OS service that keeps them going while it is closed |
-| ✅ | The desktop companion: a frameless, transparent, click-through moss ball with its own chat bar |
+| ✅ | The desktop companion: a frameless, transparent, click-through moss ball that answers in bubbles above itself, with its own chat bar underneath and its own settings for how long it answers, how much it shows, and whether it floats |
 | ✅ | A first run that asks for a key instead of showing a chat that refuses |
 | ✅ | A memory review: after a conversation goes quiet the agent proposes what is worth remembering, and asks before writing it |
 | 🚧 | Windows and macOS installers (the config is written and both package; the installers are unbuilt — see [Building a release](#building-a-release)) |
@@ -97,6 +97,22 @@ leniently so the app still opens and can be fixed by hand. The runner reads
 strictly so it can exit non-zero, which is the only signal a timer gets. And the
 write path refuses a file from a newer build, or moves a corrupt one aside,
 rather than storing an empty document over it.
+
+### The companion shares the conversation, not the manner
+
+The floating moss ball is not a second agent. It reads and writes the same
+thread the window does, through the same profile, tools and grants — so asking it
+something and reading the answer in the window later is one conversation rather
+than two that drift apart. What it does *not* share is how long the answer should
+be: a question asked over whatever you are working in wants the answer, and a
+bookmarklet-sized bubble cannot hold a survey.
+
+So "answer briefly" travels with the turn instead of living on the conversation.
+The renderer says which surface asked, the runtime turns the settings into a
+sentence, and `AgentHost` appends it to the system instruction for that turn
+only — cleared on the way into the next one, so a question asked at the pet does
+not make the window terse as well. It is prompt text, like a skill, which is why
+changing it never aborts a turn in flight.
 
 ## Layout
 

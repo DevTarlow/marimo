@@ -10,6 +10,12 @@
  * own. Asking here and reading there is one thread, and a companion with its own
  * history would be a second agent the user has to remember to talk to.
  *
+ * **The order of the three pieces is the whole layout: answers, then the moss,
+ * then the bar.** A question is typed at the bottom, the answer arrives directly
+ * above the moss, and the moss sits between the two so the conversation reads
+ * upwards from the thing that is talking. The bar was once above the moss, which
+ * put it between the user and the answer they were waiting for.
+ *
  * **It is mostly transparent, and it tells the main process where it is not.**
  * The window is a fixed 340×460 rectangle over whatever the user is working in,
  * and without click-through that rectangle swallows every click on the things
@@ -19,32 +25,83 @@
  */
 import {useEffect, useRef, useState} from 'react';
 
-import type {TranscriptMessage} from '@marimo/protocol';
+import {defaultCompanionSettings} from '@marimo/protocol';
+import type {
+  CompanionSettings,
+  TranscriptMessage,
+} from '@marimo/protocol';
 
 import {Copy, Markdown} from './components/Markdown.js';
 import {useAgent} from './hooks/useAgent.js';
 
-/** How much of the conversation floats above the moss. */
-const VISIBLE_MESSAGES = 6;
-
 export function Pet(): React.JSX.Element {
   const agent = useAgent();
   const [draft, setDraft] = useState('');
+  /*
+   * How much of the conversation floats above the moss, and how the window
+   * behaves — the user's answers from Settings, which is in the *other* window.
+   * Seeded with the defaults so the first paint is the shape this window always
+   * had rather than an empty frame waiting on an IPC round trip.
+   */
+  const [settings, setSettings] = useState<CompanionSettings>(
+    defaultCompanionSettings,
+  );
   const column = useRef<HTMLDivElement>(null);
+  /*
+   * Read inside the mouse listener, which is registered once. Without this the
+   * listener would close over the first render's settings forever, and turning
+   * click-through off would go on being reported as on.
+   */
+  const clickThrough = useRef(settings.clickThrough);
+  clickThrough.current = settings.clickThrough;
 
   const busy = agent.live?.running === true;
+
+  useEffect(() => {
+    let cancelled = false;
+    const read = async (): Promise<void> => {
+      try {
+        const {settings: loaded} = await window.marimo.call('settings.get', {});
+        if (!cancelled) {
+          setSettings(loaded.companion);
+        }
+      } catch {
+        // The defaults are what this window showed before any of this was
+        // adjustable, so a failed read is a pet that works rather than one that
+        // refuses to draw.
+      }
+    };
+    void read();
+    const off = window.marimo.onEvent((event) => {
+      if (event.type === 'companion.changed') {
+        setSettings(event.settings);
+      }
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
 
   /*
    * Reports whether the pointer is over anything. `closest` rather than a
    * per-element handler, because the answer has to be right for everything
    * inside a bubble as well — a link, a code block, a copy button.
+   *
+   * With click-through off the answer is always "the window has the mouse",
+   * which is what the setting means: an ordinary small window over whatever is
+   * behind it. Sending `over: true` rather than not sending at all is what keeps
+   * the main process's view of the window in step if the setting is turned back
+   * on later.
    */
   useEffect(() => {
     const report = (event: MouseEvent): void => {
       const target = event.target as Element | null;
-      const over = target?.closest('.pet, .pet-input, .pet-bubble, .pet-gate');
+      const over =
+        !clickThrough.current ||
+        target?.closest('.pet, .pet-input, .pet-bubble, .pet-gate') != null;
       void window.marimo
-        .call('companion.pointer', {over: over !== null && over !== undefined})
+        .call('companion.pointer', {over, enabled: clickThrough.current})
         .catch(() => undefined);
     };
     window.addEventListener('mousemove', report);
@@ -56,9 +113,11 @@ export function Pet(): React.JSX.Element {
   /*
    * The last few turns, oldest first. Older ones are in the window, which is
    * where a conversation is for reading; here it is for the answer that just
-   * arrived.
+   * arrived. How many is the user's `visibleMessages`.
    */
-  const shown: TranscriptMessage[] = agent.messages.slice(-VISIBLE_MESSAGES);
+  const shown: TranscriptMessage[] = agent.messages.slice(
+    -settings.visibleMessages,
+  );
 
   useEffect(() => {
     const element = column.current;
@@ -69,10 +128,35 @@ export function Pet(): React.JSX.Element {
 
   const submit = (): void => {
     const text = draft.trim();
-    if (text.length === 0 || busy || agent.profile === undefined) {
+    if (
+      text.length === 0 ||
+      busy ||
+      agent.profile === undefined ||
+      agent.sessionId === null
+    ) {
       return;
     }
-    void agent.send(text);
+    /*
+     * Sent here rather than through `agent.send`, because the one extra fact
+     * this turn needs is the one `useAgent` does not know: it was asked at the
+     * moss. The agent answers it more briefly, and the window keeps answering
+     * at its own length — the conversation is shared, the manner is not.
+     *
+     * A failure is reported the way `useAgent` reports its own — as the error
+     * line in the column above — because that is the shape this window already
+     * draws, and a message that vanished on a rejected call with nothing on
+     * screen is indistinguishable from a pet that is ignoring you.
+     */
+    window.marimo
+      .call('chat.send', {
+        profileId: agent.profile.id,
+        sessionId: agent.sessionId,
+        text,
+        origin: 'pet',
+      })
+      .catch((failure: unknown) => {
+        agent.reportError(failure);
+      });
     setDraft('');
   };
 
@@ -146,6 +230,23 @@ export function Pet(): React.JSX.Element {
         )}
       </div>
 
+      {/*
+        The moss, and the handle for moving the window. Dragging is the window's
+        own gesture — `-webkit-app-region` in the stylesheet — rather than a
+        mousedown handler, because the OS already knows how to move a window and
+        reimplementing it is how a drag comes to feel wrong.
+
+        It sits below the conversation and above the bar, which is the order the
+        three are read in: ask at the bottom, the answer appears above the pet
+        that gave it.
+      */}
+      <div className="pet-moss" title="Drag to move">
+        <img src="./marimo-logo.png" alt="Marimo" draggable={false} />
+        <div className="pet-hover-actions">
+          <Copy text={lastAnswer(shown, agent.live?.text)} what="last answer" />
+        </div>
+      </div>
+
       <div className="pet-bar">
         <input
           className="pet-input"
@@ -187,19 +288,6 @@ export function Pet(): React.JSX.Element {
             ↑
           </button>
         )}
-      </div>
-
-      {/*
-        The moss, and the handle for moving the window. Dragging is the window's
-        own gesture — `-webkit-app-region` in the stylesheet — rather than a
-        mousedown handler, because the OS already knows how to move a window and
-        reimplementing it is how a drag comes to feel wrong.
-      */}
-      <div className="pet-moss" title="Drag to move">
-        <img src="./marimo-logo.png" alt="Marimo" draggable={false} />
-        <div className="pet-hover-actions">
-          <Copy text={lastAnswer(shown, agent.live?.text)} what="last answer" />
-        </div>
       </div>
     </div>
   );

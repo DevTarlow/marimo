@@ -410,6 +410,80 @@ export function defaultDiscordSettings(): DiscordSettings {
   };
 }
 
+/**
+ * How verbose the companion's answers are.
+ *
+ * Three named sizes rather than a number of words. The setting is a sentence
+ * added to the instruction, and a slider would only be a way of choosing one of
+ * three sentences with a number nobody could predict the meaning of.
+ */
+export const COMPANION_ANSWER_LENGTHS = [
+  'brief',
+  'balanced',
+  'detailed',
+] as const;
+export const companionAnswerLengthSchema = z.enum(COMPANION_ANSWER_LENGTHS);
+export type CompanionAnswerLength = z.infer<typeof companionAnswerLengthSchema>;
+
+/**
+ * What the settings file holds about the floating companion.
+ *
+ * A block rather than four flat fields because these are the four answers to one
+ * question — what the moss ball does — and the settings screen draws them as one
+ * section.
+ *
+ * **Answer length is not layout state.** It is a turn instruction: the companion
+ * shares the conversation with the window, so the only thing that can make its
+ * answers shorter is saying so to the model on the turns it asked for. The other
+ * three are facts about the window itself, applied by the process that owns it.
+ */
+export const companionSettingsSchema = z.object({
+  /**
+   * How the agent answers when the question was asked at the moss.
+   *
+   * `brief` is the default because that is what the companion is for: a
+   * question asked over whatever the user is working in wants the answer, not a
+   * survey of the subject. The main window is unaffected — the length travels
+   * with the turn, not with the conversation.
+   */
+  answerLength: companionAnswerLengthSchema,
+  /** How many of the most recent messages float above the moss. */
+  visibleMessages: z.number().int().min(1).max(20),
+  /**
+   * Whether the moss floats above other windows.
+   *
+   * On is what a desktop pet is for. Off is for the case where being above
+   * everything is worse than being found: a full-screen window, a video, a
+   * presentation.
+   */
+  alwaysOnTop: z.boolean(),
+  /**
+   * Whether the window stops accepting the mouse where there is nothing to click.
+   *
+   * On is the default and is what makes it sit *on* the desktop: without it the
+   * companion is a 340×460 rectangle swallowing every click on the things behind
+   * it. Off is the escape hatch for a machine where the pointer tracking
+   * misbehaves — the window then behaves like an ordinary small window over
+   * whatever is behind it.
+   */
+  clickThrough: z.boolean(),
+});
+
+export type CompanionSettings = z.infer<typeof companionSettingsSchema>;
+
+export function defaultCompanionSettings(): CompanionSettings {
+  return {
+    answerLength: 'brief',
+    // What the companion showed before this was adjustable.
+    visibleMessages: 6,
+    alwaysOnTop: true,
+    clickThrough: true,
+  };
+}
+
+/** A patch of the block: any subset, merged over what is stored. */
+export const companionSettingsPatchSchema = companionSettingsSchema.partial();
+
 /** The bot's own account, as `GET /users/@me` reports it. */
 export interface DiscordBot {
   id: string;
@@ -533,6 +607,14 @@ export const settingsSchema = z.object({
    */
   discord: discordSettingsSchema,
   /**
+   * The floating companion: how it answers, and how it behaves as a window.
+   *
+   * Here rather than on a profile for the same reason Discord is: there is one
+   * moss ball for the whole app, and "how brief is it" is a fact about the pet
+   * rather than about which agent is talking.
+   */
+  companion: companionSettingsSchema,
+  /**
    * How wide the two rails are, in pixels. Clamped here rather than trusted: a
    * width is dragged, and a drag can end anywhere including off the screen, so
    * the bounds belong to the contract rather than to the drag handler.
@@ -598,6 +680,7 @@ export const discordSettingsPatchSchema = discordSettingsSchema.partial();
 
 export const settingsPatchSchema = settingsSchema.partial().extend({
   discord: discordSettingsPatchSchema.optional(),
+  companion: companionSettingsPatchSchema.optional(),
   providers: providersPatchSchema.optional(),
   appearance: appearancePatchSchema.optional(),
 });
@@ -1330,6 +1413,16 @@ export type AgentUiEvent =
    */
   | {type: 'theme.changed'; mode: ThemeMode}
   /*
+   * The companion's own settings changed.
+   *
+   * The pet window draws bubble count from one of them and would otherwise be
+   * showing the previous answer until it was reopened — and the settings screen
+   * that changes them is in the *other* window, so nothing here has a return
+   * value to read. The whole block travels rather than a diff, for the same
+   * reason the MCP status does: there is nothing to reconcile.
+   */
+  | {type: 'companion.changed'; settings: CompanionSettings}
+  /*
    * An idle look at the conversation turned something up.
    *
    * A count rather than the proposals themselves: the window fetches the queue
@@ -1514,6 +1607,15 @@ export const agentCallSchemas = {
     profileId: z.string().min(1),
     sessionId: z.string().min(1),
     text: z.string().min(1),
+    /**
+     * Which surface asked.
+     *
+     * The conversation is shared, so this is not a second thread — it is the one
+     * fact the turn needs that the message itself does not carry: the pet asks
+     * for a shorter answer than the window, and the agent can only know which
+     * one it is talking to if the caller says. Absent means the window.
+     */
+    origin: z.enum(['window', 'pet']).optional(),
   }),
   'chat.approve': z.object({
     profileId: z.string().min(1),
@@ -1565,7 +1667,16 @@ export const agentCallSchemas = {
    */
   'companion.status': z.object({}),
   'companion.setVisible': z.object({visible: z.boolean()}),
-  'companion.pointer': z.object({over: z.boolean()}),
+  /*
+   * `enabled` is the user's click-through preference, reported by the window on
+   * every move along with where the pointer is. The alternative — the main
+   * process remembering the preference and the window asking for it — would be
+   * one more read of the settings file on a path that runs on every mouse move.
+   */
+  'companion.pointer': z.object({
+    over: z.boolean(),
+    enabled: z.boolean(),
+  }),
 
   /*
    * What the agent would remember, waiting for an answer.

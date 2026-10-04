@@ -29,6 +29,20 @@ export interface AgentConfig {
   /** The profile's identity: who this agent is. */
   systemPrompt: string;
   /**
+   * Prompt text for this turn only, appended to the instruction.
+   *
+   * The one caller is the desktop companion: it shares the conversation with the
+   * window, so "answer briefly" cannot be a property of the conversation and has
+   * to travel with the turn that asked for it. `AgentHost.run` sets it from the
+   * turn's own argument, so it is never carried over: a turn that asks for
+   * nothing clears whatever the last one left behind.
+   *
+   * Read per request like `enabledSkills` below, and for the same reason: it is
+   * prompt text, so changing it between turns is not a reason to abort the one
+   * in flight.
+   */
+  instruction?: string;
+  /**
    * Agent profile this configuration belongs to. It decides which `memory.md`
    * is read and written, so switching profile switches remembered facts as well
    * as identity. Absent means the default profile.

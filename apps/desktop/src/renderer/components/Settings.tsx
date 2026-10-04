@@ -20,15 +20,31 @@ import {useEffect, useState} from 'react';
 import type {
   AgentProfile,
   CatalogTool,
+  CompanionAnswerLength,
   McpStatus,
   ProfileCatalog,
   PublicSettings,
 } from '@marimo/protocol';
 
-import {PROVIDERS} from '@marimo/protocol';
+import {COMPANION_ANSWER_LENGTHS, PROVIDERS} from '@marimo/protocol';
 
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
+
+/**
+ * The three lengths, in the words the user is choosing between.
+ *
+ * Written here rather than derived from the enum: the value is what the agent's
+ * instruction is keyed by, and this is what the person picking one is told. The
+ * sentences the model actually gets live beside the agent, in `pet-turn.ts` —
+ * they are prompt text, and a pick-list labelled with prompt text would be
+ * describing the implementation rather than the choice.
+ */
+const ANSWER_LENGTH_LABELS: Record<CompanionAnswerLength, string> = {
+  brief: 'Brief — a few lines, the answer and nothing else',
+  balanced: 'Balanced — as long as the question deserves',
+  detailed: 'Detailed — the full answer here, not deferred to the window',
+};
 
 interface Loaded {
   settings: PublicSettings;
@@ -312,6 +328,124 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               <em className="settings-why">
                 Drag it by the moss to move it. Clicking through to whatever is
                 behind works anywhere there is nothing to click.
+              </em>
+            </span>
+          </label>
+
+          <h4 className="settings-group">How it answers</h4>
+          <p className="settings-muted">
+            How long the answers are when you ask at the moss. This travels with
+            the question rather than with the conversation, so asking here does
+            not make the main window terse as well.
+          </p>
+          <select
+            className="settings-input"
+            value={loaded.settings.companion.answerLength}
+            disabled={saving}
+            aria-label="Answer length"
+            onChange={(event) => {
+              const answerLength = event.target.value as CompanionAnswerLength;
+              void change(async () => {
+                await window.marimo.call('settings.set', {
+                  patch: {companion: {answerLength}},
+                });
+              });
+            }}
+          >
+            {COMPANION_ANSWER_LENGTHS.map((length) => (
+              <option key={length} value={length}>
+                {ANSWER_LENGTH_LABELS[length]}
+              </option>
+            ))}
+          </select>
+
+          <h4 className="settings-group">How much it shows</h4>
+          <label className="settings-field">
+            <span>
+              Messages above the moss
+              <em className="settings-why">
+                Older ones are always in the main window. Fewer keeps the pet to
+                the answer that just arrived.
+              </em>
+            </span>
+            <input
+              className="settings-input"
+              type="number"
+              min={1}
+              max={20}
+              value={loaded.settings.companion.visibleMessages}
+              disabled={saving}
+              onChange={(event) => {
+                const visibleMessages = Number(event.target.value);
+                /*
+                 * A field being cleared, or a keypress that would leave a 0 or a
+                 * 40 in it, passes through values the schema refuses. Writing one
+                 * would be a failed call and an error line under a spinner, so
+                 * the field is allowed to disagree with the stored number for as
+                 * long as it takes to type a good one — and the stored number is
+                 * what is still in force.
+                 */
+                if (
+                  !Number.isInteger(visibleMessages) ||
+                  visibleMessages < 1 ||
+                  visibleMessages > 20
+                ) {
+                  return;
+                }
+                void change(async () => {
+                  await window.marimo.call('settings.set', {
+                    patch: {companion: {visibleMessages}},
+                  });
+                });
+              }}
+            />
+          </label>
+
+          <label className="settings-check">
+            <input
+              type="checkbox"
+              checked={loaded.settings.companion.alwaysOnTop}
+              disabled={saving}
+              onChange={(event) => {
+                const alwaysOnTop = event.target.checked;
+                void change(async () => {
+                  await window.marimo.call('settings.set', {
+                    patch: {companion: {alwaysOnTop}},
+                  });
+                });
+              }}
+            />
+            <span>
+              Float above other windows
+              <em className="settings-why">
+                Turn this off while presenting or watching something full-screen,
+                and the moss stops covering it. It can then go behind the window
+                you are working in, so it may need moving back out.
+              </em>
+            </span>
+          </label>
+
+          <label className="settings-check">
+            <input
+              type="checkbox"
+              checked={loaded.settings.companion.clickThrough}
+              disabled={saving}
+              onChange={(event) => {
+                const clickThrough = event.target.checked;
+                void change(async () => {
+                  await window.marimo.call('settings.set', {
+                    patch: {companion: {clickThrough}},
+                  });
+                });
+              }}
+            />
+            <span>
+              Clicks pass through where there is nothing to click
+              <em className="settings-why">
+                On is what makes the moss sit on the desktop rather than in a box
+                over it. Turn it off if the moss ever stops responding to the
+                mouse — the window then keeps the mouse everywhere inside it,
+                including the empty space around the moss.
               </em>
             </span>
           </label>

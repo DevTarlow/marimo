@@ -700,3 +700,99 @@ describe('settings from another build', () => {
     expect(await readFile(file, 'utf8')).toBe(future);
   });
 });
+
+/**
+ * The companion block: how the moss ball answers and how it behaves.
+ *
+ * Two of the four are prompt text and two are the window's own behaviour, which
+ * is why the block is one thing rather than a setting on the profile: the pet
+ * shares the conversation with the window, and none of it belongs to a
+ * conversation.
+ */
+describe('SettingsStore companion', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-companion-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): SettingsStore {
+    return new SettingsStore(join(dir, 'settings.json'));
+  }
+
+  async function write(raw: unknown): Promise<void> {
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify(raw, null, 2),
+      'utf8',
+    );
+  }
+
+  it('starts brief, floating, and showing six messages', async () => {
+    const settings = await store().load();
+    expect(settings.companion).toEqual({
+      answerLength: 'brief',
+      visibleMessages: 6,
+      alwaysOnTop: true,
+      clickThrough: true,
+    });
+  });
+
+  it('gives a file written before the block existed the defaults', async () => {
+    await write({temperature: 0.4, sidebarWidth: 300});
+    const settings = await store().load();
+
+    expect(settings.companion.answerLength).toBe('brief');
+    // And the rest of the file is untouched.
+    expect(settings.temperature).toBe(0.4);
+  });
+
+  it('fills in a short block rather than discarding it', async () => {
+    await write({companion: {answerLength: 'detailed'}});
+    const settings = await store().load();
+
+    expect(settings.companion.answerLength).toBe('detailed');
+    expect(settings.companion.visibleMessages).toBe(6);
+  });
+
+  it('merges a change without clearing the rest of the block', async () => {
+    const settings = store();
+    await settings.patch({companion: {visibleMessages: 12}});
+    const after = await settings.patch({companion: {alwaysOnTop: false}});
+
+    expect(after.companion.visibleMessages).toBe(12);
+    expect(after.companion.alwaysOnTop).toBe(false);
+    expect(after.companion.answerLength).toBe('brief');
+  });
+
+  it('keeps a choice through an unrelated write', async () => {
+    const settings = store();
+    await settings.patch({companion: {answerLength: 'balanced'}});
+    const after = await settings.patch({temperature: 0.2});
+
+    expect(after.companion.answerLength).toBe('balanced');
+  });
+
+  it('refuses a length that is not one of the three', async () => {
+    const settings = store();
+    await expect(
+      settings.patch({companion: {answerLength: 'terse' as never}}),
+    ).rejects.toThrow();
+    expect((await settings.load()).companion.answerLength).toBe('brief');
+  });
+
+  it('refuses a bubble count that is not a usable number', async () => {
+    const settings = store();
+    await expect(
+      settings.patch({companion: {visibleMessages: 0}}),
+    ).rejects.toThrow();
+    await expect(
+      settings.patch({companion: {visibleMessages: 2.5}}),
+    ).rejects.toThrow();
+    expect((await settings.load()).companion.visibleMessages).toBe(6);
+  });
+});

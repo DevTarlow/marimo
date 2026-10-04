@@ -59,6 +59,7 @@ import {MemoryProposalStore} from '../memory-proposals.js';
 import {SettingsStore} from '../settings.js';
 import {SkillStore} from '../skills.js';
 import {resolveAgentConfig} from './resolve.js';
+import {turnInstruction} from './pet-turn.js';
 
 /** The services the app has that the agent's tools can use, if any. */
 export interface RuntimeServices {
@@ -472,18 +473,30 @@ export class AgentRuntime {
    * what the window already knows how to draw: a message in the conversation
    * saying what is wrong. An exception here would be a blank screen and a
    * console line the user never sees.
+   *
+   * `origin` is which surface asked — the window or the floating companion —
+   * and it is the only thing here that is not in the message. The two share a
+   * conversation and a profile, so the pet's shorter answers have to be decided
+   * per turn and read from the settings at the moment it starts: a user who
+   * moved the length slider while the moss was thinking gets the new length on
+   * the next question, not this one.
    */
   async *run(
     profileId: string,
     sessionId: string,
     text: string,
+    origin?: 'window' | 'pet',
   ): AsyncGenerator<AgentUiEvent> {
     const result = await this.host(profileId);
     if (!result.ok) {
       yield refusal(sessionId, result.problem);
       return;
     }
-    yield* result.host.run(sessionId, text, profileId);
+    const instruction = turnInstruction(
+      origin,
+      (await this.settingsStore.load()).companion.answerLength,
+    );
+    yield* result.host.run(sessionId, text, instruction, profileId);
   }
 
   async *approve(

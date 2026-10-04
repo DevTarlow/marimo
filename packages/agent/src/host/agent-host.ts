@@ -255,15 +255,16 @@ export class AgentHost {
       config.allowPrivateNetworkFetch !== this.config.allowPrivateNetworkFetch;
 
     /*
-     * `enabledSkills` is deliberately not in the list above.
+     * `enabledSkills` is deliberately not in the list above, and neither is
+     * `instruction`.
      *
      * Tool names, the model and the folder all change what a running turn can do,
      * so a change to one of them aborts it rather than letting it finish against
-     * a configuration the user has just replaced. A skill is prompt text: the
-     * instruction provider reads `this.config` on every request, so a skill saved
-     * midway through a turn is simply in the next one — and aborting the turn
-     * that saved it, which is what `/learn` does, would be the one case where the
-     * feature could never work.
+     * a configuration the user has just replaced. A skill and a turn's own
+     * instruction are prompt text: the instruction provider reads `this.config`
+     * on every request, so text changed midway through a turn is simply in the
+     * next one — and aborting the turn that saved a skill, which is what `/learn`
+     * does, would be the one case where the feature could never work.
      */
     this.config = config;
     // Memory follows both the folder and the agent: a profile switch must not
@@ -524,12 +525,24 @@ export class AgentHost {
    *
    * The profile check happens before anything is sent: appending to another
    * agent's conversation is the one wrong the rest of this class refuses.
+   *
+   * `instruction` is prompt text for this turn only — the desktop companion
+   * asking for a shorter answer than the window asks for. It is applied here
+   * rather than by the caller because it has to be cleared as reliably as it is
+   * set: a caller that set it and forgot to unset it would leave the *window*
+   * answering in the pet's voice, and that is a bug nobody would trace back to
+   * this line.
    */
   async *run(
     sessionId: string,
     text: string,
+    instruction?: string,
     profileId?: string,
   ): AsyncGenerator<AgentUiEvent> {
+    this.config =
+      instruction === undefined
+        ? {...this.config, ...{instruction: undefined}}
+        : {...this.config, instruction};
     yield* this.drive(sessionId, {role: 'user', parts: [{text}]}, profileId);
   }
 
@@ -777,6 +790,12 @@ export class AgentHost {
           // Read per request rather than per turn: the model may have just
           // written to memory, and the next request should already see it.
           memory: await this.memory.readForPrompt(),
+          // Whatever the surface that asked for this turn wanted, if there was
+          // anything. `run` cleared it on its way in, so a turn that asked for
+          // nothing — every turn from the window — carries no trace of the pet's.
+          ...(this.config.instruction !== undefined
+            ? {instruction: this.config.instruction}
+            : {}),
           ...(this.config.enabledSkills !== undefined
             ? {skills: this.config.enabledSkills}
             : {}),

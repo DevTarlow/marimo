@@ -250,7 +250,15 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     },
 
     'companion.pointer': (params) => {
-      dependencies.companion?.()?.setClickThrough(!params.over);
+      /*
+       * `enabled` is ANDed here rather than trusted to have been applied by the
+       * renderer: this runs on every mouse move, and a window that stopped
+       * forwarding the setting would make the whole surface dead to the mouse —
+       * an unclickable pet with nothing on screen to explain why.
+       */
+      dependencies
+        .companion?.()
+        ?.setClickThrough(params.enabled && !params.over);
       return {ok: true};
     },
 
@@ -307,7 +315,12 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       await agent().transcript(params.profileId, params.sessionId),
 
     'chat.send': async (params) =>
-      await agent().send(params.profileId, params.sessionId, params.text),
+      await agent().send(
+        params.profileId,
+        params.sessionId,
+        params.text,
+        params.origin,
+      ),
 
     'chat.approve': async (params) =>
       await agent().approve(

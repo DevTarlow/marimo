@@ -118,6 +118,13 @@ export {
 } from './agent/resolve.js';
 export {createJobRunner} from './agent/job-runner.js';
 export type {JobRunnerOptions} from './agent/job-runner.js';
+/*
+ * What the floating companion asks for, in words. Exported because the settings
+ * screen describes the three lengths and the agent is the thing that acts on
+ * them; a second copy of these sentences in the renderer is a second thing to
+ * keep true.
+ */
+export {turnInstruction} from './agent/pet-turn.js';
 export type {
   ResolvedAgent,
   ResolveAgentOptions,

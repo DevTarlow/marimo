@@ -997,11 +997,38 @@ describe('AgentHost', () => {
     // provider, so no tokens are spent and nothing is appended.
     const requestsBefore = fake?.requests.length ?? 0;
     const refused = await collect(
-      host.run(session, 'beta attempt', 'profile-beta'),
+      host.run(session, 'beta attempt', undefined, 'profile-beta'),
     );
     expect(refused).toHaveLength(1);
     expect(refused[0]).toMatchObject({type: 'turn.failed'});
     expect(fake?.requests.length).toBe(requestsBefore);
+  });
+
+  /*
+   * The companion's shorter answers, from the inside.
+   *
+   * Two turns, one conversation, one process: the point of the assertion is not
+   * that the text arrives — it is that it *leaves*. A turn's instruction that
+   * survived into the next turn would make the window answer in the pet's voice,
+   * which is a bug nobody would trace back to the line that failed to clear it.
+   */
+  it("appends a turn's own instruction, and only for that turn", async () => {
+    const {host, session} = await startHost(() => textChunks('Fine.'));
+
+    await collect(host.run(session, 'first', 'ANSWER BRIEFLY, PET.'));
+    await collect(host.run(session, 'second'));
+
+    const [first, second] = fake?.requests ?? [];
+    const system = (request: RecordedRequest | undefined): string =>
+      String(
+        request?.messages.find((message) => message['role'] === 'system')?.[
+          'content'
+        ] ?? '',
+      );
+
+    expect(system(first)).toContain('ANSWER BRIEFLY, PET.');
+    expect(system(first)).toContain(DEFAULT_SYSTEM_PROMPT.slice(0, 40));
+    expect(system(second)).not.toContain('ANSWER BRIEFLY, PET.');
   });
 
   it('persists the conversation and projects a readable transcript', async () => {

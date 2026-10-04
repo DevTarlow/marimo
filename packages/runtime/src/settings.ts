@@ -20,7 +20,9 @@ import {
 
 import {
   appearanceSchema,
+  companionSettingsSchema,
   defaultAppearance,
+  defaultCompanionSettings,
   defaultWindowState,
   defaultDiscordSettings,
   defaultProviders,
@@ -61,6 +63,11 @@ export function defaultStoredSettings(): StoredSettings {
     // Discord is off until the user pastes a bot token, so a fresh install makes
     // no network calls it was not asked to make.
     discord: defaultDiscordSettings(),
+    // How the moss ball answers and behaves. Defaults here rather than in the
+    // window that draws it, because two of the four change what the agent is
+    // told and a default the renderer owned would be a default the agent could
+    // not see.
+    companion: defaultCompanionSettings(),
     // Match the design tokens, so the first launch looks like the stylesheet says
     // it should, and a later drag starts from wherever the user left it.
     sidebarWidth: 272,
@@ -194,6 +201,11 @@ export class SettingsStore {
             defaults.discord,
             rawObject['discord'],
           ),
+          companion: fillBlock(
+            companionSettingsSchema,
+            defaults.companion,
+            rawObject['companion'],
+          ),
           providers: fillProviders(rawObject),
           appearance: fillBlock(
             appearanceSchema,
@@ -244,6 +256,9 @@ export class SettingsStore {
     const discord = defined.discord
       ? {...current.discord, ...definedOnly(defined.discord)}
       : current.discord;
+    const companion = defined.companion
+      ? {...current.companion, ...definedOnly(defined.companion)}
+      : current.companion;
     const providers = defined.providers
       ? mergeProviders(current.providers, defined.providers)
       : current.providers;
@@ -254,6 +269,7 @@ export class SettingsStore {
       ...current,
       ...defined,
       discord,
+      companion,
       providers,
       appearance,
     });

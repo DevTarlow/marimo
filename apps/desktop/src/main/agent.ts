@@ -575,11 +575,16 @@ export class AgentService {
    * a turn already running, no key, an unknown conversation — comes back as
    * `turn.failed` on that same channel, which is the shape the window already
    * draws, so nothing here has to invent a second way to say no.
+   *
+   * `origin` is which surface asked — the window, or the moss ball floating over
+   * it. The two share a conversation, so it is not a second thread: it is the one
+   * thing the turn needs that the message itself does not carry.
    */
   async send(
     profileId: string,
     sessionId: string,
     text: string,
+    origin?: 'window' | 'pet',
   ): Promise<{accepted: boolean}> {
     /*
      * Checked here as well as inside the agent, purely so the answer is
@@ -604,7 +609,7 @@ export class AgentService {
       return {accepted: false};
     }
 
-    this.pump(this.runtime.run(profileId, sessionId, text));
+    this.pump(this.runtime.run(profileId, sessionId, text, origin));
     return {accepted: true};
   }
 

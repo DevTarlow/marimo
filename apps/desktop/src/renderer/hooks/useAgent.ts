@@ -95,6 +95,15 @@ export interface AgentController {
   themeMode: ThemeMode;
   newSession: () => Promise<void>;
   dismissError: () => void;
+  /**
+   * Puts a failure on screen, in the one place this window draws them.
+   *
+   * For a caller that has to make its own IPC call — the companion, which sends
+   * its turns with an origin the controller does not know about. `describe` is
+   * applied here rather than at the call site so Electron's wrapper prefix is
+   * stripped the same way every other failure is.
+   */
+  reportError: (failure: unknown) => void;
 }
 
 /** Electron wraps a rejected `invoke` in its own prefix, which is noise here. */
@@ -449,6 +458,12 @@ export function useAgent(): AgentController {
           profileId: profile.id,
           sessionId,
           text,
+          /*
+           * Which surface asked. Stated rather than left to the default, so the
+           * one caller that is *not* the window — the companion, which sends
+           * through its own path — cannot end up looking like one by omission.
+           */
+          origin: 'window',
         });
       } catch (failure) {
         setError(describe(failure));
@@ -532,6 +547,9 @@ export function useAgent(): AgentController {
     themeMode,
     reload: boot,
     newSession,
+    reportError: (failure: unknown) => {
+      setError(describe(failure));
+    },
     dismissError: () => {
       setError(null);
     },

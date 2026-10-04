@@ -25,6 +25,9 @@
  */
 import {BrowserWindow, screen, shell} from 'electron';
 
+import {defaultCompanionSettings} from '@marimo/protocol';
+import type {CompanionSettings} from '@marimo/protocol';
+
 import {
   loadWindowState,
   restoreBounds,
@@ -78,6 +81,14 @@ export class Companion {
   private window: BrowserWindow | undefined;
   /** Whether clicks should pass through to whatever is behind. */
   private ignoring = false;
+  /**
+   * The settings the window should be showing, held here rather than read from
+   * the file: the pet asks for them once when it opens, and a window built
+   * before the user changed one must still be built the way they asked.
+   */
+  private settings: CompanionSettings = defaultCompanionSettings();
+  /** What the window currently is, so a no-op does not become an IPC call. */
+  private onTop = true;
 
   constructor(private readonly options: CompanionOptions) {}
 
@@ -87,6 +98,50 @@ export class Companion {
       !this.window.isDestroyed() &&
       this.window.isVisible()
     );
+  }
+
+  /** The settings as this window is applying them, for the event that carries them. */
+  currentSettings(): CompanionSettings {
+    return this.settings;
+  }
+
+  /**
+   * Applies the companion's settings to the window.
+   *
+   * `alwaysOnTop` is one preference with two halves: floating over other windows
+   * *and* following the user across workspaces are the same intent, and a moss
+   * that stopped floating but still turned up on every desktop would be the
+   * wrong half of it. The other three settings travel to the renderer — they are
+   * how it draws and what it asks for — and are sent on from `main.ts` as one
+   * event rather than being split across two owners.
+   */
+  applySettings(settings: CompanionSettings): void {
+    this.settings = settings;
+    const window = this.window;
+    if (window === undefined || window.isDestroyed()) {
+      return;
+    }
+    if (this.onTop !== settings.alwaysOnTop) {
+      this.onTop = settings.alwaysOnTop;
+      /*
+       * `floating` rather than plain always-on-top, so it sits above ordinary
+       * windows without fighting full-screen ones and system dialogs.
+       */
+      window.setAlwaysOnTop(settings.alwaysOnTop, 'floating');
+      window.setVisibleOnAllWorkspaces(settings.alwaysOnTop, {
+        visibleOnFullScreen: false,
+      });
+    }
+    /*
+     * Off means the window accepts the mouse everywhere, which is the state the
+     * user asked for — so the click-through flag is dropped with it. Leaving it
+     * set would keep the window ignoring clicks until the pointer happened to
+     * cross it, which is exactly the "now it does not respond at all" report
+     * this setting exists to prevent.
+     */
+    if (!settings.clickThrough) {
+      this.setClickThrough(false);
+    }
   }
 
   /** Builds the window if it is not up, then shows it. */
@@ -176,7 +231,19 @@ export class Companion {
      * on every workspace: a companion that disappears when the user switches
      * desktop is one they have to go and find.
      */
-    window.setAlwaysOnTop(true, 'floating');
+    /*
+     * `floating` rather than plain always-on-top, so it sits above ordinary
+     * windows without fighting full-screen ones and system dialogs. And visible
+     * on every workspace: a companion that disappears when the user switches
+     * desktop is one they have to go and find.
+     *
+     * Whether it floats at all is a preference rather than a constant — it is
+     * turned off by a user who is presenting, or watching something full-screen.
+     * `this.settings` is whatever the last `applySettings` was given, so a window
+     * built after a settings change is built the way the user asked.
+     */
+    this.onTop = this.settings.alwaysOnTop;
+    window.setAlwaysOnTop(this.onTop, 'floating');
     window.setVisibleOnAllWorkspaces(true, {visibleOnFullScreen: false});
 
     window.once('ready-to-show', () => {
@@ -239,5 +306,3 @@ export class Companion {
     };
   }
 }
-
-

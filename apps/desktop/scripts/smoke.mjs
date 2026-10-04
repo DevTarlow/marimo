@@ -239,12 +239,32 @@ async function main() {
             id: 1,
             method: 'Runtime.evaluate',
             params: {
-              expression: `JSON.stringify({
-                moss: !!document.querySelector('.pet-moss img'),
-                input: !!document.querySelector('.pet-input'),
-                transparent:
-                  getComputedStyle(document.body).backgroundColor === 'rgba(0, 0, 0, 0)',
-              })`,
+              expression: `(() => {
+                const moss = document.querySelector('.pet-moss');
+                const bar = document.querySelector('.pet-input');
+                const column = document.querySelector('.pet-column');
+                return JSON.stringify({
+                  moss: !!document.querySelector('.pet-moss img'),
+                  input: !!bar,
+                  transparent:
+                    getComputedStyle(document.body).backgroundColor === 'rgba(0, 0, 0, 0)',
+                  /*
+                   * The companion's shape, measured rather than assumed:
+                   * answers, then the moss, then the bar. Geometry rather than
+                   * DOM order, because what the user sees is where the boxes
+                   * land — a stylesheet that stacked them the other way round
+                   * would pass an order check and still put the bar in the way.
+                   */
+                  mossAboveBar:
+                    moss !== null && bar !== null
+                      ? moss.getBoundingClientRect().bottom <= bar.getBoundingClientRect().top
+                      : false,
+                  columnAboveMoss:
+                    column !== null && moss !== null
+                      ? column.getBoundingClientRect().bottom <= moss.getBoundingClientRect().top
+                      : false,
+                });
+              })()`,
               returnByValue: true,
             },
           }),
@@ -255,8 +275,10 @@ async function main() {
       const state = answer.length > 0 ? JSON.parse(answer) : {};
       if (state.moss !== true || state.input !== true || state.transparent !== true) {
         fail(`the companion is wrong: ${answer}`);
+      } else if (state.mossAboveBar !== true || state.columnAboveMoss !== true) {
+        fail(`the companion's layout is out of order: ${answer}`);
       } else {
-        ok('the desktop companion is up, transparent, and has its chat bar');
+        ok('the desktop companion is up, transparent, and shaped answers → moss → bar');
       }
     }
 

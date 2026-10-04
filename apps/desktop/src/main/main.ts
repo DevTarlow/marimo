@@ -265,6 +265,36 @@ let tray: Tray | undefined;
  * window it builds is cheap when it is hidden.
  */
 let companion: Companion | undefined;
+
+/**
+ * Pushes the companion's settings at the window that has to obey them.
+ *
+ * Two owners, one file. `alwaysOnTop` is the window manager's business and is
+ * applied to the `BrowserWindow` here; the other three are how the renderer
+ * draws and what it asks for, and reach it as an event. Both happen on the same
+ * path, so a settings write cannot take effect in one place and not the other.
+ *
+ * Called after every settings write as well as at startup: the pet window is a
+ * separate document from the settings screen, so nothing over there has a return
+ * value to read.
+ */
+async function refreshCompanionSettings(): Promise<void> {
+  if (agent === undefined || companion === undefined) {
+    return;
+  }
+  try {
+    const {companion: next} = await agent.settings();
+    if (JSON.stringify(next) === JSON.stringify(companion.currentSettings())) {
+      return;
+    }
+    companion.applySettings(next);
+    broadcast({type: 'companion.changed', settings: next});
+  } catch {
+    // The same rule the theme follows: an unreadable settings file leaves the
+    // last known answer in place rather than taking the pet down with it.
+  }
+}
+
 /**
  * Whether the user has been told that closing the window leaves the app
  * running.
@@ -323,6 +353,7 @@ async function bootstrap(): Promise<void> {
      */
     onSettingsChanged: () => {
       void refreshThemeMode();
+      void refreshCompanionSettings();
     },
     companion: () => companion,
     ...(startupWarning === undefined ? {} : {warning: startupWarning}),
@@ -369,6 +400,11 @@ async function bootstrap(): Promise<void> {
     ...(devServerUrl === undefined ? {} : {devServerUrl}),
     ...(existsSync(windowIcon) ? {icon: windowIcon} : {}),
   });
+  /*
+   * Before it is shown, so the window is built the way the user asked rather
+   * than at the defaults and corrected a frame later.
+   */
+  await refreshCompanionSettings();
   if (companionEnabled) {
     await companion.show();
   }

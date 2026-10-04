@@ -27,6 +27,16 @@ export interface ComposeInstructionOptions {
   /** Current memory.md contents, or `''` when there is none. */
   memory: string;
   /**
+   * Prompt text for this turn only, when there is any.
+   *
+   * Appended rather than folded into `base`, because the two have different
+   * lifetimes: the identity is the profile and outlives the turn, and this is
+   * whatever the surface that asked wanted — the desktop companion asking for a
+   * shorter answer than the window. Being last is the point: an instruction that
+   * arrives after the persona is the one a model follows where the two disagree.
+   */
+  instruction?: string;
+  /**
    * Skill names this profile carries. Absent means all of them; an empty array
    * means the profile deliberately carries none, which drops the operating
    * protocol, the skills and the memory block — an agent that was not given the
@@ -60,6 +70,7 @@ export function renderSkills(skills: readonly Skill[]): string {
 export function composeInstruction({
   base,
   memory: memoryText,
+  instruction,
   skills,
   extraSkills,
 }: ComposeInstructionOptions): string {
@@ -84,6 +95,10 @@ export function composeInstruction({
     // otherwise a set of facts from a system this profile was told to ignore,
     // and an instruction to use tools it may not have.
     memory ? `# Long-term memory (memory.md)\n\n${memoryBody}` : '',
+    // Last, and after everything else that has an opinion: this is the surface
+    // the question was asked at, and it is the most specific instruction in the
+    // prompt.
+    instruction?.trim() ?? '',
   ];
 
   return sections

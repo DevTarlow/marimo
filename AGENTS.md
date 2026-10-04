@@ -104,17 +104,93 @@ unguarded write meant a corrupt index became an empty one on the very next
 message — every conversation gone from the sidebar. When you add a store, add it
 to that list.
 
+## The loop
+
+**A task is done when it is committed; the branch moves when a human says so.**
+That is the whole rule, and the rest of this section is what makes it cheap to
+follow.
+
+```bash
+# 1. While working: the narrow loop, a few seconds each.
+pnpm --filter @marimo/runtime exec vitest --watch   # one package, watching
+pnpm --filter @marimo/desktop typecheck             # ~13s, desktop only
+
+# 2. Before committing: prove the change, not the workspace.
+pnpm typecheck        # ~27s, every project including the test ones
+pnpm test             # ~34s, vitest everywhere
+
+# 3. Before pushing, or when the change touches the window:
+pnpm build            # tsc -b for every project
+pnpm build:web        # then the renderer bundle — step 3 is two commands and
+                      # `pnpm build` alone leaves the bundle stale
+MARIMO_NO_SANDBOX=1 pnpm --filter @marimo/desktop smoke   # only in a container
+```
+
+**`--watch` has to be spelled out, and the *script* cannot do it.** Each
+package's `test` script is `vitest run`, and `run` ignores a `--watch` after it —
+so `pnpm --filter @marimo/runtime test -- --watch` runs the suite once and exits,
+looking like a watcher that never fires. Bare `exec vitest` is not reliable
+either: with no TTY attached, as in an agent's shell, Vitest quietly falls back
+to running once. `exec vitest --watch` is explicit and behaves the same either
+way.
+
+**Commit when the task is verified, not when the files are saved.** One commit
+per task, and it is the agent's job to make it — nobody should have to ask. A
+commit is not a push: it is local, reversible, and the thing that makes the next
+task's diff readable.
+
+**Never push on your own initiative.** There is no remote configured in this
+checkout by default; when one is added it is
+`https://github.com/DevTarlow/marimo-agent.git`, and pushing is done when asked,
+usually after a review of the commit. If a push is refused for authentication,
+say so — do not reach for a token or rewrite a remote.
+
+Messages follow the history rather than a convention document:
+
+- Subject is a sentence, capitalised, no `feat:`/`fix:` noise. Milestone work
+  carries its tag — `M5: the desktop companion`; everything else is a plain
+  clause — `Audit: three real defects, including two I introduced`.
+- The body is where the value is: what was wrong, what it now does, and *why
+  that shape*. Written in the same voice as the comments in the code, because
+  it is the same kind of explanation with a longer shelf life.
+- No `Generated with` footer and no co-author trailer. The author is already
+  `DevTarlow`.
+- A commit that only touches documentation still gets a body if a reader would
+  otherwise wonder why it exists.
+
+**Verification scales with the change, and the ordering matters.** A
+renderer-only change needs `typecheck`, the desktop tests and `build:web` — not
+the agent's 435 tests. A change to `packages/agent` needs the lot, because that
+package is what the window *and* the headless runner both run. Anything that
+touches the preload, the IPC schemas or the built bundles needs `build:web` and
+the smoke check, because those three failing looks like something else.
+
+**Two speed notes that are worth knowing before optimising.** TypeScript's
+`-b` is not incremental here in practice — a warm `pnpm typecheck` costs about
+the same as a cold one — so scoping it to the package you touched is the only
+lever. And the suite's cost is process startup, not test count: one package's
+tests are a few seconds, all four are ~34. Vitest watches a package well; it
+watches the workspace poorly.
+
 ## Commands
 
 ```bash
 pnpm install          # the store lives in .pnpm-store, per pnpm-workspace.yaml
-pnpm build            # tsc -b for every project, then the renderer bundle
+pnpm build            # tsc -b for every project — but NOT the renderer bundle
+pnpm build:web        # the renderer bundle: `tsc -b` + vite build, desktop only
 pnpm typecheck        # including test projects
 pnpm test             # vitest, everywhere
-pnpm --filter @marimo/desktop dev     # Vite + Electron
+pnpm --filter @marimo/desktop dev     # tsc -b, then Vite + Electron
 pnpm --filter @marimo/desktop smoke   # boot a real window and prove it works
 pnpm --filter @marimo/desktop jobs-check   # prove a due job runs in the app
 ```
+
+`pnpm build` and `pnpm build:web` are not alternatives and neither implies the
+other. The root `build` is `tsc -b` alone; the renderer bundle only comes from
+the desktop package's own `build`, which is what `build:web` filters to. Running
+one and believing you ran both is how a window is tested against a bundle that
+predates the change — verified the tedious way, by watching `pnpm build` leave
+`dist/renderer/index.html` untouched.
 
 The job runner is the same binary started as plain Node, so it can be run by
 hand the way the OS timer will:

@@ -26,5 +26,10 @@ apps/desktop/release/
 
 # Local runtime state produced when running the app outside Electron's
 # userData directory. Every dev, smoke and test run uses a throwaway directory
-# under this pattern.
+# under this pattern — and so does anything scratch, including screenshots.
+#
+# Keep it to directories. A loose PNG in the repository root is *not* covered
+# by this, and one `git add -A` later it is in the tree — which is how a
+# throwaway diagnostic ends up in a release. Put scratch files in a directory
+# under this pattern instead.
 .marimo*/

@@ -98,8 +98,14 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
   }
 
   const granted = new Set(loaded.profile?.enabledTools ?? []);
-  const looking = loaded.catalog.tools.filter((tool) => tool.reach === 'look');
-  const acting = loaded.catalog.tools.filter((tool) => tool.reach === 'act');
+  /*
+   * Grouped by the grant itself, which is the one fact about a tool that cannot
+   * be out of date — it is the same value the switch is drawn from. An earlier
+   * version grouped by a hand-written "looking" or "acting" classification, and
+   * that list had already drifted from the tools it described.
+   */
+  const onByDefault = loaded.catalog.tools.filter((tool) => tool.byDefault);
+  const offByDefault = loaded.catalog.tools.filter((tool) => !tool.byDefault);
 
   return (
     <div className="settings">
@@ -124,8 +130,8 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
             not a suggestion it might ignore.
           </p>
 
-          <h4 className="settings-group">Can look</h4>
-          {looking.map((tool) => (
+          <h4 className="settings-group">On to begin with</h4>
+          {onByDefault.map((tool) => (
             <ToolRow
               key={tool.name}
               tool={tool}
@@ -135,8 +141,8 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
             />
           ))}
 
-          <h4 className="settings-group">Can change things</h4>
-          {acting.map((tool) => (
+          <h4 className="settings-group">Off until you turn it on</h4>
+          {offByDefault.map((tool) => (
             <ToolRow
               key={tool.name}
               tool={tool}
@@ -245,7 +251,7 @@ function ToolRow({
       />
       <span>
         <code className="settings-tool">{tool.name}</code>
-        <em className="settings-why">{tool.description}</em>
+        <em className="settings-why">{tool.blurb}</em>
       </span>
     </label>
   );

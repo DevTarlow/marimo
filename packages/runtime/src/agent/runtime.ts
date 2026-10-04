@@ -158,9 +158,18 @@ export class AgentRuntime {
           workspace?.path ?? this.options.paths.defaultWorkspace,
         model: activeProvider(settings.providers).model,
         ...(this.options.webSearch ? {webSearch: this.options.webSearch} : {}),
-        // The host always builds the helper tool; the profile decides whether
-        // this agent may use it, which is what the pick-list is for.
+        /*
+         * The host always builds the helper tool; the profile decides whether
+         * this agent may use it, which is what the pick-list is for.
+         */
         subagent: true,
+        /*
+         * And every service this app wires, named explicitly. A tool the host
+         * builds but the catalogue omits can never be granted — the switch for
+         * it does not exist — so the two have to be kept in step, and the test
+         * beside this file compares them.
+         */
+        jobs: true,
       }),
       skills: await this.skillCatalog(),
     };

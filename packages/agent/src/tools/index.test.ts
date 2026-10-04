@@ -12,7 +12,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
 import {toOpenAiTools} from '../models/openai-mapping.js';
-import {createTools, SAFE_DEFAULT_TOOLS} from './index.js';
+import {createTools, describeTools, SAFE_DEFAULT_TOOLS} from './index.js';
 import type {WebSearchProvider} from './web-search-tool.js';
 
 describe('createTools', () => {
@@ -389,5 +389,134 @@ describe('the safe defaults', () => {
     expect(SAFE_DEFAULT_TOOLS).toContain('read_file');
     expect(SAFE_DEFAULT_TOOLS).toContain('web_search');
     expect(SAFE_DEFAULT_TOOLS).toContain('update_memory');
+  });
+});
+
+/*
+ * The settings screen's pick-list.
+ *
+ * Two failures are possible here and both are silent. A tool without a
+ * plain-language description is a checkbox with nothing beside it — a decision
+ * nobody can make. A tool the host *builds* but the catalogue does not list can
+ * never be granted at all: the switch for it does not exist, and the capability
+ * is unreachable while looking like it was never built.
+ *
+ * The second one was real. The scheduling and skill tools were missing from the
+ * catalogue, so an agent with a job service could not be given the tools to use
+ * it.
+ */
+describe('the tool catalogue', () => {
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(process.cwd(), '.marimo-catalog-'));
+  });
+
+  afterEach(async () => {
+    await rm(workDir, {recursive: true, force: true});
+  });
+
+  function config(): AgentConfig {
+    return {
+      apiKey: 'test-key',
+      baseUrl: 'http://127.0.0.1:1',
+      model: 'deepseek-chat',
+      temperature: 0,
+      systemPrompt: 'test',
+      workspaceRoot: workDir,
+      allowPrivateNetworkFetch: false,
+    };
+  }
+
+  /** Stand-ins. Nothing in a catalogue is executed. */
+  function services(): Record<string, unknown> {
+    return {
+      jobService: {} as never,
+      skillService: {} as never,
+      discordService: {} as never,
+      deskService: {} as never,
+    };
+  }
+
+  /** Every tool the host can build, when everything is wired. */
+  function everything(): string[] {
+    return createTools(config(), {
+      memory: new MemoryStore({workspaceRoot: workDir}),
+      model: 'deepseek-chat',
+      webSearch: {search: async () => []},
+      subagent: {build: () => ({}) as never},
+      ...services(),
+    }).map((tool) => tool.name);
+  }
+
+  /*
+   * The comparison that would have caught it. Building both sides with the same
+   * services is what makes this a real check rather than two lists that happen
+   * to agree.
+   */
+  it('lists every tool the host can build', () => {
+    const listed = new Set(
+      describeTools({
+        workspaceRoot: workDir,
+        model: 'deepseek-chat',
+        webSearch: {search: async () => []},
+        subagent: true,
+        jobs: true,
+        skills: true,
+        discord: true,
+        desk: true,
+      }).map((entry) => entry.name),
+    );
+
+    const unreachable = everything().filter((name) => !listed.has(name));
+    expect(unreachable).toEqual([]);
+  });
+
+  /*
+   * Thrown rather than defaulted, so a tool added without a blurb fails here
+   * instead of appearing as a blank line on a settings screen. The message names
+   * the tool, because whoever hits it needs to know which one.
+   */
+  it('describes every tool it lists, in words for a person', () => {
+    const entries = describeTools({
+      workspaceRoot: workDir,
+      model: 'deepseek-chat',
+      webSearch: {search: async () => []},
+      subagent: true,
+      jobs: true,
+      skills: true,
+      discord: true,
+      desk: true,
+    });
+
+    expect(entries).toHaveLength(everything().length);
+    for (const entry of entries) {
+      /*
+       * Not a length threshold: "Write a note." is a perfectly good sentence and
+       * a floor high enough to look meaningful would fail it while passing a
+       * long piece of jargon. What is checked is that there *is* one, that it is
+       * written as a sentence, and — the guard that matters — that it is not
+       * simply the model's copy pasted across.
+       */
+      expect(entry.blurb.trim()).toBe(entry.blurb);
+      expect(entry.blurb.endsWith('.')).toBe(true);
+      expect(entry.blurb.charAt(0)).toBe(entry.blurb.charAt(0).toUpperCase());
+      expect(entry.blurb).not.toBe(entry.description);
+    }
+  });
+
+  it('marks exactly the safe defaults as granted out of the box', () => {
+    const entries = describeTools({
+      workspaceRoot: workDir,
+      model: 'deepseek-chat',
+      webSearch: {search: async () => []},
+      subagent: true,
+      jobs: true,
+    });
+
+    const byDefault = entries
+      .filter((entry) => entry.byDefault)
+      .map((entry) => entry.name);
+    expect(new Set(byDefault)).toEqual(new Set(SAFE_DEFAULT_TOOLS));
   });
 });

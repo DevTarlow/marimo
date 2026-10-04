@@ -1582,18 +1582,23 @@ export interface ProfileCatalog {
 /** One tool as the settings screen offers it. */
 export interface CatalogTool extends CatalogEntry {
   /**
-   * What granting this lets the agent do.
+   * What this tool does, said to the person deciding rather than to the model.
    *
-   * `act` means it can change something — the machine, the user's files, the
-   * network, or another agent. The settings screen draws the two apart because
-   * a list of twenty checkboxes with no distinction between reading a file and
-   * running a command is a list nobody can make a decision from.
-   *
-   * Anything the tools do not classify is `act`. An unknown tool presented as
-   * harmless is the one direction this can fail in that matters.
+   * `description` above is the text the model is given, and it is written for a
+   * reader that already knows what a system prompt is. This is the same fact for
+   * somebody who has never seen an agent's tool list, and the two are kept apart
+   * because rewriting one for the other would make it worse at its own job.
    */
-  reach: 'look' | 'act';
-  /** Whether a brand-new agent is granted it. */
+  blurb: string;
+  /**
+   * Whether a brand-new agent is granted it.
+   *
+   * The settings screen groups by this and nothing else, because it is the one
+   * fact about a tool that cannot be wrong: it is the same value the grant is
+   * computed from. An earlier version classified tools as "looking" or "acting"
+   * from a hand-written list of names, and the list had already drifted from the
+   * tools it described.
+   */
   byDefault: boolean;
 }
 

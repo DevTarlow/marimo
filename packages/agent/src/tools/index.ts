@@ -102,6 +102,19 @@ export function describeTools(options: {
   model: string;
   webSearch?: WebSearchProvider;
   subagent?: boolean;
+  /**
+   * Which of the app's services are wired.
+   *
+   * These have to be named, because the tools they bring are only built when the
+   * service is there — and a tool that is built but not *listed* can never be
+   * granted, which is a capability that exists and is unreachable. That is not
+   * hypothetical: the scheduling and skill tools were missing from this list
+   * until a test compared it against what the host actually builds.
+   */
+  jobs?: boolean;
+  skills?: boolean;
+  discord?: boolean;
+  desk?: boolean;
 }): CatalogTool[] {
   const built = createTools(
     {
@@ -122,6 +135,14 @@ export function describeTools(options: {
       ...(options.subagent === true
         ? {subagent: {build: () => ({}) as never}}
         : {}),
+      /*
+       * Stand-ins. Nothing here is executed — a description is a property of the
+       * tool — so the services only need to exist, not to work.
+       */
+      ...(options.jobs === true ? {jobService: {} as never} : {}),
+      ...(options.skills === true ? {skillService: {} as never} : {}),
+      ...(options.discord === true ? {discordService: {} as never} : {}),
+      ...(options.desk === true ? {deskService: {} as never} : {}),
     },
   );
 
@@ -129,43 +150,90 @@ export function describeTools(options: {
   return built.map((tool) => ({
     name: tool.name,
     description: tool.description,
-    /*
-     * Acting if it is on the list *or* if a fresh profile is not granted it.
-     * The second half is what makes this fail safe: a tool nobody classified is
-     * shown as something to decide about, rather than as harmless.
-     */
-    reach:
-      ACTING_TOOLS.has(tool.name) || !granted.has(tool.name) ? 'act' : 'look',
+    blurb: blurbFor(tool.name),
     byDefault: granted.has(tool.name),
   }));
 }
 
 /**
- * The tools that can change something, named rather than inferred.
+ * What a tool does, in words for somebody who has never seen a tool list.
  *
- * A list rather than a rule — "does it write?" is not answerable from a tool's
- * shape, and a rule that guessed would eventually guess wrong in the direction
- * of calling something harmless. Anything absent from this set is presented as
- * merely looking, so a new tool has to be *added* here to be described as
- * acting... which is the wrong way round, and is why `describeTools` unions this
- * with everything outside `SAFE_DEFAULT_TOOLS`.
+ * A separate map rather than a rewrite of the descriptions above, which are
+ * addressed to the model and are better for it — "the same contents are already
+ * included in your system prompt" is a useful sentence to an agent and a
+ * baffling one to a person.
+ *
+ * `blurbFor` throws on a name it does not know, and the test beside this file
+ * builds every tool and calls it. That is the whole guard: adding a tool without
+ * a blurb is a failing test rather than a settings screen with a blank line on
+ * it, which is what it would otherwise be — a checkbox nobody can make a
+ * decision about.
  */
-const ACTING_TOOLS = new Set<string>([
-  'write_file',
-  'run_shell',
-  'http_fetch',
-  'spawn_agent',
-  'create_job',
-  'update_job',
-  'delete_job',
-  'save_skill',
-  'create_discord_channel',
-  'post_to_discord',
-  'read_discord_messages',
-  'add_todo',
-  'complete_todo',
-  'save_note',
-]);
+function blurbFor(name: string): string {
+  const blurb = TOOL_BLURBS[name];
+  if (blurb === undefined) {
+    throw new Error(
+      `No plain-language description for the tool "${name}". Add one to ` +
+        'TOOL_BLURBS: the settings screen shows it beside the switch, and a ' +
+        'switch with nothing beside it is one nobody can decide about.',
+    );
+  }
+  return blurb;
+}
+
+const TOOL_BLURBS: Record<string, string> = {
+  current_time:
+    'What time it is, and what day. Without this it has no idea, and would guess.',
+  read_file:
+    'Open a text file in your folder and read it.',
+  list_dir:
+    'See what is in a folder, with file sizes.',
+  search_knowledge_base:
+    'Search your folder for a word or phrase and show the lines it appears on.',
+  write_file:
+    'Create a file, or overwrite one. It asks before replacing a file that already exists.',
+  run_shell:
+    'Run a command on your computer. This is the broadest thing on this list — ' +
+    'it asks every time, and it is worth leaving off unless you want it.',
+  http_fetch:
+    'Download a web page it has been given the address of. Unlike a search, the ' +
+    'address can be anywhere — including inside your own network — so it is off ' +
+    'until you ask for it.',
+  web_search:
+    'Search the web and read the results. No account or key needed.',
+  read_memory:
+    'Read its own notes about you and this folder.',
+  update_memory:
+    'Write something down to remember for next time — a preference, a decision, ' +
+    'how something is set up. It keeps these in a file in your folder.',
+  prune_memory:
+    'Tidy those notes up when they get repetitive or out of date, keeping a copy ' +
+    'of the previous version.',
+  spawn_agent:
+    'Hand a piece of work to a helper with the same abilities, and get its answer ' +
+    'back. Helpers cannot see your conversation and cannot ask you anything.',
+  list_jobs: 'See what it has been asked to do on a schedule.',
+  create_job:
+    'Set up something to run on its own later — a summary every morning, a check ' +
+    'every hour. It asks before creating one.',
+  update_job: 'Change when a scheduled job runs, or what it does.',
+  delete_job: 'Remove a scheduled job.',
+  save_skill:
+    'Write down a procedure it worked out, so it can follow the same steps next ' +
+    'time instead of working them out again.',
+  list_todos: 'See the to-do list.',
+  add_todo: 'Add something to the to-do list.',
+  update_todo: 'Tick something off, or change it.',
+  remove_todo: 'Delete something from the to-do list.',
+  list_notes: 'Read the notes it has kept for you.',
+  add_note: 'Write a note.',
+  update_note: 'Edit a note.',
+  remove_note: 'Delete a note.',
+  send_discord_message: 'Post a message to your Discord server.',
+  read_discord_messages: 'Read recent messages in a Discord channel.',
+  list_discord_channels: 'See which Discord channels it can reach.',
+};
+
 
 export interface ToolDependencies {
   /** Shared with the agent's instruction provider, so memory stays one file. */

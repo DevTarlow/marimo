@@ -189,6 +189,22 @@ async function main() {
       ok('the background-service row answered, and is off on a fresh install');
     }
 
+    /*
+     * The scheduling tools are the specific ones that were unreachable, so they
+     * are the specific ones asserted. A count alone would pass on a catalogue
+     * that listed eleven read-only tools and nothing else.
+     */
+    const needed = ['read_file', 'write_file', 'run_shell', 'spawn_agent', 'create_job'];
+    const missing = needed.filter((name) => !probe.catalogNames?.includes(name));
+    if (missing.length > 0 || probe.catalogBlurbs !== true) {
+      fail(
+        `the tool catalogue is incomplete: missing ${missing.join(', ') || '(none)'}` +
+          `, blurbs ${String(probe.catalogBlurbs)}`,
+      );
+    } else {
+      ok(`the tool catalogue offers ${String(probe.catalogNames?.length)} tools`);
+    }
+
     ok(`the theme resolved to ${probe.theme}`);
     }
 
@@ -394,6 +410,18 @@ const PROBE = `(async () => {
     const service = await window.marimo.call('service.status', {});
     result.serviceInstalled = service.installed;
     result.serviceKeysReadable = service.keysReadable;
+
+    /*
+     * The catalogue the settings screen draws. Asserted because a tool the host
+     * builds but the catalogue omits is a capability that exists and cannot be
+     * granted: the switch for it does not exist. That happened — the scheduling
+     * tools were missing — and it is invisible from the chat window.
+     */
+    const catalog = await window.marimo.call('profiles.catalog', {});
+    result.catalogNames = catalog.tools.map((tool) => tool.name);
+    result.catalogBlurbs = catalog.tools.every(
+      (tool) => typeof tool.blurb === 'string' && tool.blurb.length > 0,
+    );
 
     const {messages, pending} = await window.marimo.call('sessions.get', {
       profileId: activeProfileId,

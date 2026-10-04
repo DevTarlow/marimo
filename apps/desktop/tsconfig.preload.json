@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // A sandboxed preload must be CommonJS. The inherited `module: NodeNext`
+    // already emits CommonJS for a `.cts` file, so only one thing changes:
+    // `verbatimModuleSyntax` has to be off, because it forbids ECMAScript import
+    // syntax in a CommonJS file and `import type` is exactly how this file reads
+    // the protocol's types without emitting a `require` for an ESM-only package.
+    "verbatimModuleSyntax": false,
+    "rootDir": "src/preload",
+    "outDir": "dist/preload",
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"]
+  },
+  "include": ["src/preload/**/*.cts"]
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@marimo/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Marimo Agent Electron shell: the chat window, the desktop companion, and the agent host.",
+  "productName": "Marimo Agent",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "tsc -b && tsx scripts/dev.ts",
+    "build": "tsc -b && vite build",
+    "start": "tsx scripts/dev.ts",
+    "run-due": "node dist/runner/run-due.js --run-due",
+    "typecheck": "tsc -b tsconfig.runner.json && tsc -p tsconfig.renderer.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@marimo/agent": "workspace:*",
+    "@marimo/protocol": "workspace:*",
+    "@marimo/runtime": "workspace:*",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^44.3.0",
+    "tsx": "^4.23.13",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
+  }
+}

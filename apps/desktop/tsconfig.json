@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // `src` rather than `src/main`, because the main process and the window both
+    // need `src/shared`. The extra segment in `rootDir` is also what keeps the
+    // output at `dist/main/main.js`, which is what `package.json` points at.
+    "rootDir": "src",
+    "outDir": "dist",
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["src/main/**/*.ts", "src/shared/**/*.ts"],
+  "references": [
+    {"path": "../../packages/protocol"},
+    {"path": "../../packages/agent"},
+    {"path": "../../packages/runtime"},
+    {"path": "./tsconfig.preload.json"}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The same `rootDir` and `outDir` as the main process, so the shared module
+    // keeps one output path. `src/shared` is owned by `tsconfig.json` and reached
+    // through the reference below rather than compiled twice — two projects
+    // emitting the same file is the collision `tsc -b` refuses to guess about.
+    "rootDir": "src",
+    "outDir": "dist",
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["src/runner/**/*.ts"],
+  "references": [{"path": "./tsconfig.json"}]
+}

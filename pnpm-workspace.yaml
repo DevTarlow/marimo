@@ -1,0 +1,44 @@
+packages:
+  - packages/*
+  - apps/*
+
+# The package store and npm's cache live inside the repository rather than in
+# $HOME. The environment this project is developed in only permits writes under
+# the workspace, and a self-contained store also makes an offline reinstall
+# possible. Both directories are gitignored.
+#
+# pnpm 11 reads these from here rather than from `.npmrc`; the pnpm-specific
+# settings in this file are camelCase, matching `allowBuilds` below.
+storeDir: .pnpm-store
+cacheDir: .npmcache
+
+# pnpm blocks dependency build scripts by default. esbuild fetches its platform
+# binary in one, protobufjs and @google/genai run install-time codegen, and
+# Electron downloads the browser binary the app runs on.
+#
+# The two denials are deliberate. `@google/adk` pulls `dockerode` for its
+# container-based code-execution tool, which this app does not use, and
+# `cpu-features`/`ssh2` are optional native accelerators for ssh2's tunnelling.
+# Saying `false` rather than leaving them out keeps the install deterministic
+# and means nobody needs a C toolchain to build Marimo Agent.
+allowBuilds:
+  '@google/genai': true
+  cpu-features: false
+  electron: true
+  esbuild: true
+  protobufjs: true
+  ssh2: false
+
+# Exactly one Zod. `@google/adk`'s `FunctionTool` infers each tool's
+# execute-argument type from its schema through a conditional type, and that
+# inference depends on Zod's nominal classes. With two installed copies every
+# tool fails to infer, and TypeScript does not stop there: it burned more than
+# 3 GB of heap and aborted instead of reporting the mismatch. ADK asks for
+# `^4.2.1`, so the override keeps a single copy for the whole workspace.
+overrides:
+  zod: 4.6.4
+
+# Required because the override above pins a version newer than the release-age
+# policy's cutoff, which would otherwise reject the lockfile.
+minimumReleaseAgeExclude:
+  - zod@4.6.4

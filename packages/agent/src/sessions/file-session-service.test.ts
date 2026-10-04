@@ -1,0 +1,478 @@
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+
+import {createEvent} from '@google/adk';
+import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+
+import {FileSessionService} from './file-session-service.js';
+
+const APP = 'marimo';
+const USER = 'local';
+
+describe('FileSessionService', () => {
+  let rootDir: string;
+  let service: FileSessionService;
+
+  beforeEach(async () => {
+    rootDir = await mkdtemp(join(process.cwd(), '.marimo-test-'));
+    service = new FileSessionService({rootDir});
+  });
+
+  afterEach(async () => {
+    await rm(rootDir, {recursive: true, force: true});
+  });
+
+  async function newSession(sessionId = 'session-1') {
+    return await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId,
+    });
+  }
+
+  function userEvent(text: string) {
+    return createEvent({
+      author: 'user',
+      content: {role: 'user', parts: [{text}]},
+    });
+  }
+
+  function modelEvent(text: string) {
+    return createEvent({
+      author: 'marimo',
+      content: {role: 'model', parts: [{text}]},
+    });
+  }
+
+  it('creates a session with an empty event log and an index entry', async () => {
+    const session = await newSession();
+    expect(session.id).toBe('session-1');
+    expect(session.events).toEqual([]);
+
+    const entry = await service.getIndexEntry('session-1');
+    expect(entry?.title).toBe('New chat');
+    expect(entry?.messageCount).toBe(0);
+    expect(await service.listEvents('session-1')).toEqual([]);
+  });
+
+  it('appends events, restores the event brand, and titles from the first user message', async () => {
+    const session = await newSession();
+    await service.appendEvent({
+      session,
+      event: userEvent('How do I read a file in Node?'),
+    });
+    await service.appendEvent({session, event: modelEvent('Use readFile.')});
+
+    const events = await service.listEvents('session-1');
+    expect(events).toHaveLength(2);
+    expect(events[0]?.content?.parts?.[0]?.text).toBe(
+      'How do I read a file in Node?',
+    );
+    // The brand is a global symbol that JSON cannot carry; it must be restored
+    // so ADK code that type-guards a loaded event still recognises it.
+    expect(
+      (events[0] as unknown as Record<symbol, unknown>)[
+        Symbol.for('google.adk.event')
+      ],
+    ).toBe(true);
+
+    const entry = await service.getIndexEntry('session-1');
+    expect(entry?.title).toBe('How do I read a file in Node?');
+    expect(entry?.messageCount).toBe(2);
+  });
+
+  it('truncates a long first message when deriving the title', async () => {
+    const session = await newSession();
+    const long = 'x'.repeat(200);
+    await service.appendEvent({session, event: userEvent(long)});
+
+    const entry = await service.getIndexEntry('session-1');
+    expect(entry?.title.length).toBe(60);
+    expect(entry?.title.endsWith('…')).toBe(true);
+  });
+
+  it('reconstructs state and events for a session lookup', async () => {
+    const session = await newSession();
+    await service.appendEvent({session, event: userEvent('hello')});
+
+    const loaded = await service.getSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'session-1',
+    });
+    expect(loaded?.events).toHaveLength(1);
+    expect(loaded?.appName).toBe(APP);
+    expect(loaded?.lastUpdateTime).toBeGreaterThan(0);
+  });
+
+  it('returns undefined for an unknown session and an empty log for a missing file', async () => {
+    expect(
+      await service.getSession({
+        appName: APP,
+        userId: USER,
+        sessionId: 'nope',
+      }),
+    ).toBeUndefined();
+    expect(await service.listEvents('nope')).toEqual([]);
+  });
+
+  it('skips a corrupt line instead of losing the whole conversation', async () => {
+    const session = await newSession();
+    await service.appendEvent({session, event: userEvent('first')});
+    await service.appendEvent({session, event: modelEvent('second')});
+
+    // Simulate a truncated write, which is what a hard kill leaves behind.
+    const file = join(rootDir, 'session-1.jsonl');
+    await writeFile(
+      file,
+      `${await readFile(file, 'utf8')}{"broken":\n`,
+      'utf8',
+    );
+
+    const events = await service.listEvents('session-1');
+    expect(events).toHaveLength(2);
+  });
+
+  it('lists sessions newest first and honours a limit', async () => {
+    await newSession('older');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await newSession('newer');
+
+    const listed = await service.listSessions({appName: APP, userId: USER});
+    expect(listed.sessions.map((session) => session.id)).toEqual([
+      'newer',
+      'older',
+    ]);
+    expect(listed.totalItems).toBe(2);
+    expect(listed.sessions[0]?.events).toEqual([]);
+
+    const limited = await service.listSessions({
+      appName: APP,
+      userId: USER,
+      limit: 1,
+    });
+    expect(limited.sessions).toHaveLength(1);
+    expect(limited.totalPages).toBe(2);
+  });
+
+  it('deletes both the event log and the index entry', async () => {
+    const session = await newSession();
+    await service.appendEvent({session, event: userEvent('bye')});
+    await service.deleteSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'session-1',
+    });
+
+    expect(await service.getIndexEntry('session-1')).toBeUndefined();
+    expect(await service.listEvents('session-1')).toEqual([]);
+  });
+
+  it('ignores a corrupt index file rather than throwing', async () => {
+    await writeFile(join(rootDir, 'index.json'), 'not json', 'utf8');
+    expect(await service.getIndex()).toEqual([]);
+  });
+
+  it('records a per-conversation model at creation and on change', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'with-model',
+      state: {model: 'deepseek-v4-pro'},
+    });
+    expect((await service.getIndexEntry('with-model'))?.model).toBe(
+      'deepseek-v4-pro',
+    );
+
+    const updated = await service.setSessionModel(
+      'with-model',
+      'deepseek-flash',
+    );
+    expect(updated?.model).toBe('deepseek-flash');
+    // Persisted, not just returned: a restart must keep the choice.
+    expect((await service.getIndexEntry('with-model'))?.model).toBe(
+      'deepseek-flash',
+    );
+  });
+
+  it('leaves the model unset when the create request has none', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'no-model',
+      state: {model: '   '},
+    });
+    const entry = await service.getIndexEntry('no-model');
+    expect(entry?.model).toBeUndefined();
+    expect(entry).not.toHaveProperty('model');
+  });
+
+  it('reports an unknown session when setting a model', async () => {
+    expect(
+      await service.setSessionModel('missing', 'deepseek-flash'),
+    ).toBeUndefined();
+  });
+
+  it('never resurrects a deleted session from a late event', async () => {
+    await newSession('doomed');
+    await service.deleteSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'doomed',
+    });
+
+    // The turn that was in flight can still emit one last event after the
+    // delete. It must not re-register the conversation, least of all without a
+    // profile, which the next launch would adopt into whichever agent was active.
+    await service.appendEvent({
+      session: {
+        id: 'doomed',
+        appName: APP,
+        userId: USER,
+        state: {},
+        events: [],
+        lastUpdateTime: 0,
+      },
+      event: userEvent('one last thing'),
+    });
+
+    expect(await service.getIndexEntry('doomed')).toBeUndefined();
+    expect(await service.getIndex()).toEqual([]);
+  });
+
+  it('stamps the profile that created a conversation', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'owned',
+      state: {profileId: 'profile-a'},
+    });
+    expect((await service.getIndexEntry('owned'))?.profileId).toBe('profile-a');
+  });
+
+  it('stamps the folder a conversation was started in', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'filed',
+      state: {workspaceId: 'workspace-a'},
+    });
+    expect((await service.getIndexEntry('filed'))?.workspaceId).toBe(
+      'workspace-a',
+    );
+  });
+
+  it('leaves the folder unset when there was none to record', async () => {
+    await newSession('unfiled');
+    expect(
+      (await service.getIndexEntry('unfiled'))?.workspaceId,
+    ).toBeUndefined();
+  });
+
+  /**
+   * The sidebar nests conversations by this id and shows anything with an
+   * unknown one under "Other chats", so adopting a legacy conversation must not
+   * disturb it either way.
+   */
+  it('keeps the folder stamp through adoption and later writes', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'filed',
+      state: {workspaceId: 'workspace-a'},
+    });
+    await service.adoptUnownedSessions('profile-a');
+    await service.setSessionModel('filed', 'deepseek-chat');
+
+    const entry = await service.getIndexEntry('filed');
+    expect(entry?.workspaceId).toBe('workspace-a');
+    expect(entry?.profileId).toBe('profile-a');
+  });
+
+  it('re-files a conversation under another folder', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'filed',
+      state: {workspaceId: 'workspace-a'},
+    });
+
+    await service.setSessionWorkspace('filed', 'workspace-b');
+    expect((await service.getIndexEntry('filed'))?.workspaceId).toBe(
+      'workspace-b',
+    );
+  });
+
+  it('unfiles a conversation, which is how it reaches Other chats', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'filed',
+      state: {workspaceId: 'workspace-a'},
+    });
+
+    await service.setSessionWorkspace('filed', undefined);
+    const entry = await service.getIndexEntry('filed');
+    expect(entry?.workspaceId).toBeUndefined();
+    // Absent rather than a sentinel: a conversation that was never filed and
+    // one that was moved out of every folder have to look identical.
+    expect(Object.hasOwn(entry ?? {}, 'workspaceId')).toBe(false);
+  });
+
+  /**
+   * `updatedAt` is what the sidebar sorts on and what "3h ago" reports, and both
+   * mean when something last happened *in* the conversation. Moving a chat is
+   * filing, so it must not touch either.
+   */
+  it('leaves the conversation timestamps alone when it moves', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'filed',
+      state: {workspaceId: 'workspace-a'},
+    });
+    const before = await service.getIndexEntry('filed');
+
+    await service.setSessionWorkspace('filed', 'workspace-b');
+
+    const after = await service.getIndexEntry('filed');
+    expect(after?.updatedAt).toBe(before?.updatedAt);
+    expect(after?.createdAt).toBe(before?.createdAt);
+  });
+
+  it('reports an unknown conversation rather than inventing an entry', async () => {
+    expect(
+      await service.setSessionWorkspace('no-such-session', 'workspace-a'),
+    ).toBeUndefined();
+    expect(await service.getIndex()).toEqual([]);
+  });
+
+  describe('renaming a conversation', () => {
+    it('replaces the title the first message produced', async () => {
+      const session = await newSession();
+      await service.appendEvent({session, event: userEvent('fix the build')});
+      expect((await service.getIndexEntry('session-1'))?.title).toBe(
+        'fix the build',
+      );
+
+      const renamed = await service.renameSession('session-1', 'Release prep');
+      expect(renamed?.title).toBe('Release prep');
+      expect((await service.getIndexEntry('session-1'))?.title).toBe(
+        'Release prep',
+      );
+    });
+
+    /**
+     * The derived title is a guess at what a conversation is about, and the one
+     * case where it must not win is a chat the user named before saying
+     * anything in it — otherwise the name they chose is thrown away by the first
+     * message that arrives.
+     */
+    it('survives the first message of a chat named before it was used', async () => {
+      const session = await newSession();
+      await service.renameSession('session-1', 'Tax paperwork');
+      await service.appendEvent({session, event: userEvent('what do I owe?')});
+
+      expect((await service.getIndexEntry('session-1'))?.title).toBe(
+        'Tax paperwork',
+      );
+    });
+
+    /**
+     * `updatedAt` is what the sidebar sorts on and what "3h ago" reports, and
+     * both mean when something last happened *in* the conversation. Naming a
+     * chat is not a turn, exactly as moving it is not.
+     */
+    it('leaves the timestamps alone', async () => {
+      await newSession();
+      const before = await service.getIndexEntry('session-1');
+
+      await service.renameSession('session-1', 'Named later');
+
+      const after = await service.getIndexEntry('session-1');
+      expect(after?.updatedAt).toBe(before?.updatedAt);
+      expect(after?.createdAt).toBe(before?.createdAt);
+    });
+
+    it('reports an unknown conversation rather than inventing an entry', async () => {
+      expect(
+        await service.renameSession('no-such-session', 'Anything'),
+      ).toBeUndefined();
+      expect(await service.getIndex()).toEqual([]);
+    });
+  });
+
+  /**
+   * The source is what files a conversation the app started under its own
+   * sidebar heading, so it has to survive the index round trip and mean nothing
+   * when it is a value this app does not know.
+   */
+  describe('a conversation the app started', () => {
+    it('records the source it was created with', async () => {
+      await service.createSession({
+        appName: APP,
+        userId: USER,
+        sessionId: 'from-discord',
+        state: {source: 'discord'},
+      });
+
+      expect((await service.getIndexEntry('from-discord'))?.source).toBe(
+        'discord',
+      );
+    });
+
+    it('leaves it unset for a conversation the user started', async () => {
+      await newSession('typed');
+      expect((await service.getIndexEntry('typed'))?.source).toBeUndefined();
+    });
+
+    it('ignores a source this app does not know', async () => {
+      await service.createSession({
+        appName: APP,
+        userId: USER,
+        sessionId: 'mystery',
+        state: {source: 'telepathy'},
+      });
+
+      // Stored absent rather than as-is: an unknown value would reach the
+      // sidebar as a heading it has no name for.
+      const entry = await service.getIndexEntry('mystery');
+      expect(entry?.source).toBeUndefined();
+      expect(Object.hasOwn(entry ?? {}, 'source')).toBe(false);
+    });
+  });
+
+  it('adopts unowned conversations once, then leaves them alone', async () => {
+    await newSession('legacy');
+    expect(await service.adoptUnownedSessions('profile-a')).toBe(1);
+    expect((await service.getIndexEntry('legacy'))?.profileId).toBe(
+      'profile-a',
+    );
+    // A second launch has nothing left to claim.
+    expect(await service.adoptUnownedSessions('profile-b')).toBe(0);
+    expect((await service.getIndexEntry('legacy'))?.profileId).toBe(
+      'profile-a',
+    );
+  });
+
+  it('deletes only the conversations a profile owns', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'a-1',
+      state: {profileId: 'profile-a'},
+    });
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'b-1',
+      state: {profileId: 'profile-b'},
+    });
+
+    expect(await service.deleteSessionsForProfile('profile-a')).toEqual([
+      'a-1',
+    ]);
+    expect(await service.getIndexEntry('a-1')).toBeUndefined();
+    expect(await service.getIndexEntry('b-1')).toBeDefined();
+  });
+});

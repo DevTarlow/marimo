@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    {"path": "./packages/protocol"},
+    {"path": "./packages/agent"},
+    {"path": "./packages/runtime"},
+    // The runner project, which references the main process's project: building
+    // from here compiles the packages, the main process, the preload and the
+    // runner, in dependency order.
+    {"path": "./apps/desktop/tsconfig.runner.json"}
+  ]
+}

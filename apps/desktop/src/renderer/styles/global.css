@@ -1,0 +1,87 @@
+/**
+ * Base styles and the few shared primitives.
+ *
+ * Deliberately small. Everything specific to the chat surface arrives with the
+ * chat surface; this file only establishes the page, the type scale and the
+ * focus treatment, so that a component never has to restate them.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * The app is a window, not a document: dragging the page around or selecting
+ * chrome text is never what was meant. Text the user is meant to read and copy
+ * — messages, code, file contents — opts back in where it is rendered.
+ */
+body {
+  user-select: none;
+  overflow: hidden;
+}
+
+/**
+ * One focus treatment for the whole app.
+ *
+ * `:focus-visible` rather than `:focus`, so a mouse click does not leave a ring
+ * behind while a keyboard user still gets one. Removing outlines without putting
+ * something in their place is the change that makes an app unusable without a
+ * mouse, so this rule exists rather than a `outline: none` per component.
+ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  color: var(--text-faint);
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--bg);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

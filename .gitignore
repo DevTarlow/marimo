@@ -1,0 +1,24 @@
+node_modules/
+dist/
+*.log
+
+# Install caches, kept inside the repo because this project is developed in an
+# environment that only permits writes under the workspace. `.npmrc` points the
+# pnpm store and npm's cache here; the XDG_* variables the pnpm wrapper exports
+# cover the rest.
+.pnpm-store/
+.npmcache/
+.pnpm-home/
+.electron-cache/
+.xdg-cache/
+.xdg-data/
+.xdg-config/
+.xdg-state/
+
+# TypeScript incremental build state.
+*.tsbuildinfo
+
+# Local runtime state produced when running the app outside Electron's
+# userData directory. Every dev, smoke and test run uses a throwaway directory
+# under this pattern.
+.marimo*/

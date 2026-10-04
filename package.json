@@ -1,0 +1,25 @@
+{
+  "name": "marimo-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Marimo Agent — a minimal, always-on desktop agent you bolt capabilities onto.",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @marimo/desktop dev",
+    "build": "tsc -b",
+    "build:web": "pnpm --filter @marimo/desktop build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "smoke": "pnpm --filter @marimo/desktop smoke",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "lib": ["ES2023"],
+    "types": []
+  },
+  "include": ["src/**/*.ts"],
+  // This package's pure code is tested from beside the runner that can execute
+  // it (`apps/desktop/tests`), so a file here must never be one — but a stray
+  // test must not end up compiled into `dist` either.
+  "exclude": ["src/**/*.test.ts"]
+}

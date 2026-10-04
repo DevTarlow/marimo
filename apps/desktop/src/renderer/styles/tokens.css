@@ -1,0 +1,133 @@
+/**
+ * Design tokens.
+ *
+ * Every colour, radius and spacing step the UI uses is declared here once, so a
+ * component stylesheet never names a colour of its own. That is what makes the
+ * light theme a second block rather than a hunt through component styles, and it
+ * is why the two blocks below define exactly the same set of names: a token that
+ * exists in one and not the other is a component that renders invisibly in one
+ * mode, which is a bug that only shows up for half the users.
+ *
+ * The theme is selected by `data-theme` on `<html>`, which the renderer sets from
+ * the resolved answer the main process reports — `system` is resolved against the
+ * OS in the main process, so both windows and the OS agree about which way it
+ * went.
+ *
+ * Contrast: body text is at least 4.5:1 against the surface it sits on, and the
+ * muted steps stay above 3:1, because they carry real information rather than
+ * decoration. `--accent-contrast` is the text painted *on* the accent, and is
+ * chosen by luminance against a user-chosen accent rather than hard-coded here.
+ */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0b0d10;
+  --bg-elevated: #12151a;
+  --surface: #14171c;
+  --surface-hover: #1a1e25;
+  --border: #23272e;
+  --border-strong: #2e343d;
+
+  --text: #e6e9ef;
+  --text-muted: #9aa2b1;
+  --text-faint: #6b7383;
+
+  --accent: #4f8cff;
+  --accent-hover: #6ea0ff;
+  --accent-soft: rgba(79, 140, 255, 0.14);
+  --accent-border: rgba(79, 140, 255, 0.4);
+  --accent-contrast: #06101f;
+
+  --success: #3fbf8f;
+  --warning: #e0b341;
+  --danger: #f0616d;
+  --danger-soft: rgba(240, 97, 109, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f6f7f9;
+  --bg-elevated: #ffffff;
+  --surface: #ffffff;
+  --surface-hover: #eef0f4;
+  --border: #dfe3ea;
+  --border-strong: #c6ccd8;
+
+  --text: #16191f;
+  --text-muted: #5a6273;
+  --text-faint: #7d8494;
+
+  --accent: #2f6fe0;
+  --accent-hover: #2a62c7;
+  --accent-soft: rgba(47, 111, 224, 0.1);
+  --accent-border: rgba(47, 111, 224, 0.35);
+  --accent-contrast: #ffffff;
+
+  --success: #1f7a56;
+  --warning: #8a5a06;
+  --danger: #c12a3c;
+  --danger-soft: rgba(193, 42, 60, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.08);
+  --shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
+}
+
+/* Shared by both themes: shape, spacing, type. */
+:root {
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /*
+   * System fonts first. Marimo Agent ships no webfont: a bundled face is a
+   * download on first run and a licence to track, and every platform the app
+   * targets already has a good UI sans installed.
+   */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', 'Ubuntu',
+    'Helvetica Neue', sans-serif;
+  --font-mono:
+    'SFMono-Regular', 'JetBrains Mono', 'Menlo', 'Consolas', 'Liberation Mono',
+    monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12.5px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+
+  --sidebar-width: 272px;
+  --content-width: 760px;
+
+  --focus-ring: 0 0 0 3px var(--accent-soft);
+}
+
+/*
+ * A user who has asked their system for less motion gets less motion — and gets
+ * it from one place, rather than each component remembering to check.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-fast: 0ms;
+    --transition: 0ms;
+  }
+}
+
+:root {
+  --transition-fast: 120ms ease;
+  --transition: 180ms ease;
+}

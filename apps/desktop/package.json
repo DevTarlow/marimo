@@ -16,7 +16,9 @@
     "smoke": "node scripts/smoke.mjs",
     "jobs-check": "node scripts/jobs-check.mjs",
     "package": "pnpm build && electron-builder --linux AppImage",
-    "package:dir": "pnpm build && electron-builder --dir"
+    "package:dir": "pnpm build && electron-builder --dir",
+    "package:win": "pnpm build && electron-builder --win nsis",
+    "package:mac": "pnpm build && electron-builder --mac dmg"
   },
   "dependencies": {
     "@marimo/agent": "workspace:*",
@@ -65,7 +67,25 @@
       "description": "A chat window, a floating desktop companion, and a background runner that keeps scheduled jobs going while the app is closed."
     },
     "executableName": "marimo-agent",
-    "asar": false
+    "asar": false,
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/marimo-logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities",
+      "icon": "assets/marimo-logo.png"
+    }
   },
   "//": "asar is off deliberately. The job runner is this same binary started with ELECTRON_RUN_AS_NODE=1, and in that mode Electron does not patch `fs` to read inside an asar archive \u2014 reading one fails with \"Invalid package\". So a packaged app with asar on has a runner that cannot start, which is the whole of \"jobs run while the app is closed\" broken in every release and working perfectly in development."
 }

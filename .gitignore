@@ -22,6 +22,7 @@ dist/
 # tree here — hundreds of megabytes of build product that is reproducible from
 # the source beside it.
 apps/desktop/release/
+.electron-builder-cache/
 
 # Local runtime state produced when running the app outside Electron's
 # userData directory. Every dev, smoke and test run uses a throwaway directory

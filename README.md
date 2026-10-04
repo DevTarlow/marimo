@@ -3,26 +3,34 @@
 A standalone desktop AI agent you can bolt capabilities onto.
 
 Marimo Agent is a chat window with a marimo moss ball living in it, a minimal
-harness that runs one turn at a time, and — when you want it — a small floating
-companion that sits on your desktop and answers in bubbles above itself. It runs
-on your machine, with your own API key or a local model, and nothing about it
-requires an account.
+harness that runs one turn at a time, and a small floating companion that sits on
+your desktop and answers in bubbles above itself. It runs on your machine, with
+your own API key or a local model, and nothing about it requires an account.
 
-**It is early.** The engine, the stores and the shell are in place; the
-conversation surface, the capability panels and the companion are next. The
-sections below say what works and what does not, because a README that describes
-the intention rather than the build is worse than no README.
+Two things make it different from a chat window with a plugin folder. **Nothing
+is on until you turn it on** — a fresh install can read your files and search the
+web, and everything with reach (writing, running commands, fetching an arbitrary
+URL, spawning a helper) is granted deliberately, per agent. And **it keeps
+working when the window is closed**: scheduled jobs run from a background service
+whether or not the app is open.
 
 ## What works today
 
 | | |
 |---|---|
-| ✅ | The Electron shell: a sandboxed window, a validated IPC bridge, light and dark themes with OS following |
+| ✅ | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a conversation rail, light and dark following the OS or chosen |
 | ✅ | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming provider, 4 backends, ~30 tools, skills, `memory.md`, JSONL conversations |
-| ✅ | The stores: jobs, profiles, settings, skills — with format versioning that refuses to overwrite a document it cannot read |
-| ✅ | Secrets in the OS keychain, with a plain-text opt-in for the case where there is no keychain |
-| ✅ | The headless job runner: finds due jobs from a terminal with no display, and exits non-zero when it cannot read them |
-| 🚧 | The chat UI, the capability toggles, MCP servers, sub-agents, the floating companion, packaging |
+| ✅ | Approvals that survive a restart, because a pending call is derived from the stored conversation rather than held in memory |
+| ✅ | MCP connectors: add one by pasting a command, test it before saving, and choose whether to trust it — untrusted servers ask before every call |
+| ✅ | Helper agents: `spawn_agent` hands a separable piece of work to a sub-agent that shares the conversation, so its approvals are visible and its words are labelled |
+| ✅ | Per-agent capabilities: every tool is a switch, and a tool that is off is not offered to the model at all |
+| ✅ | The stores: jobs, profiles, settings, skills, memory proposals — with format versioning that refuses to overwrite a document it cannot read |
+| ✅ | Secrets in the OS keychain, with a plain-text opt-in for the machine with no keychain and for running jobs while the app is closed |
+| ✅ | Scheduled jobs while the app is open, and a headless runner plus an OS service that keeps them going while it is closed |
+| ✅ | The desktop companion: a frameless, transparent, click-through moss ball with its own chat bar |
+| ✅ | A first run that asks for a key instead of showing a chat that refuses |
+| ✅ | A memory review: after a conversation goes quiet the agent proposes what is worth remembering, and asks before writing it |
+| 🚧 | Windows and macOS installers (the config is written and both package; the installers are unbuilt — see [Building a release](#building-a-release)) |
 
 ## Quick start
 
@@ -112,56 +120,66 @@ Everything lives under Electron's user-data directory — on Linux,
 how development, the tests and the smoke check keep their state out of yours.
 
 ```
-secrets/          one file per secret, encrypted or plainly opted out
-sessions/         one JSONL file per conversation
-profiles.json     the agents: identity, workspace, capabilities
-jobs.json         scheduled jobs
-settings.json     preferences
-skills.json       skills you wrote
+secrets/                one file per secret, encrypted or plainly opted out
+sessions/               one JSONL file per conversation, plus an index
+profiles.json           the agents: identity, workspace, capabilities
+jobs.json               scheduled jobs and how their last run went
+settings.json           preferences, providers, connectors
+skills.json             skills you wrote
+memory-proposals.json   what the agent would remember, waiting for an answer
+window-state.json       where the main window was left
+companion-state.json    where the moss was left
 ```
+
+Each carries a `version`, and a file written by a *newer* build is refused rather
+than overwritten — including the one holding your agents, which is the reason the
+rule exists. A file that cannot be read is moved aside rather than replaced, so a
+parse bug is never the end of your data.
+
+**The settings file is the exception that proves it.** It has never carried a
+version, so every settings file in existence looks like an older format; treating
+that as "not mine" would reset everybody's providers and connectors on upgrade.
+It names its version explicitly, and stamps one from the next write on.
 
 ## Status and next steps
 
-The plan runs M0–M8. What works today:
+Everything in the M0–M8 plan is built. What is left is verification rather than
+construction — the two installers above that cannot be produced from Linux, and
+code signing, which needs certificates.
 
-- **The agent.** MCP servers connect, their tools are offered to the model, and a
-  server the user has not trusted asks before each call — a gate that survives a
-  restart, because it is derived from the stored conversation rather than held in
-  memory. `web_search` works with no API key, through a hidden window.
-- **Helper agents.** `spawn_agent` hands a self-contained piece of work to a
-  helper that runs in the same conversation, so its approval requests are visible
-  where the user is looking, and its words are labelled so they are not read as
-  the agent's own. Depth is one by construction, and it is bounded by steps, time
-  and the size of what it hands back.
+Known gaps, stated plainly:
 
-A fresh profile is granted the **safe core**: read a file, list a directory,
-search the web, and remember things. Everything with reach — writing, running a
-command, fetching an arbitrary URL, spawning a helper — is granted deliberately,
-which is what the capability panels in Settings are for.
-- **The window.** A chat with a conversation rail, streaming answers, tool calls
-  that fold away, and approval cards.
-- **Scheduled jobs**, while the app is open *and* while it is closed. The app and
-  the headless runner share one job file, and an occurrence is claimed by a
-  compare-and-set so it runs once whichever process gets there first.
-- **The headless runner** (`dist/runner/run-due.js`) — the same binary started as
-  plain Node, so it needs no display and can be woken by an OS timer.
-
-Next: the tray and the OS service that wakes the runner, the agent's sub-agents
-and memory review, the chat's markdown and code rendering, the floating
-companion, the capability panels, and packaging for Linux, then Windows and
-macOS.
+- **No auto-update.** A release is a file you download again.
+- **A `.deb` is not built.** It needs a `homepage` in its metadata and this
+  project has no published URL; the AppImage is self-contained and runs anywhere.
+- **Discord and the notes/to-do desk are not wired into the app.** The tools and
+  the schemas are there and the settings schema still carries the fields, but
+  nothing in the window configures them, so they are unreachable. They are
+  scheduled for nothing — somebody should either wire them or remove them.
+- **`appearance` carries `background`, `accent`, `uiScale` and
+  `backgroundDarkness`** from the project this was extracted from. Nothing reads
+  them. Same choice as Discord: wire or remove.
 
 ## Building a release
 
 ```bash
-pnpm --filter @marimo/desktop package      # an AppImage in apps/desktop/release/
+pnpm --filter @marimo/desktop package       # Linux AppImage
+pnpm --filter @marimo/desktop package:win   # Windows NSIS installer
+pnpm --filter @marimo/desktop package:mac   # macOS DMG
+pnpm --filter @marimo/desktop package:dir   # unpacked, no installer
 ```
 
-Linux ships as an **AppImage**, which is self-contained and runs on any
-distribution. A `.deb` needs a `homepage` in its metadata, and this project has
-no published URL yet — inventing one for a released package is worse than not
-shipping that artifact, so the target arrives with the URL. Windows (NSIS) and
-macOS (DMG) follow the same config.
+Each is built on its own platform in the normal way. What has actually been
+verified, and where:
+
+| Target | State |
+| --- | --- |
+| Linux AppImage | **Built and run.** Both windows open, the bridge answers, and the packaged runner exits 0. |
+| Windows `--dir` | **Packages.** `marimo-agent.exe` and a converted `.ico`, built from Linux. |
+| Windows NSIS | Not built. Needs Wine on Linux, macOS to sign. Config is written; the installer is unproven. |
+| macOS `.app` | **Packages**, with a converted `.icns`, built from Linux. |
+| macOS DMG | Not built. Needs `sips`, which is macOS-only. |
+| Code signing | Not configured. Needs certificates, and they are the maintainer's to buy. |
 
 **`asar` is off, and that is deliberate rather than an oversight.**
 electron-builder warns about it and suggests `asarUnpack` instead. It cannot be

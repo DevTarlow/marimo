@@ -51,6 +51,10 @@ import {createHttpFetchTool} from './web-tools.js';
 import {createWebSearchTool} from './web-search-tool.js';
 import type {WebSearchProvider} from './web-search-tool.js';
 
+import {buildMcpTools} from '../mcp/tools.js';
+import type {McpServerConnection, McpToolInfo} from '../mcp/client.js';
+import type {McpServer} from '@marimo/protocol';
+
 export interface ToolDependencies {
   /** Shared with the agent's instruction provider, so memory stays one file. */
   memory: MemoryStore;
@@ -79,6 +83,21 @@ export interface ToolDependencies {
    * `save_skill` is not offered, and `/learn` has nothing to write with.
    */
   skillService?: SkillService;
+  /**
+   * The MCP servers that are connected, with the tools each one offers.
+   *
+   * The connection is passed in rather than made here, because connecting is the
+   * app's business: it owns the configuration, the secrets, and the decision to
+   * retry. This function only decides what the model is offered.
+   */
+  mcpServers?: readonly McpToolsetSource[];
+}
+
+/** One connected MCP server and what it said it can do. */
+export interface McpToolsetSource {
+  server: McpServer;
+  connection: McpServerConnection;
+  tools: readonly McpToolInfo[];
 }
 
 export function createTools(
@@ -156,6 +175,34 @@ export function createTools(
    */
   if (deps.skillService) {
     granted.push(createSaveSkillTool({skills: deps.skillService}));
+  }
+
+  /*
+   * MCP servers come last, and after the profile's selection rather than inside
+   * it. A server has its own `enabled` flag, which is its switch — so there is no
+   * per-tool checkbox for `enabledTools` to filter, and a profile that lists
+   * sixty built-in tools should not have to list a server's tools too.
+   *
+   * `reserved` is every built-in name *before* the profile filter, not after.
+   * A tool the profile has switched off still owns its name: the profile can be
+   * changed between turns, and a server that had quietly taken `read_file` would
+   * then be shadowed by the built-in coming back — or worse, the other way round.
+   *
+   * A name collision throws rather than dropping a tool. That is deliberate and
+   * it is why the app checks names when a server connects: by the time this runs,
+   * a collision is a programming error, not something a user can be told about
+   * usefully in the middle of a turn.
+   */
+  const reserved = new Set(tools.map((tool) => tool.name));
+  for (const source of deps.mcpServers ?? []) {
+    granted.push(
+      ...buildMcpTools({
+        server: source.server,
+        connection: source.connection,
+        tools: source.tools,
+        reserved,
+      }),
+    );
   }
 
   return granted;

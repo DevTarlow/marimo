@@ -19,7 +19,12 @@ import {useState} from 'react';
 
 import type {McpServer, McpStatus} from '@marimo/protocol';
 
-import {formatCommandLine, parseCommandLine} from '../command-line.js';
+import {
+  formatCommandLine,
+  formatSecret,
+  parseCommandLine,
+  parseSecret,
+} from '../command-line.js';
 
 /** A connector being written, before it is a valid `McpServer`. */
 interface Draft {
@@ -30,6 +35,15 @@ interface Draft {
   line: string;
   url: string;
   trusted: boolean;
+  /**
+   * Secrets this connector needs, as `target:name`.
+   *
+   * The *names* only — a value is written once and never read back, because it
+   * is a credential and the window has no business holding one. Which is also
+   * why the editor is a list of names with a "set" mark rather than a form of
+   * filled-in fields.
+   */
+  secrets: string[];
 }
 
 function emptyDraft(): Draft {
@@ -40,6 +54,7 @@ function emptyDraft(): Draft {
     line: '',
     url: '',
     trusted: false,
+    secrets: [],
   };
 }
 
@@ -51,6 +66,9 @@ function draftOf(server: McpServer): Draft {
     line: formatCommandLine(server.command, server.args),
     url: server.url ?? '',
     trusted: server.trusted,
+    secrets: (server.secrets ?? []).map(
+      (secret) => `${secret.target}:${secret.name}`,
+    ),
   };
 }
 
@@ -73,6 +91,17 @@ function toServer(draft: Draft): {server: McpServer} | {problem: string} {
     transport: draft.transport,
     enabled: true,
     trusted: draft.trusted,
+    // Parsed back into the pair the document stores. A malformed entry is
+    // dropped rather than saved as a name nobody can fill in.
+    ...(draft.secrets.length === 0
+      ? {}
+      : {
+          secrets: draft.secrets
+            .map(parseSecret)
+            .filter((entry): entry is {target: 'env' | 'header'; name: string} =>
+              entry !== undefined,
+            ),
+        }),
   };
 
   if (draft.transport === 'http') {
@@ -295,6 +324,19 @@ export function Connectors({
             </label>
           )}
 
+          <SecretEditor
+            draft={draft}
+            busy={busy}
+            onChange={(secrets) => {
+              setDraft({...draft, secrets});
+            }}
+            onSaved={() => {
+              setTested('Saved.');
+              onChange();
+            }}
+            onProblem={setProblem}
+          />
+
           <label className="settings-check">
             <input
               type="checkbox"
@@ -391,4 +433,154 @@ export function Connectors({
 function describe(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw.replace(/^Error invoking remote method '[^']*':\s*/u, '');
+}
+
+/**
+ * The connector's own credentials.
+ *
+ * A list of *names* with a write-only field each, rather than a form of
+ * filled-in boxes. A value is a credential, so it is written once and never read
+ * back — which means the panel cannot show it, only whether there is one. The
+ * alternative, holding decrypted keys in the renderer to redisplay them, is the
+ * thing invariant 8 exists to prevent.
+ */
+function SecretEditor({
+  draft,
+  busy,
+  onChange,
+  onSaved,
+  onProblem,
+}: {
+  draft: Draft;
+  busy: boolean;
+  onChange: (secrets: string[]) => void;
+  onSaved: () => void;
+  onProblem: (problem: string | null) => void;
+}): React.JSX.Element {
+  const [adding, setAdding] = useState('');
+  const [values, setValues] = useState<Record<string, string>>({});
+
+  const add = (): void => {
+    const parsed = parseSecret(adding);
+    if (parsed === undefined) {
+      return;
+    }
+    const entry = formatSecret(parsed);
+    if (!draft.secrets.includes(entry)) {
+      onChange([...draft.secrets, entry]);
+    }
+    setAdding('');
+  };
+
+  const save = (key: string): void => {
+    const value = values[key] ?? '';
+    if (value.length === 0 || draft.id.length === 0) {
+      return;
+    }
+    const parsed = parseSecret(key);
+    if (parsed === undefined) {
+      return;
+    }
+    void (async () => {
+      try {
+        await window.marimo.call('mcp.setSecret', {
+          serverId: draft.id,
+          target: parsed.target,
+          name: parsed.name,
+          value,
+        });
+        setValues((current) => ({...current, [key]: ''}));
+        onSaved();
+      } catch (failure) {
+        onProblem(failure instanceof Error ? failure.message : String(failure));
+      }
+    })();
+  };
+
+  return (
+    <div className="settings-field">
+      <span>Secrets</span>
+      <em className="settings-why">
+        Values the connector needs — an API key in an environment variable, or a
+        token in a header. Each is stored like an API key and never shown again.
+        {draft.id.length === 0 &&
+          ' Save the connector first, then come back to add these.'}
+      </em>
+
+      {draft.secrets.map((key) => (
+        <div className="secret-row" key={key}>
+          <code className="secret-name">{key}</code>
+          <input
+            className="settings-input"
+            type="password"
+            placeholder={draft.id.length === 0 ? 'save first' : 'value'}
+            aria-label={`Value for ${key}`}
+            disabled={busy || draft.id.length === 0}
+            value={values[key] ?? ''}
+            onChange={(event) => {
+              setValues((current) => ({...current, [key]: event.target.value}));
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                save(key);
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="button button-quiet button-small"
+            disabled={busy || (values[key] ?? '').length === 0}
+            onClick={() => {
+              save(key);
+            }}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            className="button button-quiet button-small"
+            disabled={busy}
+            onClick={() => {
+              onChange(draft.secrets.filter((entry) => entry !== key));
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+
+      <div className="secret-row">
+        <input
+          className="settings-input"
+          value={adding}
+          placeholder="env:API_KEY or header:Authorization"
+          aria-label="Add a secret name"
+          disabled={busy}
+          onChange={(event) => {
+            setAdding(event.target.value);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && adding.trim().length > 0) {
+              const entry = adding.trim().replace(/^header:/u, 'header:');
+              const normalised = entry.startsWith('header:')
+                ? entry
+                : `env:${entry.replace(/^env:/u, '')}`;
+              if (!draft.secrets.includes(normalised)) {
+                onChange([...draft.secrets, normalised]);
+              }
+              setAdding('');
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="button button-quiet button-small"
+          disabled={busy || parseSecret(adding) === undefined}
+          onClick={add}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
 }

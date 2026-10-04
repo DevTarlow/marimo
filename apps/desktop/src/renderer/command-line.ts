@@ -119,3 +119,51 @@ export function formatCommandLine(
     )
     .join(' ');
 }
+
+/**
+ * A connector secret, as the form writes it and the document needs it.
+ *
+ * The form shows `env:API_KEY` or `header:Authorization` in one line, because
+ * that is one decision — where the value goes — and splitting it into a dropdown
+ * and a text box makes it two. The document wants the pair apart, for the same
+ * reason a command and its arguments are apart: a name with a colon in it is
+ * legal in both an environment and a header, and guessing which half was which
+ * after the fact is not possible.
+ */
+export interface ParsedSecret {
+  target: 'env' | 'header';
+  name: string;
+}
+
+/**
+ * Reads one, defaulting to an environment variable.
+ *
+ * The default matters: most connector secrets are API keys, most of those go in
+ * an environment variable, and a person who types just `API_KEY` means the
+ * obvious thing. An empty name is `undefined` rather than a nameless secret
+ * nobody could fill in.
+ */
+export function parseSecret(entry: string): ParsedSecret | undefined {
+  const trimmed = entry.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  /*
+   * `(.*)` rather than `(.+)`, and whitespace allowed before the colon. Both
+   * come from the same trap: with `(.+)`, `"header:   "` matches nothing at all
+   * and falls through to the environment branch — which then stores a secret
+   * *named* "header:", a name nobody could ever fill in.
+   */
+  const header = /^header\s*:\s*(.*)$/iu.exec(trimmed);
+  if (header !== null) {
+    const name = (header[1] ?? '').trim();
+    return name.length === 0 ? undefined : {target: 'header', name};
+  }
+  const name = trimmed.replace(/^env\s*:\s*/iu, '').trim();
+  return name.length === 0 ? undefined : {target: 'env', name};
+}
+
+/** The form's own spelling of one. */
+export function formatSecret(secret: ParsedSecret): string {
+  return `${secret.target}:${secret.name}`;
+}

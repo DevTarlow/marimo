@@ -8,7 +8,12 @@
  */
 import {describe, expect, it} from 'vitest';
 
-import {formatCommandLine, parseCommandLine} from '../src/renderer/command-line.js';
+import {
+  formatCommandLine,
+  formatSecret,
+  parseCommandLine,
+  parseSecret,
+} from '../src/renderer/command-line.js';
 
 describe('parsing a pasted command', () => {
   it('splits a program from its arguments', () => {
@@ -124,5 +129,65 @@ describe('writing it back for editing', () => {
 
   it('has nothing to show for a server with no command', () => {
     expect(formatCommandLine(undefined, undefined)).toBe('');
+  });
+});
+
+/*
+ * A connector's secret, as the form writes it and the document needs it.
+ *
+ * The form takes one line because "where does this value go" is one decision;
+ * the document keeps the pair apart because a colon is legal in both an
+ * environment variable name and a header name, and which half was which cannot
+ * be recovered afterwards.
+ */
+describe('reading a connector secret', () => {
+  it('defaults to an environment variable', () => {
+    // Most connector secrets are API keys, and most of those go in the
+    // environment — somebody typing just the name means the obvious thing.
+    expect(parseSecret('API_KEY')).toEqual({target: 'env', name: 'API_KEY'});
+  });
+
+  it('reads an explicit environment variable', () => {
+    expect(parseSecret('env:API_KEY')).toEqual({target: 'env', name: 'API_KEY'});
+  });
+
+  it('reads a header', () => {
+    expect(parseSecret('header:Authorization')).toEqual({
+      target: 'header',
+      name: 'Authorization',
+    });
+  });
+
+  it('ignores case and stray spaces', () => {
+    expect(parseSecret('  HEADER : X-Api-Key ')).toEqual({
+      target: 'header',
+      name: 'X-Api-Key',
+    });
+  });
+
+  /*
+   * A name containing a colon survives intact, which is the reason the pair is
+   * stored apart rather than as one string that gets split later.
+   */
+  it('keeps a colon inside the name', () => {
+    expect(parseSecret('header:X-Custom:Thing')).toEqual({
+      target: 'header',
+      name: 'X-Custom:Thing',
+    });
+  });
+
+  it('refuses an empty name rather than saving a nameless secret', () => {
+    expect(parseSecret('')).toBeUndefined();
+    expect(parseSecret('   ')).toBeUndefined();
+    expect(parseSecret('env:')).toBeUndefined();
+    expect(parseSecret('header:   ')).toBeUndefined();
+  });
+
+  it('round-trips through the form spelling', () => {
+    for (const entry of ['env:API_KEY', 'header:Authorization']) {
+      const parsed = parseSecret(entry);
+      expect(parsed).toBeDefined();
+      expect(formatSecret(parsed!)).toBe(entry);
+    }
   });
 });

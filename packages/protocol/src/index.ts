@@ -1605,6 +1605,17 @@ export const agentCallSchemas = {
   'mcp.set': z.object({server: mcpServerSchema}),
   'mcp.remove': z.object({serverId: z.string().min(1)}),
   /*
+   * A connector's own secret — an API key it needs in an environment variable or
+   * a header. Written through the same store the provider keys use, and never
+   * read back: the answer says which secrets are *set*, never what they are.
+   */
+  'mcp.setSecret': z.object({
+    serverId: z.string().min(1),
+    target: z.enum(['env', 'header']),
+    name: z.string().trim().min(1),
+    value: z.string(),
+  }),
+  /*
    * Dials a server without saving it, so somebody can find out that a command is
    * wrong before they commit to it.
    */
@@ -1685,6 +1696,7 @@ export interface AgentCallResults {
   'mcp.statuses': Record<string, McpStatus>;
   'mcp.set': {servers: McpServer[]; statuses: Record<string, McpStatus>};
   'mcp.remove': {servers: McpServer[]; statuses: Record<string, McpStatus>};
+  'mcp.setSecret': {set: string[]};
   'mcp.test': {ok: boolean; detail: string};
   'memory.proposals': {proposals: MemoryProposal[]};
   'memory.resolve': {ok: boolean; problem?: string};

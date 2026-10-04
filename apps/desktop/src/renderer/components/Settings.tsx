@@ -25,6 +25,8 @@ import type {
   PublicSettings,
 } from '@marimo/protocol';
 
+import {PROVIDERS} from '@marimo/protocol';
+
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
 
@@ -33,6 +35,8 @@ interface Loaded {
   catalog: ProfileCatalog;
   profile: AgentProfile | undefined;
   statuses: Record<string, McpStatus>;
+  /** Whether the floating companion is on screen. */
+  companionVisible: boolean;
 }
 
 export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
@@ -54,7 +58,14 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
       );
       const catalog = await window.marimo.call('profiles.catalog', {});
       const statuses = await window.marimo.call('mcp.statuses', {});
-      setLoaded({settings, catalog, profile, statuses});
+      const companion = await window.marimo.call('companion.status', {});
+      setLoaded({
+        settings,
+        catalog,
+        profile,
+        statuses,
+        companionVisible: companion.visible,
+      });
       setDraft(
         profile === undefined
           ? null
@@ -277,6 +288,37 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           ))}
         </section>
 
+        <section className="settings-section">
+          <h3>Desktop companion</h3>
+          <p className="settings-muted">
+            A moss ball that floats above your other windows with its own chat
+            bar, so you can ask something without opening this one. It shares
+            this conversation — anything you say to it is here too.
+          </p>
+          <label className="settings-check">
+            <input
+              type="checkbox"
+              checked={loaded.companionVisible}
+              disabled={saving}
+              onChange={(event) => {
+                const visible = event.target.checked;
+                void change(async () => {
+                  await window.marimo.call('companion.setVisible', {visible});
+                });
+              }}
+            />
+            <span>
+              Show the companion
+              <em className="settings-why">
+                Drag it by the moss to move it. Clicking through to whatever is
+                behind works anywhere there is nothing to click.
+              </em>
+            </span>
+          </label>
+        </section>
+
+        <Model />
+
         <Memory />
 
         <Connectors
@@ -359,6 +401,77 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
         </section>
       </div>
     </div>
+  );
+}
+
+/**
+ * Which model the active provider should answer with.
+ *
+ * A pick-list rather than a text box: the ids are the provider's own, and a
+ * mistyped one is a 404 from the provider at the start of a turn — which reads
+ * as "the agent is broken" rather than "that model does not exist". The stored
+ * value is shown even when it is not in the list, because a model the provider
+ * has stopped advertising may still work, and silently switching somebody off it
+ * would be worse than an odd-looking list.
+ */
+function Model(): React.JSX.Element | null {
+  const [settings, setSettings] = useState<PublicSettings | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const load = (): void => {
+    void window.marimo
+      .call('settings.get', {})
+      .then(({settings: loaded}) => {
+        setSettings(loaded);
+      })
+      .catch(() => undefined);
+  };
+
+  useEffect(load, []);
+
+  if (settings === null) {
+    return null;
+  }
+
+  const active = settings.providers.active;
+  const current = settings.providers.configs[active].model;
+  const options = settings.availableModels.includes(current)
+    ? settings.availableModels
+    : [current, ...settings.availableModels];
+
+  return (
+    <section className="settings-section">
+      <h3>Model</h3>
+      <p className="settings-muted">
+        Which model {PROVIDERS[active].label} answers with. Cheaper models are
+        fine for reading and summarising; harder questions want a bigger one.
+      </p>
+      <select
+        className="settings-input"
+        value={current}
+        disabled={saving}
+        aria-label="Model"
+        onChange={(event) => {
+          const model = event.target.value;
+          setSaving(true);
+          void window.marimo
+            .call('settings.set', {
+              patch: {providers: {configs: {[active]: {model}}}},
+            })
+            .then(load)
+            .catch(() => undefined)
+            .finally(() => {
+              setSaving(false);
+            });
+        }}
+      >
+        {options.map((model) => (
+          <option key={model} value={model}>
+            {model}
+          </option>
+        ))}
+      </select>
+    </section>
   );
 }
 

@@ -17,6 +17,7 @@
  */
 import {
   AgentRuntime,
+  mcpSecretFile,
   createJobRunner,
   holdProcessLock,
   JobScheduler,
@@ -379,6 +380,48 @@ export class AgentService {
     await this.runtime.updateSettings({mcpServers: next});
     await this.applyMcpServers();
     return next;
+  }
+
+  /**
+   * Stores one of a connector's secrets.
+   *
+   * Through the same store the provider keys use, which means the same consent
+   * rule: on a machine with no keychain this needs the plain-text opt-in, and it
+   * refuses rather than silently writing a readable key. A connector secret is
+   * exactly as sensitive as an API key, because most of them *are* one.
+   */
+  async setMcpSecret(
+    serverId: string,
+    target: 'env' | 'header',
+    name: string,
+    value: string,
+  ): Promise<void> {
+    const settings = await this.runtime.settings();
+    const store = secretStore(
+      mcpSecretFile(this.options.paths, serverId, target, name),
+      `the ${name} for this connector`,
+    );
+    await store.set(value, {allowPlaintext: settings.allowPlaintextApiKey});
+  }
+
+  /**
+   * Which of a connector's secrets have a value.
+   *
+   * Names only. The value never crosses to the window — the same rule provider
+   * keys follow — so the panel can say "set" without being able to say what.
+   */
+  async mcpSecretState(server: McpServer): Promise<string[]> {
+    const set: string[] = [];
+    for (const reference of server.secrets ?? []) {
+      const store = secretStore(
+        mcpSecretFile(this.options.paths, server.id, reference.target, reference.name),
+        `the ${reference.name} for this connector`,
+      );
+      if (await store.has()) {
+        set.push(`${reference.target}:${reference.name}`);
+      }
+    }
+    return set;
   }
 
   /** Dials a server without saving it, so a wrong command can be found out first. */

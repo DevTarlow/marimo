@@ -1187,3 +1187,31 @@
   color: var(--text-faint);
   font-size: var(--text-xs);
 }
+
+/* ------------------------------------------------------- connector secrets */
+
+/*
+ * Name, value, save, remove — one row each. The name is monospace because it is
+ * an environment variable or a header, which is to say a literal somebody typed
+ * into a server's documentation.
+ */
+.secret-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.secret-name {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.secret-row .settings-input {
+  min-width: 0;
+}

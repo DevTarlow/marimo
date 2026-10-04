@@ -216,6 +216,22 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     'memory.resolve': async (params) =>
       await agent().resolveMemoryProposal(params.proposalId, params.accept),
 
+    'mcp.setSecret': async (params) => {
+      await agent().setMcpSecret(
+        params.serverId,
+        params.target,
+        params.name,
+        params.value,
+      );
+      const settings = await agent().settings();
+      const server = settings.mcpServers.find(
+        (entry) => entry.id === params.serverId,
+      );
+      return {
+        set: server === undefined ? [] : await agent().mcpSecretState(server),
+      };
+    },
+
     'companion.status': () => ({
       visible: dependencies.companion?.()?.isVisible() ?? false,
     }),

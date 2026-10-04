@@ -1524,6 +1524,7 @@ export const agentCallSchemas = {
   'profiles.create': z.object({
     name: z.string().trim().min(1).optional(),
   }),
+  'profiles.select': z.object({profileId: z.string().min(1)}),
 
   /* Preferences, including the two that decide whether hidden jobs can run. */
   'settings.get': z.object({}),
@@ -1565,6 +1566,7 @@ export interface AgentCallResults {
   'profiles.catalog': ProfileCatalog;
   'profiles.update': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.create': {profiles: AgentProfile[]; activeProfileId: string};
+  'profiles.select': {profiles: AgentProfile[]; activeProfileId: string};
   'settings.get': {settings: PublicSettings};
   'settings.set': {settings: PublicSettings};
   'settings.setApiKey': {settings: PublicSettings};

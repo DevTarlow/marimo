@@ -213,6 +213,12 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       return await profileState(agent0);
     },
 
+    'profiles.select': async (params) => {
+      const service = agent();
+      await service.selectProfile(params.profileId);
+      return await profileState(service);
+    },
+
     'settings.get': async () => ({settings: await publicSettings()}),
 
     'sessions.list': async (params) => ({

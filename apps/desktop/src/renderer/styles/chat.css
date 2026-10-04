@@ -754,3 +754,53 @@
   line-height: 1.5;
   color: var(--text-muted);
 }
+
+.settings-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settings-agent {
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.settings-agent:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.settings-agent[aria-current='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.settings-agent-new {
+  border-style: dashed;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+}
+
+.settings-field > span {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.settings-identity {
+  min-height: 120px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}

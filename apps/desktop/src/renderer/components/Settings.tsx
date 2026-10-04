@@ -30,6 +30,10 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
   const [problem, setProblem] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
+  /** The name and identity being edited. Committed on blur, not on every letter. */
+  const [draft, setDraft] = useState<{name: string; identity: string} | null>(
+    null,
+  );
 
   const load = async (): Promise<void> => {
     try {
@@ -40,6 +44,11 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
       );
       const catalog = await window.marimo.call('profiles.catalog', {});
       setLoaded({settings, catalog, profile});
+      setDraft(
+        profile === undefined
+          ? null
+          : {name: profile.name, identity: profile.identity},
+      );
     } catch (failure) {
       setProblem(describe(failure));
     }
@@ -121,6 +130,110 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           <div className="error" role="alert">
             <span>{problem}</span>
           </div>
+        )}
+
+        <section className="settings-section">
+          <h3>Your agents</h3>
+          <p className="settings-muted">
+            Each agent has its own instructions, its own abilities and its own
+            conversations. Making a second one is how you keep two jobs from
+            sharing one memory.
+          </p>
+          <div className="settings-agents">
+            {loaded.settings.profiles.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                className="settings-agent"
+                aria-current={
+                  entry.id === loaded.settings.activeProfileId ? 'true' : undefined
+                }
+                disabled={saving}
+                onClick={() => {
+                  void change(async () => {
+                    await window.marimo.call('profiles.select', {
+                      profileId: entry.id,
+                    });
+                  });
+                }}
+              >
+                {entry.name}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="settings-agent settings-agent-new"
+              disabled={saving}
+              onClick={() => {
+                void change(async () => {
+                  await window.marimo.call('profiles.create', {});
+                });
+              }}
+            >
+              + New agent
+            </button>
+          </div>
+        </section>
+
+        {draft !== null && loaded.profile !== undefined && (
+          <section className="settings-section">
+            <h3>What it is</h3>
+            <label className="settings-field">
+              <span>Name</span>
+              <input
+                className="settings-input"
+                value={draft.name}
+                disabled={saving}
+                onChange={(event) => {
+                  setDraft({...draft, name: event.target.value});
+                }}
+                onBlur={() => {
+                  const name = draft.name.trim();
+                  if (name.length === 0 || name === loaded.profile?.name) {
+                    // Put back rather than saved: an agent with no name is one
+                    // nobody can pick out of the list, and the field is the only
+                    // place that says so.
+                    setDraft({...draft, name: loaded.profile?.name ?? ''});
+                    return;
+                  }
+                  void change(async () => {
+                    await window.marimo.call('profiles.update', {
+                      profileId: loaded.profile?.id ?? '',
+                      patch: {name},
+                    });
+                  });
+                }}
+              />
+            </label>
+            <label className="settings-field">
+              <span>Instructions</span>
+              <em className="settings-why">
+                Who this agent is and how it should behave. Written as an
+                instruction to it, and sent at the start of every conversation.
+              </em>
+              <textarea
+                className="settings-input settings-identity"
+                rows={6}
+                value={draft.identity}
+                disabled={saving}
+                onChange={(event) => {
+                  setDraft({...draft, identity: event.target.value});
+                }}
+                onBlur={() => {
+                  if (draft.identity === loaded.profile?.identity) {
+                    return;
+                  }
+                  const identity = draft.identity;
+                  void change(async () => {
+                    await window.marimo.call('profiles.update', {
+                      profileId: loaded.profile?.id ?? '',
+                      patch: {identity},
+                    });
+                  });
+                }}
+              />
+            </label>
+          </section>
         )}
 
         <section className="settings-section">

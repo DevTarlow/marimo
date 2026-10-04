@@ -1,56 +1,42 @@
 /**
- * The window, for now a shell.
+ * The window.
  *
- * This is the placeholder that proves the pieces are connected: the preload
- * bridge answers, the main process can name the install, and both token blocks
- * render. The conversation surface, the rail and the capability panels replace
- * the body of this file — the calls it makes and the theme it sets are the parts
- * meant to survive.
+ * A rail of conversations, the conversation, and the composer. The shape is
+ * deliberately the familiar one: an assistant you talk to is not a place to
+ * invent a layout, and every departure from the shape people already know is a
+ * thing they have to learn before they can ask a question.
+ *
+ * The theme switch is a preview for now — the preference is a settings write
+ * that lands with Settings — but the tokens underneath it are the real ones, so
+ * what it previews is what will ship.
  */
 import {useEffect, useState} from 'react';
 
 import type {AppInfo, Theme} from '@marimo/protocol';
 
-import './styles/shell.css';
+import {Composer} from './components/Composer.js';
+import {SessionRail} from './components/SessionRail.js';
+import {Transcript} from './components/Transcript.js';
+import {useAgent} from './hooks/useAgent.js';
 
-type Load =
-  | {state: 'loading'}
-  | {state: 'ready'; info: AppInfo}
-  | {state: 'failed'; reason: string};
-
-/**
- * An error from `ipcRenderer.invoke` arrives wrapped in Electron's own prefix,
- * which is noise in a message a person reads.
- */
-function describeError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return raw.replace(/^Error invoking remote method '[^']*':\s*/u, '');
-}
+import './styles/chat.css';
 
 export function App(): React.JSX.Element {
-  const [load, setLoad] = useState<Load>({state: 'loading'});
-  /**
-   * A preview-only override.
-   *
-   * Both token blocks need looking at while the UI is being built, and the real
-   * preference is a settings write that lands with Settings. Until then this
-   * flips the attribute in place, so `system` and the resolved answer stay
-   * visible in the panel below.
-   */
+  const [info, setInfo] = useState<AppInfo | null>(null);
   const [preview, setPreview] = useState<Theme | null>(null);
+  const agent = useAgent();
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const info = await window.marimo.call('app.info', {});
+        const value = await window.marimo.call('app.info', {});
         if (!cancelled) {
-          setLoad({state: 'ready', info});
+          setInfo(value);
         }
-      } catch (error) {
-        if (!cancelled) {
-          setLoad({state: 'failed', reason: describeError(error)});
-        }
+      } catch {
+        // The agent surface reports its own failures; a missing version line is
+        // not worth a second error on screen.
       }
     })();
     return () => {
@@ -58,104 +44,93 @@ export function App(): React.JSX.Element {
     };
   }, []);
 
-  const resolved: Theme =
-    preview ?? (load.state === 'ready' ? load.info.theme : 'dark');
-
+  const theme: Theme = preview ?? info?.theme ?? 'dark';
   useEffect(() => {
-    document.documentElement.dataset['theme'] = resolved;
-  }, [resolved]);
+    document.documentElement.dataset['theme'] = theme;
+  }, [theme]);
+
+  const busy = agent.live?.running === true;
+  const disabled = agent.profile === undefined;
 
   return (
-    <div className="shell">
-      <header className="shell-head">
-        <img className="shell-mark" src="./marimo-logo.png" alt="" />
-        <div>
-          <h1 className="shell-title">Marimo Agent</h1>
-          <p className="shell-sub">
-            {load.state === 'ready'
-              ? `v${load.info.version} · Electron ${load.info.electron}`
-              : 'Starting…'}
-          </p>
-        </div>
-        <div className="shell-theme">
-          {(['light', 'dark'] as const).map((theme) => (
+    <div className="app">
+      <SessionRail
+        sessions={agent.sessions}
+        activeId={agent.sessionId}
+        onOpen={(id) => {
+          void agent.open(id);
+        }}
+        onNew={() => {
+          void agent.newSession();
+        }}
+        disabled={disabled}
+      />
+
+      <main className="main">
+        <header className="head">
+          <img className="head-mark" src="./marimo-logo.png" alt="" />
+          <div className="head-who">
+            <h1 className="head-name">{agent.profile?.name ?? 'Marimo Agent'}</h1>
+            {info !== null && (
+              <p className="head-sub">
+                {info.name} v{info.version}
+              </p>
+            )}
+          </div>
+          <div className="head-theme">
+            {(['light', 'dark'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                className="theme-button"
+                aria-pressed={theme === value}
+                onClick={() => {
+                  setPreview(value);
+                }}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        {agent.error !== null && (
+          <div className="error" role="alert">
+            <span>{agent.error}</span>
             <button
-              key={theme}
               type="button"
-              className="shell-theme-btn"
-              aria-pressed={resolved === theme}
-              onClick={() => {
-                setPreview(theme);
-              }}
+              className="button button-quiet button-small"
+              onClick={agent.dismissError}
             >
-              {theme}
+              Dismiss
             </button>
-          ))}
-        </div>
-      </header>
-
-      <main className="shell-body">
-        {load.state === 'loading' && <p className="shell-note">Reading the install…</p>}
-
-        {load.state === 'failed' && (
-          <div className="shell-error" role="alert">
-            <strong>The window could not reach the app.</strong>
-            <p>{load.reason}</p>
           </div>
         )}
 
-        {load.state === 'ready' && (
-          <>
-            <div className="shell-card">
-              <h2>This is the shell</h2>
-              <p>
-                The bridge answers and the theme system works. The conversation
-                surface, the agent rail and the capability panels replace this
-                panel next.
-              </p>
-            </div>
-
-            <dl className="shell-facts">
-              <div>
-                <dt>Product</dt>
-                <dd>{load.info.name}</dd>
-              </div>
-              <div>
-                <dt>Platform</dt>
-                <dd>{load.info.platform}</dd>
-              </div>
-              <div>
-                <dt>Chrome</dt>
-                <dd>{load.info.chrome}</dd>
-              </div>
-              <div>
-                <dt>Node</dt>
-                <dd>{load.info.node}</dd>
-              </div>
-              <div className="shell-facts-wide">
-                <dt>User data</dt>
-                <dd>
-                  <code>{load.info.userData}</code>
-                </dd>
-              </div>
-              <div className="shell-facts-wide">
-                <dt>Secrets</dt>
-                <dd>
-                  {load.info.secretsEncrypted
-                    ? 'Encrypted with the OS keychain.'
-                    : 'No keychain available — running jobs while the app is closed will need the plain-text opt-in.'}
-                </dd>
-              </div>
-              <div className="shell-facts-wide">
-                <dt>Theme</dt>
-                <dd>
-                  <code>{load.info.themeMode}</code> → <code>{load.info.theme}</code>
-                  {preview !== null && ' (previewing the other one)'}
-                </dd>
-              </div>
-            </dl>
-          </>
+        {!agent.ready ? (
+          <p className="loading">Starting…</p>
+        ) : (
+          <Transcript
+            messages={agent.messages}
+            live={agent.live}
+            pending={agent.pending}
+            onDecide={(callId, confirmed) => {
+              void agent.decide(callId, confirmed);
+            }}
+            busy={busy}
+          />
         )}
+
+        <Composer
+          busy={busy}
+          disabled={disabled || !agent.ready}
+          onSend={(text) => {
+            void agent.send(text);
+          }}
+          onStop={() => {
+            void agent.stop();
+          }}
+        />
       </main>
     </div>
   );

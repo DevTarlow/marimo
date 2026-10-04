@@ -121,7 +121,7 @@ async function main() {
       }, {once: true});
     });
 
-    const send = await attach(socket);
+    const {send, console: pageConsole} = await attach(socket);
 
     const probe = await until('the renderer to mount', async () => {
       const {result} = await send('Runtime.evaluate', {
@@ -154,9 +154,20 @@ async function main() {
       ok(`a conversation was created (${probe.sessionId})`);
     }
 
-    if (probe.sessionCount !== 1) {
+    /*
+     * At least one, not exactly one: the window opens a conversation of its own
+     * on first paint, so by the time this check runs there are usually two. What
+     * is being asserted is that a conversation this probe created is *listed* —
+     * which is what proves the store, the index and the IPC path agree.
+     */
+    if (
+      typeof probe.sessionCount !== 'number' ||
+      probe.sessionCount < 1 ||
+      !Array.isArray(probe.listedIds) ||
+      !probe.listedIds.includes(probe.sessionId)
+    ) {
       fail(
-        `after creating one conversation the agent reports ${probe.sessionCount}`,
+        `the conversation just created was not listed (${probe.sessionCount} listed)`,
       );
     } else {
       ok('the conversation was listed and read back');
@@ -204,6 +215,21 @@ async function main() {
       }
     }
 
+    /*
+     * The renderer's own complaints. Printed on every run rather than only on
+     * failure: a React warning or a rejected call that the checks happen not to
+     * assert on is still something somebody needs to see.
+     */
+    const complaints = pageConsole.filter((line) =>
+      /^(error|warning|assert)/u.test(line),
+    );
+    if (complaints.length > 0) {
+      console.log('--- renderer ---');
+      for (const line of complaints.slice(-20)) {
+        console.log(`  ${line}`);
+      }
+    }
+
     if (shotFile !== undefined) {
       /*
        * A screenshot is a bonus, not the assertion. It needs a compositor that
@@ -242,10 +268,15 @@ async function main() {
  *
  * DevTools has no correlation beyond the id the client invents, so the pending
  * map is the whole of the protocol handling this check needs.
+ *
+ * The same socket carries the page's own console output, which is collected
+ * rather than ignored: when a check fails, the renderer's complaint is usually
+ * the only thing that says why, and it is not visible from the main process.
  */
 async function attach(socket) {
   let nextId = 1;
   const pending = new Map();
+  const console = [];
 
   socket.addEventListener('message', (event) => {
     let message;
@@ -254,6 +285,18 @@ async function attach(socket) {
     } catch {
       return;
     }
+
+    if (message.method === 'Runtime.consoleAPICalled') {
+      const level = message.params?.type ?? 'log';
+      const text = (message.params?.args ?? [])
+        .map((arg) => arg?.value ?? arg?.description ?? '')
+        .join(' ');
+      if (text.length > 0) {
+        console.push(`${level}: ${text}`);
+      }
+      return;
+    }
+
     const entry = pending.get(message.id);
     if (entry === undefined) {
       return;
@@ -266,7 +309,7 @@ async function attach(socket) {
     }
   });
 
-  return (method, params = {}) =>
+  const send = (method, params = {}) =>
     new Promise((resolve, reject) => {
       const id = nextId++;
       pending.set(id, {resolve, reject});
@@ -277,6 +320,12 @@ async function attach(socket) {
         }
       }, 10_000);
     });
+
+  // Asks for the console stream before anything else, so a complaint made
+  // during startup is not missed by being early.
+  await send('Runtime.enable');
+
+  return {send, console};
 }
 
 /**
@@ -322,6 +371,7 @@ const PROBE = `(async () => {
       profileId: activeProfileId,
     });
     result.sessionCount = sessions.length;
+    result.listedIds = sessions.map((entry) => entry.id);
 
     const {messages, pending} = await window.marimo.call('sessions.get', {
       profileId: activeProfileId,

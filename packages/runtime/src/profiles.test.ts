@@ -269,4 +269,40 @@ describe('ProfileStore', () => {
     expect(snapshot.profiles.map((profile) => profile.id)).toEqual(['good']);
     expect(snapshot.activeProfileId).toBe('good');
   });
+
+  /*
+   * The first-run race.
+   *
+   * The window and the headless runner — or simply two calls from one of them —
+   * can ask for the profile file before either has read it. Both then find no
+   * file, both create a profile, and both write: each holds a profile with its
+   * own random id, only one is on disk, and the other caller is left with an
+   * agent that does not exist. It showed up as "there is no agent called <id>"
+   * from a window that had been handed that id a moment earlier.
+   *
+   * Memoising the read as a *promise* rather than as a value is the fix: the
+   * second caller waits for the first instead of starting its own.
+   */
+  it('gives concurrent first reads the same profile', async () => {
+    const instance = store();
+    const [first, second, third] = await Promise.all([
+      instance.load(),
+      instance.load(),
+      instance.load(),
+    ]);
+
+    expect(first.activeProfileId).toBe(second.activeProfileId);
+    expect(second.activeProfileId).toBe(third.activeProfileId);
+    expect(first.profiles).toHaveLength(1);
+  });
+
+  it('leaves exactly one profile on disk after concurrent first reads', async () => {
+    const instance = store();
+    await Promise.all([instance.load(), instance.load()]);
+
+    // Re-read from a fresh store, so this is what was actually written rather
+    // than what a cache remembers.
+    const reread = await store().load();
+    expect(reread.profiles).toHaveLength(1);
+  });
 });

@@ -68,6 +68,18 @@ export class UnknownProfileError extends Error {
 
 export class ProfileStore {
   private cache: ProfileFile | undefined;
+  /**
+   * The read in flight, memoised as a *promise* rather than as a value.
+   *
+   * Two callers that arrive before the first read has finished would otherwise
+   * both find no file — which is what a fresh install looks like — both create a
+   * profile, and both write. Each gets a profile with its own random id, only one
+   * of them ends up on disk, and the other caller is left holding an agent that
+   * does not exist. It surfaces as "there is no agent called <id>" from a window
+   * that was handed that id a moment earlier: at random, on first run, and never
+   * again.
+   */
+  private loading: Promise<ProfileFile> | undefined;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: ProfileStoreOptions) {}
@@ -78,6 +90,33 @@ export class ProfileStore {
    * the workspace and the prompt the user already had.
    */
   async load(seed?: ProfileSeed): Promise<ProfileFile> {
+    /*
+     * The cache first, every time. A mutation replaces it — that is how a caller
+     * sees the edit it just made — so a memoised *result* would go on answering
+     * with the file as it was before the first write.
+     */
+    if (this.cache) {
+      return this.cache;
+    }
+
+    /*
+     * Only the read in flight is shared. Two callers that arrive before the
+     * first has finished would otherwise both find no file — which is what a
+     * fresh install looks like — both create a profile, and both write. Each
+     * gets a profile with its own random id, only one is on disk, and the other
+     * caller is left holding an agent that does not exist.
+     */
+    const inFlight = (this.loading ??= this.readOrCreate(seed));
+    try {
+      return await inFlight;
+    } finally {
+      if (this.loading === inFlight) {
+        this.loading = undefined;
+      }
+    }
+  }
+
+  private async readOrCreate(seed?: ProfileSeed): Promise<ProfileFile> {
     if (this.cache) {
       return this.cache;
     }
@@ -100,6 +139,9 @@ export class ProfileStore {
     // keeping the old settings-file values so an upgrade loses nothing.
     const created = this.freshFile(seed);
     await this.writeFile(created);
+    // Cached here as well as on the read path. The next caller must see this
+    // file, not read the directory again and decide there is nothing there.
+    this.cache = created;
     return created;
   }
 

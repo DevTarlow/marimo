@@ -30,6 +30,7 @@ import type {AppPaths} from '@marimo/runtime';
 import {PROVIDERS} from '@marimo/protocol';
 import type {
   AgentProfile,
+  Job,
   McpServer,
   AgentUiEvent,
   McpStatus,
@@ -77,7 +78,7 @@ export class AgentService {
    * asks for approval the same way, which is why an unattended run can park on a
    * gate rather than going ahead without one.
    */
-  private readonly jobs: JobStore;
+  private readonly jobsStore: JobStore;
   private readonly scheduler: JobScheduler;
   /** Held for as long as this process is: "the app is running the jobs". */
   private appLock: ProcessLock | undefined;
@@ -132,12 +133,12 @@ export class AgentService {
       },
     });
 
-    this.jobs = new JobStore({file: paths.jobs});
+    this.jobsStore = new JobStore({file: paths.jobs});
     this.scheduler = new JobScheduler({
-      store: this.jobs,
+      store: this.jobsStore,
       runner: createJobRunner({
         runtime: this.runtime,
-        jobs: this.jobs,
+        jobs: this.jobsStore,
         onEvent: (event) => {
           options.sendEvent(event);
         },
@@ -161,7 +162,7 @@ export class AgentService {
    */
   private jobService(): JobService {
     const owns = async (jobId: string, profileId: string): Promise<boolean> => {
-      const document = await this.jobs.load();
+      const document = await this.jobsStore.load();
       return document.jobs.some(
         (job) => job.id === jobId && job.profileId === profileId,
       );
@@ -169,12 +170,12 @@ export class AgentService {
 
     return {
       list: async (profileId) => {
-        const document = await this.jobs.load();
+        const document = await this.jobsStore.load();
         return document.jobs.filter((job) => job.profileId === profileId);
       },
 
       create: async (input) => {
-        const {job} = await this.jobs.create(input);
+        const {job} = await this.jobsStore.create(input);
         this.scheduler.sync();
         return job;
       },
@@ -189,7 +190,7 @@ export class AgentService {
         if (!(await owns(jobId, profileId))) {
           return null;
         }
-        const job = await this.jobs.update(jobId, patch);
+        const job = await this.jobsStore.update(jobId, patch);
         if (job !== null) {
           this.scheduler.sync();
         }
@@ -200,7 +201,7 @@ export class AgentService {
         if (!(await owns(jobId, profileId))) {
           return false;
         }
-        const removed = await this.jobs.remove(jobId);
+        const removed = await this.jobsStore.remove(jobId);
         if (removed) {
           this.scheduler.sync();
         }
@@ -293,6 +294,12 @@ export class AgentService {
     server: McpServer,
   ): Promise<{ok: boolean; detail: string}> {
     return await this.mcp.test(server);
+  }
+
+  /** Every job, for the tray's summary line. */
+  async jobs(): Promise<Job[]> {
+    const document = await this.jobsStore.load();
+    return document.jobs;
   }
 
   mcpStatuses(): Record<string, McpStatus> {

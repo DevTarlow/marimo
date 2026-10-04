@@ -83,6 +83,13 @@ export interface AgentController {
   open: (sessionId: string) => Promise<void>;
   /** Re-reads the agent and the conversation, after settings may have changed. */
   reload: () => Promise<void>;
+  /**
+   * Set when the tray has asked for Settings to open.
+   *
+   * A counter rather than a boolean: two presses in a row have to be two
+   * different values, or the second one opens nothing.
+   */
+  openSettings: number;
   newSession: () => Promise<void>;
   dismissError: () => void;
 }
@@ -102,6 +109,7 @@ export function useAgent(): AgentController {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [storedPending, setStoredPending] = useState<PendingGate[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
+  const [openSettings, setOpenSettings] = useState(0);
 
   /*
    * Read by the event listener, which is registered once and would otherwise
@@ -198,6 +206,16 @@ export function useAgent(): AgentController {
        * id at all and are drawn by whatever owns them. This listener is only the
        * conversation, so it stops here rather than guessing at a session.
        */
+      /*
+       * The tray asking for Settings, which is the one message that is not about
+       * a conversation. Handled before the filter below, because it has no
+       * session to be filtered by.
+       */
+      if (event.type === 'window.openSettings') {
+        setOpenSettings((count) => count + 1);
+        return;
+      }
+
       if (!('sessionId' in event)) {
         return;
       }
@@ -496,6 +514,7 @@ export function useAgent(): AgentController {
     decide,
     stop,
     open,
+    openSettings,
     reload: boot,
     newSession,
     dismissError: () => {

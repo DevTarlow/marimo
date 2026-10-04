@@ -1304,6 +1304,14 @@ export type AgentUiEvent =
    */
   | {type: 'mcp.status'; serverId: string; status: McpStatus}
   /*
+   * The tray asking the window to open Settings.
+   *
+   * A message rather than a navigation the main process performs, because the
+   * window owns what it is looking at — and a process that reached in and
+   * changed the view would be a second place that decides.
+   */
+  | {type: 'window.openSettings'}
+  /*
    * A helper agent, while it runs.
    *
    * Three events rather than a nested `AgentUiEvent`, deliberately. A child's

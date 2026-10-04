@@ -17,12 +17,23 @@ import {homedir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-import {BrowserWindow, app, screen, shell} from 'electron';
+import {
+  BrowserWindow,
+  Menu,
+  Notification,
+  Tray,
+  app,
+  nativeImage,
+  screen,
+  shell,
+} from 'electron';
 
 import {IPC_EVENT_CHANNEL, defaultWindowState} from '@marimo/protocol';
 import type {AgentUiEvent, WindowState} from '@marimo/protocol';
 
 import {registerIpcHandler} from './ipc.js';
+import {noticeFor, trayMenu} from './tray.js';
+import type {TrayItem} from './tray.js';
 import {AgentService} from './agent.js';
 import {
   applyUserDataOverride,
@@ -148,11 +159,35 @@ async function createWindow(): Promise<BrowserWindow> {
   return window;
 }
 
-/** Broadcast to the open window, if there is one. */
+/**
+ * Broadcast to the open window, if there is one.
+ *
+ * Also where the tray and the notifications learn what happened, because this is
+ * the one place every event passes through: a job finishing, a connector coming
+ * up, a turn starting. Hanging the tray off it means the menu cannot go stale
+ * because somebody forgot to call a refresh somewhere.
+ */
 export function broadcast(event: AgentUiEvent): void {
   if (mainWindow !== undefined && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(IPC_EVENT_CHANNEL, event);
   }
+
+  switch (event.type) {
+    case 'job.changed':
+      void refreshJobs();
+      return;
+    case 'mcp.status':
+    case 'turn.started':
+    case 'turn.completed':
+    case 'turn.failed':
+    case 'turn.aborted':
+      refreshTray();
+      break;
+    default:
+      break;
+  }
+
+  maybeNotify(event);
 }
 
 /**
@@ -167,6 +202,22 @@ export function broadcast(event: AgentUiEvent): void {
 
 /** A problem to show the user, decided while the app starts. */
 let startupWarning: string | undefined;
+
+/**
+ * The tray, when there is one.
+ *
+ * Its existence is what makes closing the window not mean quitting, so it is
+ * also what `close` and `window-all-closed` consult before deciding.
+ */
+let tray: Tray | undefined;
+/**
+ * Whether the user has been told that closing the window leaves the app
+ * running.
+ *
+ * Said once. Repeating it is a notification people learn to dismiss, and the one
+ * they then dismiss is an approval request.
+ */
+let toldAboutTray = false;
 
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
@@ -224,7 +275,25 @@ async function bootstrap(): Promise<void> {
     },
   });
 
+  /*
+   * The tray comes before the window, and before anything can be closed. What
+   * makes closing a window safe is that there is a tray to reopen it from, so
+   * creating it afterwards would leave a moment where closing meant quitting —
+   * and closing is exactly what a user does in the first second.
+   */
+  createTray();
+
+  /*
+   * Opened hidden when the OS started this at login. A window in somebody's face
+   * every morning is one they turn the feature off to escape.
+   */
+  const startedHidden = process.argv.includes('--hidden');
   mainWindow = await createWindow();
+  if (startedHidden) {
+    mainWindow.hide();
+  }
+
+  await refreshJobs();
 
   /*
    * Remember where it ends up.
@@ -253,10 +322,226 @@ async function bootstrap(): Promise<void> {
     }
     settle = setTimeout(remember, SETTLE_MS);
   });
-  mainWindow.on('close', remember);
+  mainWindow.on('close', (event) => {
+    remember();
+    /*
+     * The close button hides rather than quits, which is what a tray-resident
+     * app is. Held back only while there is a tray and the user has not actually
+     * asked to quit — and the user is told once, because an app that appears to
+     * ignore its own close button is one people kill from a task manager.
+     */
+    if (staysResident() && !quitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+      explainResidency();
+      refreshTray();
+    }
+  });
   mainWindow.on('closed', () => {
     mainWindow = undefined;
   });
+}
+
+/**
+ * Whether the app should stay running with no window.
+ *
+ * True whenever there is a tray to get it back from. Without one, closing the
+ * window has to mean quitting: a process with no window and no way to reach it
+ * is one the user can only kill from a task manager.
+ */
+function staysResident(): boolean {
+  return tray !== undefined;
+}
+
+/** Whether the app comes back after a login. */
+function startAtLogin(): boolean {
+  try {
+    return app.getLoginItemSettings().openAtLogin;
+  } catch {
+    // A platform that cannot answer is one where the switch has nothing to show,
+    // and "off" is the honest reading of that.
+    return false;
+  }
+}
+
+function setStartAtLogin(on: boolean): void {
+  app.setLoginItemSettings({
+    openAtLogin: on,
+    /*
+     * Started hidden. A login that opens a window in somebody's face every
+     * morning is one they turn off again — and the flag is what the start-up
+     * path reads to decide.
+     */
+    args: ['--hidden'],
+  });
+  refreshTray();
+}
+
+/** Creates the tray, and the icon it needs. */
+function createTray(): void {
+  if (tray !== undefined) {
+    return;
+  }
+  const icon = nativeImage.createFromPath(windowIcon);
+  tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({width: 22, height: 22}));
+  tray.setToolTip('Marimo Agent');
+  // A click on the icon is the gesture people try first; on Windows and Linux a
+  // menu on left-click is the convention, so both do the same thing here.
+  tray.on('click', () => {
+    if (mainWindow !== undefined && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+      mainWindow.hide();
+    } else {
+      showWindow();
+    }
+    refreshTray();
+  });
+  refreshTray();
+}
+
+/** Rebuilds the tray menu from what is true now. */
+function refreshTray(): void {
+  if (tray === undefined) {
+    return;
+  }
+  const items: TrayItem[] = trayMenu({
+    windowVisible: mainWindow !== undefined && !mainWindow.isDestroyed() && mainWindow.isVisible(),
+    startAtLogin: startAtLogin(),
+    jobs: jobsForTray(),
+    busy: agent?.isBusy() ?? false,
+    connectors: agent?.mcpStatuses() ?? {},
+  });
+
+  tray.setContextMenu(
+    Menu.buildFromTemplate(
+      items.map((item) =>
+        item.type === 'separator'
+          ? {type: 'separator' as const}
+          : {
+              label: item.label ?? '',
+              ...(item.enabled === undefined ? {} : {enabled: item.enabled}),
+              ...(item.checked === undefined
+                ? {}
+                : {type: 'checkbox' as const, checked: item.checked}),
+              ...(item.id === undefined
+                ? {}
+                : {click: () => void onTrayCommand(item.id ?? '')}),
+            },
+      ),
+    ),
+  );
+}
+
+/** The jobs the tray summarises. Read synchronously, so it is cached. */
+let trayJobs: Awaited<ReturnType<AgentService['jobs']>> = [];
+function jobsForTray(): typeof trayJobs {
+  return trayJobs;
+}
+
+/** Refreshes the cached summary the tray draws from. */
+async function refreshJobs(): Promise<void> {
+  if (agent === undefined) {
+    trayJobs = [];
+    return;
+  }
+  try {
+    trayJobs = await agent.jobs();
+    refreshTray();
+  } catch {
+    // A jobs file that cannot be read is reported in the window; the tray
+    // showing a stale count for a moment is better than it disappearing.
+  }
+}
+
+async function onTrayCommand(id: string): Promise<void> {
+  switch (id) {
+    case 'toggle-window':
+      if (mainWindow !== undefined && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+        mainWindow.hide();
+      } else {
+        showWindow();
+      }
+      refreshTray();
+      return;
+    case 'settings':
+      showWindow();
+      /*
+       * The window owns what it is looking at, so "open Settings" is a message
+       * to it rather than a navigation this process performs.
+       */
+      broadcast({type: 'window.openSettings'});
+      return;
+    case 'start-at-login':
+      setStartAtLogin(!startAtLogin());
+      return;
+    case 'quit':
+      quitting = true;
+      await shutdown();
+      app.quit();
+      return;
+    default:
+      return;
+  }
+}
+
+/** Brings the window back, rebuilding it if it was closed. */
+function showWindow(): void {
+  if (mainWindow !== undefined && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  createWindow();
+}
+
+/**
+ * Tells the user, once, that closing the window left the app running.
+ *
+ * Said once because a notification people learn to dismiss is one they will also
+ * dismiss when it is an approval request. And said at all because the
+ * alternative is an app that appears to ignore the close button — which is the
+ * behaviour people describe as "it would not quit" and resolve by killing it.
+ */
+function explainResidency(): void {
+  if (toldAboutTray || !Notification.isSupported()) {
+    return;
+  }
+  toldAboutTray = true;
+  new Notification({
+    title: 'Marimo Agent is still running',
+    body: 'It keeps to its schedule in the background. Use the tray icon to bring it back, or to quit.',
+  }).show();
+}
+
+/**
+ * Shows a notification for something that needs the user.
+ *
+ * The rule lives in `tray.ts` and is deliberately narrow: *needs you*, not
+ * *happened*.
+ */
+function maybeNotify(event: AgentUiEvent): void {
+  if (!Notification.isSupported()) {
+    return;
+  }
+  /*
+   * Only when the window is not in front of them. A notification for something
+   * already on screen is noise, and it is the noise that teaches people to
+   * dismiss the ones that matter.
+   */
+  if (mainWindow !== undefined && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused()) {
+    return;
+  }
+  const notice = noticeFor(event as {type: string});
+  if (notice === undefined) {
+    return;
+  }
+  const shown = new Notification({title: notice.title, body: notice.body});
+  shown.on('click', () => {
+    showWindow();
+  });
+  shown.show();
 }
 
 /**
@@ -268,6 +553,15 @@ async function bootstrap(): Promise<void> {
  * both arrive.
  */
 let shuttingDown = false;
+
+/**
+ * Whether the user asked to quit, as opposed to closing a window.
+ *
+ * The distinction the whole of the tray behaviour rests on: with a tray, closing
+ * the window leaves the app running, and only an explicit quit ends it. Without
+ * this flag every `close` would be read as "the user is finished".
+ */
+let quitting = false;
 async function shutdown(): Promise<void> {
   if (shuttingDown) {
     return;
@@ -286,23 +580,31 @@ if (!hasLock) {
   // racing it for the same conversation files.
   app.quit();
 } else {
+  /*
+   * Launching the app again brings the window back.
+   *
+   * `showWindow` rather than focusing what is there, because with a tray the
+   * window may have been *closed* — `mainWindow` is then undefined, and the
+   * version of this that only focused an existing window did nothing at all.
+   * That is the most likely way somebody tries to get back to a resident app:
+   * they click the launcher again, and an app that appears not to start is one
+   * they conclude is broken.
+   */
   app.on('second-instance', () => {
-    if (mainWindow !== undefined && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.focus();
-    }
+    showWindow();
+    refreshTray();
   });
 
   app.on('window-all-closed', () => {
     /*
-     * Quit, for now. This is the decision point M2 changes: once scheduled jobs
-     * and connectors run in the main process, closing the last window can no
-     * longer mean "stop the app" — but that is only true once there is a tray to
-     * get it back from, and a process with no window and no tray is a process
-     * the user cannot quit.
+     * Staying up is the point of a tray-resident app, and it is only safe
+     * *because* of the tray: a process with no window and no way to reach it is
+     * one the user can only kill from a task manager. So the tray's existence is
+     * what decides, rather than a constant.
      */
+    if (staysResident() && !quitting) {
+      return;
+    }
     void shutdown().then(() => {
       app.quit();
     });

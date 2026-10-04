@@ -46,6 +46,18 @@ export function App(): React.JSX.Element {
     };
   }, []);
 
+  /*
+   * The tray's Settings command. Written as an effect keyed on a counter rather
+   * than handled inside the event listener, because the listener is registered
+   * once and `setShowSettings` from inside it would be a second source of truth
+   * about what the window is showing.
+   */
+  useEffect(() => {
+    if (agent.openSettings > 0) {
+      setShowSettings(true);
+    }
+  }, [agent.openSettings]);
+
   const theme: Theme = preview ?? info?.theme ?? 'dark';
   useEffect(() => {
     document.documentElement.dataset['theme'] = theme;

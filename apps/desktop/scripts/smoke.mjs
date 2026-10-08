@@ -367,26 +367,29 @@ async function main() {
     }
 
     /*
-     * A fresh install opens by asking for a key rather than by showing a chat
-     * that refuses. Checked here because it is the first thing a new user sees
-     * and the only part of the first run that no unit test covers.
+     * A fresh install opens by pointing at Settings rather than by showing a
+     * chat that refuses. Checked here because it is the first thing a new user
+     * sees and the only part of the first run that no unit test covers. The
+     * control is asserted, not just the copy: a welcome that says "add a key in
+     * Settings" with nothing to press is the dead end this screen exists to
+     * avoid.
      */
     const asked = await send('Runtime.evaluate', {
       expression: `JSON.stringify({
         onboarding: !!document.querySelector('.onboarding'),
-        input: !!document.querySelector('.onboarding-input'),
+        cta: !!document.querySelector('.onboarding .button-primary'),
         composer: !!document.querySelector('.composer-box'),
       })`,
       returnByValue: true,
     });
     const first = JSON.parse(asked.result.value);
-    if (first.onboarding !== true || first.input !== true) {
-      fail(`a fresh install did not ask for a key: ${asked.result.value}`);
+    if (first.onboarding !== true || first.cta !== true) {
+      fail(`a fresh install did not point at Settings: ${asked.result.value}`);
     } else if (first.composer !== true) {
       // Not blocking: somebody who wants to look around first still can.
       fail('the first run took the message box away');
     } else {
-      ok('a fresh install asks for a key, without taking the window over');
+      ok('a fresh install points at Settings, without taking the window over');
     }
 
     /*

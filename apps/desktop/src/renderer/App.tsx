@@ -212,8 +212,6 @@ export function App(): React.JSX.Element {
            * question.
            */
           <Onboarding
-            settings={settings}
-            onSaved={loadSettings}
             onOpenSettings={() => {
               setShowSettings(true);
             }}

@@ -119,6 +119,19 @@ started to prove asar is still off. Read it before changing a build script, a
 dependency's version, or anything the package step assumes about
 `apps/desktop/release/`.
 
+**It has never run here, and the red X does not mean it failed.** The remote is a
+Gitea instance with no runner registered, so every push records a run that
+executed nothing — `Waiting`, `0s`, annotated *No matching online runner with
+label: ubuntu-latest*. That annotation is the whole story; the older runs that
+read `Failure` were Gitea giving up on jobs nothing claimed, not tests that
+failed. So nothing in the workflow is exercised by a push, and a change that
+touches the preload, the IPC schemas or the bundles is still only verified by the
+local commands above. Registering a runner is the job that turns that tab into a
+signal — worth doing closer to release than now — and the workflow is ready for
+one: nothing in it is on Gitea's unsupported list, with `${{ runner.temp }}` in
+the package step the single expression to watch, because an unexpanded context
+there fails the step rather than the job.
+
 Two consequences worth internalising. **A green local run is not a green CI run**
 — the steps above are the difference, so a packaging or preload change is not
 verified until CI has said so. And **a version belongs in exactly one place**:

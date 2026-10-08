@@ -52,8 +52,13 @@ Two environment quirks are worth knowing about up front, both covered in
 - If Electron's binary download fails with `ENOENT ... ~/.cache/electron`, wrap
   the command: `./scripts/with-local-caches.sh pnpm install`. The project keeps
   every tool cache inside the repository.
-- In a container, Electron refuses to start because `chrome-sandbox` cannot be
-  setuid-root. The smoke check alone takes `MARIMO_NO_SANDBOX=1` for that.
+- On Ubuntu 24.04 and later, Electron refuses to start with `The SUID sandbox
+  helper binary was found, but is not configured correctly`. Those releases stop
+  an ordinary process from creating the user namespace Chromium's sandbox is
+  built on, so Chromium falls back to a setuid helper that Electron ships as a
+  plain user-owned file. Run `./scripts/fix-linux-sandbox.sh` once. In a
+  container, where AppArmor cannot be configured at all, the smoke check takes
+  `MARIMO_NO_SANDBOX=1` instead.
 
 ## Why it is built this way
 

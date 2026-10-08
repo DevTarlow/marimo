@@ -139,7 +139,8 @@ pnpm test             # ~34s, vitest everywhere
 pnpm build            # tsc -b for every project
 pnpm build:web        # then the renderer bundle — step 3 is two commands and
                       # `pnpm build` alone leaves the bundle stale
-MARIMO_NO_SANDBOX=1 pnpm --filter @marimo/desktop smoke   # only in a container
+MARIMO_NO_SANDBOX=1 pnpm --filter @marimo/desktop smoke   # only where AppArmor
+                                                          # cannot help; see below
 ```
 
 **`--watch` has to be spelled out, and the *script* cannot do it.** Each
@@ -243,10 +244,28 @@ points every tool cache inside it:
 ./scripts/with-local-caches.sh pnpm install
 ```
 
-In a container where `chrome-sandbox` cannot be setuid-root, Electron aborts with
-`The SUID sandbox helper binary was found, but is not configured correctly`. The
-smoke check takes `MARIMO_NO_SANDBOX=1` for that case, and nothing else does —
-it is a real reduction in isolation and must not become the quiet default.
+Electron aborts with `The SUID sandbox helper binary was found, but is not
+configured correctly` when it cannot create the user namespace Chromium's sandbox
+is built on. Ubuntu 24.04 made that a default rather than a container quirk:
+`kernel.apparmor_restrict_unprivileged_userns` is 1, so the namespace sandbox is
+unavailable and the setuid fallback is tried instead. Electron ships that
+fallback as an ordinary user-owned 0755 file, which is what aborts.
+
+`./scripts/fix-linux-sandbox.sh` installs the fix Ubuntu uses for its own
+browsers — an AppArmor profile naming the binary and granting `userns,`. It has
+to be re-run when the Electron version changes, because the profile attaches to
+the versioned path inside `.pnpm`, and a stale one fails exactly the way no
+profile did. The setuid alternative, `chown root:root` plus `chmod 4755` on
+`chrome-sandbox`, works too but is undone by the next `pnpm install` that
+re-extracts Electron.
+
+The smoke check still takes `MARIMO_NO_SANDBOX=1` for the case AppArmor cannot
+cover — a container — and nothing else does, because it is a real reduction in
+isolation and must not become the quiet default.
+
+Either way the symptom is misleading and worth recognising: the dev launcher
+prints Vite's URL *first* and Electron dies immediately after, so a host policy
+that refused a syscall reads as a renderer that failed to paint.
 
 ## Packaging
 

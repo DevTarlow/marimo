@@ -279,8 +279,17 @@ body.companion-body {
   line-height: 1;
 }
 
+/*
+ * The send button is an accent fill, so it hits the same trap as
+ * `.button-primary`: the default disabled colour painted a faint grey glyph on
+ * blue, and the old `opacity: 0.4` then faded both ends of that pair toward the
+ * desktop behind the pet. A neutral surface at full opacity keeps the arrow
+ * legible, and the absent accent is what says it cannot be pressed.
+ */
 .pet-send:disabled {
-  opacity: 0.4;
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
 }
 
 /* ------------------------------------------------------------------- moss */

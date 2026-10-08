@@ -478,7 +478,7 @@ async function main() {
       const clicked = await send('Runtime.evaluate', {
         expression: `(() => {
           const wanted = ${JSON.stringify(wantedTheme)};
-          const button = [...document.querySelectorAll('.shell-theme-btn')]
+          const button = [...document.querySelectorAll('.theme-button')]
             .find((entry) => entry.textContent.trim().toLowerCase() === wanted);
           if (button === undefined) return false;
           button.click();

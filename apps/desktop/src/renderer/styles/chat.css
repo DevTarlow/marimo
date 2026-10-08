@@ -491,6 +491,20 @@
   background: var(--accent-hover);
 }
 
+/*
+ * A disabled primary action is a resting button, not a grey label on an accent
+ * fill. It gets the quiet button's surface and border instead of the accent, so
+ * the text keeps its contrast and the button still reads as unavailable rather
+ * than as an enabled one with odd colours. This rule carries two class-level
+ * selectors, which is what lets it beat the default disabled colour in
+ * `global.css`.
+ */
+.button-primary:disabled {
+  background: var(--surface-hover);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
 .button-quiet {
   background: var(--surface);
   border: 1px solid var(--border-strong);

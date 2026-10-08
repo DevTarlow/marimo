@@ -62,6 +62,19 @@ button {
 
 button:disabled {
   cursor: not-allowed;
+}
+
+/*
+ * The resting colour for a disabled button, and *only* the resting colour.
+ * `:where(button)` strips the element's specificity, leaving this at (0,1,0):
+ * still above `button { color: inherit }`, but low enough that a component
+ * class can win. A bare `button:disabled` (0,1,1) outranked `.button-primary`
+ * (0,1,0) and painted faint grey onto the accent fill, which is how a disabled
+ * Save/Save key became grey-on-blue — the least legible thing on the screen, in
+ * both themes. A button with an accent fill now declares its own disabled
+ * colour beside the fill it belongs to.
+ */
+:where(button):disabled {
   color: var(--text-faint);
 }
 

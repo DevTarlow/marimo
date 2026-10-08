@@ -1,32 +1,56 @@
 /**
- * What the agent would like to remember.
+ * Memory, in two halves: how much of it there is, and what the agent would add.
  *
- * The queue exists because long-term memory is injected into every future system
- * prompt: a wrong entry is not a wrong answer once, it is a wrong belief carried
- * into every later conversation. So the agent proposes and the user decides.
+ * The size control is first because it is what the rest is measured against. A
+ * byte limit means nothing on its own — "8 KB" is not a quantity anybody has a
+ * feel for — so it is drawn as a slider in kilobytes beside a readout of the
+ * file it applies to, with the line the agent is warned at made visible. That
+ * readout is the same number the agent's `read_memory` quotes, read from the
+ * same place, so the bar cannot drift from the warning.
  *
- * Both buttons remove the entry, and that is deliberate. A suggestion that stayed
+ * The proposals are the other half. Long-term memory is injected into every
+ * future system prompt, so a wrong entry is not a wrong answer once — it is a
+ * wrong belief carried into every later conversation. The agent proposes and the
+ * user decides.
+ *
+ * Both buttons remove an entry, and that is deliberate: a suggestion that stayed
  * after being refused would be proposed again on every idle look, and a queue
  * that refills itself with things already rejected is one nobody reads.
- *
- * Kept short on purpose. The reviewer is told most conversations contain nothing
- * worth keeping, and this panel assumes the same: a handful of lines, each one
- * readable at a glance, with the reasoning folded away for when it is not
- * obvious why something was proposed.
  */
 import {useEffect, useState} from 'react';
 
-import type {MemoryProposal} from '@marimo/protocol';
+import {
+  DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+  MEMORY_SOFT_LIMIT_MAX_BYTES,
+  MEMORY_SOFT_LIMIT_MIN_BYTES,
+} from '@marimo/protocol';
+import type {MemoryProposal, MemoryUsage} from '@marimo/protocol';
+
+import {formatKiB, summarizeMemory} from '../memory-format.js';
 
 export function Memory({onChange}: {onChange?: () => void}): React.JSX.Element {
   const [proposals, setProposals] = useState<MemoryProposal[] | null>(null);
+  const [usage, setUsage] = useState<MemoryUsage | null>(null);
+  /**
+   * The slider's own value while it is being dragged.
+   *
+   * Held apart from `usage.limitBytes` so dragging is smooth: the stored value
+   * only changes when the pointer is released, and a slider whose handle snapped
+   * back to the old number between steps would be unusable.
+   */
+  const [draftLimit, setDraftLimit] = useState<number | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = async (): Promise<void> => {
     try {
-      const result = await window.marimo.call('memory.proposals', {});
-      setProposals(result.proposals);
+      const [listed, measured] = await Promise.all([
+        window.marimo.call('memory.proposals', {}),
+        window.marimo.call('memory.usage', {}),
+      ]);
+      setProposals(listed.proposals);
+      setUsage(measured);
+      setDraftLimit(null);
     } catch (failure) {
       setProblem(describe(failure));
     }
@@ -70,25 +94,100 @@ export function Memory({onChange}: {onChange?: () => void}): React.JSX.Element {
     }
   };
 
-  if (proposals === null) {
-    return (
-      <section className="settings-section">
-        <h3>What it would remember</h3>
-        <p className="settings-muted">{problem ?? 'Reading…'}</p>
-      </section>
-    );
-  }
+  /*
+   * Saved when the drag ends rather than on every step. A slider fires an event
+   * per pixel, and writing the settings file on each one would be a burst of disk
+   * writes for what is one decision.
+   */
+  const commitLimit = async (bytes: number): Promise<void> => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await window.marimo.call('settings.set', {
+        patch: {memorySoftLimitBytes: bytes},
+      });
+      await load();
+      onChange?.();
+    } catch (failure) {
+      setProblem(describe(failure));
+      setDraftLimit(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const summary = usage === null ? null : summarizeMemory(usage);
+  const limit =
+    draftLimit ?? usage?.limitBytes ?? DEFAULT_MEMORY_SOFT_LIMIT_BYTES;
 
   return (
     <section className="settings-section">
-      <h3>What it would remember</h3>
+      <h3>Memory</h3>
+
+      {usage === null ? (
+        <p className="settings-muted">{problem ?? 'Reading…'}</p>
+      ) : (
+        <>
+          <p className="settings-muted">
+            What this agent remembers about you and your work. The whole file is
+            shown to it at the start of every conversation, so the smaller it is
+            the less of each prompt it takes up.
+          </p>
+
+          <div
+            className={`memory-meter memory-meter-${summary?.pressure ?? 'room'}`}
+          >
+            <div
+              className="memory-meter-fill"
+              style={{width: `${String(summary?.percent ?? 0)}%`}}
+              role="img"
+              aria-label={summary?.size ?? ''}
+            />
+          </div>
+          <p className="memory-readout">{summary?.size}</p>
+          <p className="settings-why">{summary?.detail}</p>
+
+          <label className="memory-limit">
+            <span className="memory-limit-label">
+              Ask it to prune past{' '}
+              <strong className="memory-limit-value">{formatKiB(limit)}</strong>
+            </span>
+            <input
+              type="range"
+              min={MEMORY_SOFT_LIMIT_MIN_BYTES}
+              max={MEMORY_SOFT_LIMIT_MAX_BYTES}
+              step={1024}
+              value={limit}
+              disabled={busy}
+              aria-label="Memory size before the agent is asked to prune"
+              onChange={(event) => {
+                setDraftLimit(Number(event.target.value));
+              }}
+              onPointerUp={() => {
+                void commitLimit(limit);
+              }}
+              onKeyUp={() => {
+                void commitLimit(limit);
+              }}
+            />
+            <span className="memory-limit-range">
+              <span>{formatKiB(MEMORY_SOFT_LIMIT_MIN_BYTES)}</span>
+              <span>{formatKiB(MEMORY_SOFT_LIMIT_MAX_BYTES)}</span>
+            </span>
+          </label>
+        </>
+      )}
+
+      <h3 className="memory-proposals-heading">What it would remember</h3>
       <p className="settings-muted">
         After a conversation goes quiet, the agent reads it back and suggests
-        what is worth keeping. These are shown to it at the start of every future
-        conversation, so it asks before writing one down.
+        what is worth keeping. These are shown to it at the start of every
+        future conversation, so it asks before writing one down.
       </p>
 
-      {proposals.length === 0 ? (
+      {proposals === null ? (
+        <p className="settings-muted">Reading…</p>
+      ) : proposals.length === 0 ? (
         <p className="settings-muted">
           Nothing waiting. Most conversations have nothing in them worth keeping
           — that is the expected answer, not a problem.
@@ -130,7 +229,9 @@ export function Memory({onChange}: {onChange?: () => void}): React.JSX.Element {
         ))
       )}
 
-      {problem !== null && <p className="connector-detail connector-error">{problem}</p>}
+      {problem !== null && (
+        <p className="connector-detail connector-error">{problem}</p>
+      )}
     </section>
   );
 }

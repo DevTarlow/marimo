@@ -149,7 +149,9 @@
   color: var(--text-muted);
   font-size: var(--text-xs);
   text-transform: capitalize;
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .theme-button:hover {
@@ -471,7 +473,9 @@
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius);
   font-size: var(--text-sm);
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .button-small {
@@ -1131,6 +1135,78 @@
 }
 
 /* ------------------------------------------------------------ what it knows */
+
+/*
+ * The size control, above the queue it belongs to.
+ *
+ * A bar rather than only a number: "3.2 KB of 8 KB" is precise and still hard to
+ * feel, while a bar a third full is read at a glance. The two colours are two of
+ * the three states the section describes — room and over — and `over` is the same
+ * line the agent is warned at, so the colour means something specific rather
+ * than being decoration.
+ */
+.memory-meter {
+  height: 6px;
+  margin-top: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.memory-meter-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms ease-out;
+}
+
+.memory-meter-over .memory-meter-fill {
+  background: var(--warning);
+}
+
+.memory-readout {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-limit {
+  display: block;
+  margin-top: var(--space-3);
+}
+
+.memory-limit-label {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.memory-limit-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The range input is left mostly to the platform, with only its width and accent
+ * colour set. A hand-drawn track means hand-drawn thumbs for every platform the
+ * app ships on, and getting that wrong is how a control stops responding to the
+ * keyboard.
+ */
+.memory-limit input[type='range'] {
+  width: 100%;
+  margin: var(--space-2) 0 0;
+  accent-color: var(--accent);
+}
+
+.memory-limit-range {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.memory-proposals-heading {
+  margin-top: var(--space-5);
+}
 
 .memory-item {
   display: flex;

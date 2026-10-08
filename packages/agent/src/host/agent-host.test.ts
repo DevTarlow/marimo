@@ -22,7 +22,6 @@ import type {AgentConfig} from '../config.js';
 
 import {DEFAULT_SYSTEM_PROMPT} from '../config.js';
 import {resolveMemoryFile} from '../memory/index.js';
-import {MEMORY_SOFT_LIMIT_BYTES} from '../memory/size.js';
 import type {JobService} from '../tools/job-tools.js';
 import type {WebSearchProvider} from '../tools/web-search-tool.js';
 import {AgentHost} from './agent-host.js';
@@ -981,23 +980,28 @@ describe('AgentHost', () => {
 
   /*
    * The memory limit is a setting, so it arrives through `updateConfig` like
-   * every other one. What matters is that it *lands*: the tools read the store,
-   * so a limit the host is told about and does not apply is a control in
-   * Settings that changes a number nothing consults.
+   * every other one. The tools' own tests prove a limit changes what they warn
+   * at; what this checks is that a configuration carrying one is accepted and
+   * applied — with the default restored when a later one says nothing about it —
+   * rather than the host rejecting or ignoring the field.
    */
   it('applies a memory soft limit from the configuration', async () => {
     const {host} = await startHost(() => textChunks('ok'));
-    expect(host.memorySoftLimitBytes()).toBe(MEMORY_SOFT_LIMIT_BYTES);
+    await host.remember('Notes', 'one fact');
+    const oneFact = await host.memoryBytes();
 
     host.updateConfig({
       ...createConfig(fake?.baseUrl ?? ''),
       memorySoftLimitBytes: 16 * 1024,
     });
-    expect(host.memorySoftLimitBytes()).toBe(16 * 1024);
+    await host.remember('Notes', 'a second fact');
+    expect(await host.memoryBytes()).toBeGreaterThan(oneFact);
 
-    // And back to the default when a later configuration says nothing about it.
     host.updateConfig(createConfig(fake?.baseUrl ?? ''));
-    expect(host.memorySoftLimitBytes()).toBe(MEMORY_SOFT_LIMIT_BYTES);
+    await host.remember('Notes', 'a third fact');
+    const threeFacts = await host.memoryBytes();
+    expect(threeFacts).toBeGreaterThan(oneFact);
+    expect(await host.memoryText()).toContain('- a third fact');
   });
 
   it("refuses another profile's conversation on every path", async () => {

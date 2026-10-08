@@ -15,6 +15,9 @@ import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
+import {MAX_MEMORY_BYTES, resolveMemoryFile} from '@marimo/agent';
+import {DEFAULT_MEMORY_SOFT_LIMIT_BYTES} from '@marimo/protocol';
+
 import {resolveAppPaths} from '../paths.js';
 import type {AppPaths} from '../paths.js';
 import {ProfileStore} from '../profiles.js';
@@ -57,6 +60,48 @@ describe('AgentRuntime', () => {
   }
 
   const noKey = async (): Promise<SecretRead> => ({state: 'absent'});
+
+  /*
+   * The size control in Settings reads these three numbers. They come from the
+   * agent's own store rather than from a second copy of the setting, which is
+   * what stops the dialog drawing a bar against a limit the agent is not using.
+   */
+  describe('memory usage', () => {
+    it('reports the file size, the user limit and the hard cap', async () => {
+      const agent = runtime(noKey);
+      await agent.updateSettings({memorySoftLimitBytes: 16 * 1024});
+
+      await mkdir(join(dir, '.marimo', profileId), {recursive: true});
+      await writeFile(resolveMemoryFile(dir, profileId), '- a fact\n', 'utf8');
+
+      const usage = await agent.memoryUsage(profileId);
+      expect(usage).toEqual({
+        bytes: Buffer.byteLength('- a fact\n', 'utf8'),
+        limitBytes: 16 * 1024,
+        capBytes: MAX_MEMORY_BYTES,
+      });
+    });
+
+    it('reports zero for an agent that has never been told anything', async () => {
+      const usage = await runtime(noKey).memoryUsage(profileId);
+      expect(usage.bytes).toBe(0);
+      expect(usage.limitBytes).toBe(DEFAULT_MEMORY_SOFT_LIMIT_BYTES);
+    });
+
+    /*
+     * A readout is not a reason to dial an MCP server. Answering from settings
+     * and the file is the same answer by construction, and it keeps the dialog
+     * working on an install with no API key yet.
+     */
+    it('answers without building a host', async () => {
+      const agent = runtime(noKey);
+      await agent.updateSettings({memorySoftLimitBytes: 4 * 1024});
+      expect(await agent.memoryUsage(profileId)).toMatchObject({
+        limitBytes: 4 * 1024,
+      });
+      expect(await agent.host(profileId)).toMatchObject({ok: false});
+    });
+  });
 
   describe('when the agent cannot start', () => {
     it('says so from `host` rather than throwing', async () => {
@@ -127,7 +172,9 @@ describe('AgentRuntime', () => {
     it('has a place to record a gate even with no key', async () => {
       const agent = runtime(noKey);
       const session = await agent.createSession(profileId);
-      expect(await agent.pendingGates(profileId, session?.id ?? '')).toEqual([]);
+      expect(await agent.pendingGates(profileId, session?.id ?? '')).toEqual(
+        [],
+      );
     });
   });
 
@@ -237,7 +284,9 @@ describe('the catalogue', () => {
     expect(names).toContain('spawn_agent');
     // Every entry has to carry a description, or the settings screen offers a
     // checkbox with nothing beside it.
-    expect(catalog.tools.every((tool) => tool.description.length > 10)).toBe(true);
+    expect(catalog.tools.every((tool) => tool.description.length > 10)).toBe(
+      true,
+    );
   });
 
   /*
@@ -438,7 +487,10 @@ describe('reading a conversation without a working provider', () => {
       paths,
       readSecret: async () => ({state: 'absent'}),
     });
-    const {messages, pending} = await runtime.transcript('no-such-agent', sessionId);
+    const {messages, pending} = await runtime.transcript(
+      'no-such-agent',
+      sessionId,
+    );
     expect(messages).toEqual([]);
     expect(pending).toEqual([]);
   });

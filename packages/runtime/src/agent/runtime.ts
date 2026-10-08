@@ -23,6 +23,8 @@
 import {
   AgentHost,
   describeTools,
+  MAX_MEMORY_BYTES,
+  MemoryStore,
   runReview,
   SAFE_DEFAULT_TOOLS,
 } from '@marimo/agent';
@@ -42,6 +44,7 @@ import type {
   AgentUiEvent,
   CatalogEntry,
   MemoryProposal,
+  MemoryUsage,
   TranscriptMessage,
   ProfileCatalog,
   ProfilePatch,
@@ -140,7 +143,9 @@ export class AgentRuntime {
       defaultSkills: [],
     });
     this.skillStore = new SkillStore({file: options.paths.skills});
-    this.proposals = new MemoryProposalStore({file: options.paths.memoryProposals});
+    this.proposals = new MemoryProposalStore({
+      file: options.paths.memoryProposals,
+    });
   }
 
   /** The settings as they are on disk right now. */
@@ -166,8 +171,7 @@ export class AgentRuntime {
 
     return {
       tools: describeTools({
-        workspaceRoot:
-          workspace?.path ?? this.options.paths.defaultWorkspace,
+        workspaceRoot: workspace?.path ?? this.options.paths.defaultWorkspace,
         model: activeProvider(settings.providers).model,
         ...(this.options.webSearch ? {webSearch: this.options.webSearch} : {}),
         /*
@@ -324,6 +328,51 @@ export class AgentRuntime {
   }
 
   /**
+   * How full this agent's memory is, for the size control in Settings.
+   *
+   * The file size comes from the agent's own store when one is live, so the bar
+   * and the agent's warning are measuring the same file. The *limit* comes from
+   * settings rather than from the host: a host is handed its configuration at the
+   * start of a turn, so a live one is still holding the previous limit in the
+   * moment after the slider moves — and a control that snapped back to its old
+   * value while the user was looking at it reads as a control that did not save.
+   *
+   * A profile with no host yet reads the file directly. Building one to answer
+   * would mean dialling an MCP server to draw a bar.
+   *
+   * The hard cap is a constant of the store rather than a setting, so it is
+   * reported from there instead of being recomputed here.
+   */
+  async memoryUsage(profileId?: string): Promise<MemoryUsage> {
+    const settings = await this.settingsStore.load();
+    const id = profileId ?? (await this.profileStore.activeProfile()).id;
+    const host = this.hosts.get(id);
+    if (host) {
+      return {
+        bytes: await host.memoryBytes(),
+        limitBytes: settings.memorySoftLimitBytes,
+        capBytes: MAX_MEMORY_BYTES,
+      };
+    }
+
+    const profile = await this.profileFor(id);
+    const workspace =
+      profile?.workspaces.find(
+        (entry) => entry.id === profile.activeWorkspaceId,
+      )?.path ?? this.options.paths.defaultWorkspace;
+    const store = new MemoryStore({
+      workspaceRoot: workspace,
+      softLimitBytes: settings.memorySoftLimitBytes,
+      ...(profile !== undefined ? {profileId: profile.id} : {}),
+    });
+    return {
+      bytes: await store.bytes(),
+      limitBytes: store.softLimitBytes,
+      capBytes: MAX_MEMORY_BYTES,
+    };
+  }
+
+  /**
    * Accepts a suggestion, writing it into the agent's memory.
    *
    * Removed from the queue whether it is accepted or dismissed: both are
@@ -358,7 +407,10 @@ export class AgentRuntime {
   }
 
   /** The catalogue for whichever agent is active, for a window that just opened. */
-  async catalogForActive(): Promise<{profileId: string; catalog: ProfileCatalog}> {
+  async catalogForActive(): Promise<{
+    profileId: string;
+    catalog: ProfileCatalog;
+  }> {
     const profile = await this.profileStore.activeProfile();
     return {profileId: profile.id, catalog: await this.catalog(profile.id)};
   }

@@ -213,6 +213,9 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       proposals: await agent().memoryProposals(),
     }),
 
+    'memory.usage': async (params) =>
+      await agent().memoryUsage(params.profileId),
+
     'memory.resolve': async (params) =>
       await agent().resolveMemoryProposal(params.proposalId, params.accept),
 
@@ -339,7 +342,10 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
   ipcMain.handle(
     IPC_CALL_CHANNEL,
     async (_event, method: unknown, params: unknown): Promise<unknown> => {
-      if (typeof method !== 'string' || !Object.hasOwn(agentCallSchemas, method)) {
+      if (
+        typeof method !== 'string' ||
+        !Object.hasOwn(agentCallSchemas, method)
+      ) {
         throw new Error(`Unknown IPC method: ${String(method)}`);
       }
 

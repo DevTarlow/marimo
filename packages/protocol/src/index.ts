@@ -1300,6 +1300,27 @@ export const memoryProposalSchema = z.object({
 export type MemoryProposal = z.infer<typeof memoryProposalSchema>;
 
 /**
+ * How full an agent's `memory.md` is, and the two sizes that give that meaning.
+ *
+ * All three numbers travel together because none of them is useful alone: a byte
+ * count without the limit cannot say whether memory is nearly full, and the limit
+ * without the count cannot say how close it is. The window draws them as a bar
+ * and the agent is warned at the same line, so they are read from one place
+ * rather than each side keeping its own copy.
+ *
+ * `limitBytes` is the user's soft limit — where the agent is told to prune — and
+ * `capBytes` is the hard one, past which writes are refused. Different questions:
+ * one is "tidy up soon", the other is "this no longer works".
+ */
+export const memoryUsageSchema = z.object({
+  bytes: z.number().int().nonnegative(),
+  limitBytes: z.number().int().positive(),
+  capBytes: z.number().int().positive(),
+});
+
+export type MemoryUsage = z.infer<typeof memoryUsageSchema>;
+
+/**
  * The proposals, and how far the review has read.
  *
  * The watermark is per conversation and lives here rather than in memory: a
@@ -1736,6 +1757,12 @@ export const agentCallSchemas = {
    * the queue, because both are answers.
    */
   'memory.proposals': z.object({}),
+  /*
+   * How full this agent's memory is, for the size control in Settings. A read
+   * rather than event: nothing changes it but a write, and the dialog asks again
+   * every time it opens.
+   */
+  'memory.usage': z.object({profileId: z.string().min(1).optional()}),
   'memory.resolve': z.object({
     proposalId: z.string().min(1),
     accept: z.boolean(),
@@ -1796,6 +1823,7 @@ export interface AgentCallResults {
   'mcp.setSecret': {set: string[]};
   'mcp.test': {ok: boolean; detail: string};
   'memory.proposals': {proposals: MemoryProposal[]};
+  'memory.usage': MemoryUsage;
   'memory.resolve': {ok: boolean; problem?: string};
   'companion.status': {visible: boolean};
   'companion.setVisible': {visible: boolean};

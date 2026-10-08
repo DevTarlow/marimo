@@ -585,15 +585,9 @@ export class AgentHost {
     return await this.memory.readForPrompt();
   }
 
-  /**
-   * The size at which the memory tools warn, as the live store holds it.
-   *
-   * A readout rather than a second copy of the setting: the value lives on the
-   * store the tools call, and answering from anywhere else is how a window comes
-   * to display a limit the agent is not using.
-   */
-  memorySoftLimitBytes(): number {
-    return this.memory.softLimitBytes;
+  /** How many bytes this agent's memory file holds right now. */
+  async memoryBytes(): Promise<number> {
+    return await this.memory.bytes();
   }
 
   /** Adds a fact to memory, as if the agent had called `update_memory`. */

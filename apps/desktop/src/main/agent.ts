@@ -240,7 +240,9 @@ export class AgentService {
   }
 
   /** The settings as they are on disk, for the callers that need to ask. */
-  async providers(): Promise<Awaited<ReturnType<AgentRuntime['settings']>>['providers']> {
+  async providers(): Promise<
+    Awaited<ReturnType<AgentRuntime['settings']>>['providers']
+  > {
     return (await this.runtime.settings()).providers;
   }
 
@@ -460,7 +462,12 @@ export class AgentService {
     const set: string[] = [];
     for (const reference of server.secrets ?? []) {
       const store = secretStore(
-        mcpSecretFile(this.options.paths, server.id, reference.target, reference.name),
+        mcpSecretFile(
+          this.options.paths,
+          server.id,
+          reference.target,
+          reference.name,
+        ),
         `the ${reference.name} for this connector`,
       );
       if (await store.has()) {
@@ -486,6 +493,11 @@ export class AgentService {
   /** The agent's memory suggestions, waiting for an answer. */
   async memoryProposals() {
     return await this.runtime.memoryProposals();
+  }
+
+  /** How full an agent's memory is, for the size control in Settings. */
+  async memoryUsage(profileId?: string) {
+    return await this.runtime.memoryUsage(profileId);
   }
 
   /** Accepts one into memory, or drops it. */
@@ -604,7 +616,8 @@ export class AgentService {
         sessionId,
         messageId: '',
         code: 'busy',
-        message: 'A turn is already running. Wait for it to finish, or stop it.',
+        message:
+          'A turn is already running. Wait for it to finish, or stop it.',
       });
       return {accepted: false};
     }
@@ -632,7 +645,8 @@ export class AgentService {
         sessionId,
         messageId: '',
         code: 'busy',
-        message: 'A turn is already running. Wait for it to finish, or stop it.',
+        message:
+          'A turn is already running. Wait for it to finish, or stop it.',
       });
       return {accepted: false};
     }

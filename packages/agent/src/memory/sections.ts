@@ -45,7 +45,7 @@ export const CANONICAL_SECTIONS: readonly CanonicalSection[] = [
   {
     name: 'Project pointers',
     description:
-      'One line per project pointing at where that project keeps its state.',
+      'Where each project keeps its state, one line per project, in the workspace.',
   },
   {
     name: 'Boundaries',

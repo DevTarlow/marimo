@@ -99,4 +99,17 @@ describe('where the vocabulary reaches the model', () => {
     expect(reviewPrompt('USER: anything')).toContain('not the only ones');
     expect(memorySkill.instructions).toContain('not a rule');
   });
+
+  /*
+   * The rule that keeps the volatile half out of the prompt: project state
+   * lives in the workspace and memory keeps one pointer line to it. Without
+   * this the layer fills with status that is stale by the next session, which
+   * is the failure the layering exists to prevent.
+   */
+  it('tells the model to point at project state rather than copy it', () => {
+    expect(memorySkill.instructions).toContain('one pointer line per');
+    expect(memorySkill.instructions).toContain('Never copy the state itself');
+    expect(memorySkill.instructions).toContain('Do not invent a handoff file');
+    expect(renderSectionGuide()).toContain('one line per project');
+  });
 });

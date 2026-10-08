@@ -22,6 +22,7 @@ import type {AgentConfig} from '../config.js';
 
 import {DEFAULT_SYSTEM_PROMPT} from '../config.js';
 import {resolveMemoryFile} from '../memory/index.js';
+import {MEMORY_SOFT_LIMIT_BYTES} from '../memory/size.js';
 import type {JobService} from '../tools/job-tools.js';
 import type {WebSearchProvider} from '../tools/web-search-tool.js';
 import {AgentHost} from './agent-host.js';
@@ -976,6 +977,27 @@ describe('AgentHost', () => {
     // The point of the whole feature: switching agent switches what it knows.
     expect(second).toContain('- beta fact');
     expect(second).not.toContain('- alpha secret');
+  });
+
+  /*
+   * The memory limit is a setting, so it arrives through `updateConfig` like
+   * every other one. What matters is that it *lands*: the tools read the store,
+   * so a limit the host is told about and does not apply is a control in
+   * Settings that changes a number nothing consults.
+   */
+  it('applies a memory soft limit from the configuration', async () => {
+    const {host} = await startHost(() => textChunks('ok'));
+    expect(host.memorySoftLimitBytes()).toBe(MEMORY_SOFT_LIMIT_BYTES);
+
+    host.updateConfig({
+      ...createConfig(fake?.baseUrl ?? ''),
+      memorySoftLimitBytes: 16 * 1024,
+    });
+    expect(host.memorySoftLimitBytes()).toBe(16 * 1024);
+
+    // And back to the default when a later configuration says nothing about it.
+    host.updateConfig(createConfig(fake?.baseUrl ?? ''));
+    expect(host.memorySoftLimitBytes()).toBe(MEMORY_SOFT_LIMIT_BYTES);
   });
 
   it("refuses another profile's conversation on every path", async () => {

@@ -35,7 +35,10 @@ export function createReadMemoryTool(context: MemoryToolContext) {
         // Reported on every read, so the size is visible before the hard cap is
         // what makes it visible — the truncation in the prompt is the last
         // moment and by then the file has been heavy for a while.
-        const sizeWarning = memorySizeWarning(bytes);
+        const sizeWarning = memorySizeWarning(
+          bytes,
+          context.memory.softLimitBytes,
+        );
         const suffix = sizeWarning ? `\n\n${sizeWarning}` : '';
         if (text.trim().length === 0) {
           return `memory.md is empty (${context.memory.file}). Use update_memory to record durable facts.`;
@@ -130,7 +133,7 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
       // A write is the moment the file got bigger, so the size advice lands
       // here as well as on a read: a run that never calls read_memory still
       // gets told before the file is the cap's problem.
-      const warning = memorySizeWarning(bytes);
+      const warning = memorySizeWarning(bytes, context.memory.softLimitBytes);
       return warning ? `${outcome}\n\n${warning}` : outcome;
     },
   });

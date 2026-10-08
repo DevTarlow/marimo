@@ -24,6 +24,7 @@ import {
   resolveMemoryFile,
   splitMemory,
 } from './memory-store.js';
+import {MEMORY_SOFT_LIMIT_BYTES} from './size.js';
 
 describe('memory paths', () => {
   it('keeps memory in an app-owned folder inside the workspace', () => {
@@ -376,6 +377,35 @@ describe('MemoryStore', () => {
     const text = await store.read();
     expect(text).toContain('- a');
     expect(text).toContain('- b');
+  });
+
+  /*
+   * The soft limit is store state rather than a module constant because the user
+   * moves it. Reading it back is also what the host and the window's readout do,
+   * so a setter that quietly ignored its argument would be a setting that looks
+   * applied and is not.
+   */
+  it('carries a soft limit from construction and from the setter', async () => {
+    const store = new MemoryStore({workspaceRoot: workDir});
+    expect(store.softLimitBytes).toBe(MEMORY_SOFT_LIMIT_BYTES);
+
+    store.setSoftLimitBytes(16 * 1024);
+    expect(store.softLimitBytes).toBe(16 * 1024);
+
+    const configured = new MemoryStore({
+      workspaceRoot: workDir,
+      softLimitBytes: 4 * 1024,
+    });
+    expect(configured.softLimitBytes).toBe(4 * 1024);
+  });
+
+  it('reports the size the warning is measured against', async () => {
+    const store = new MemoryStore({workspaceRoot: workDir});
+    expect(await store.bytes()).toBe(0);
+    await store.update({content: 'one fact'});
+    expect(await store.bytes()).toBe(
+      Buffer.byteLength(await store.read(), 'utf8'),
+    );
   });
 
   it('lands a correction on disk with only the new version left', async () => {

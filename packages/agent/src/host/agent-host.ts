@@ -31,6 +31,7 @@ import {MAIN_AGENT_NAME, PROVIDERS} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
+import {MEMORY_SOFT_LIMIT_BYTES} from '../memory/size.js';
 import {OpenAiCompatLlm} from '../models/openai-compat-llm.js';
 import {FileSessionService} from '../sessions/file-session-service.js';
 import type {
@@ -180,9 +181,7 @@ export class AgentHost {
    * next turn has to be offered what is actually reachable now.
    */
   private mcpServers: readonly McpToolsetSource[];
-  private readonly onSubagentEvent:
-    | ((event: AgentUiEvent) => void)
-    | undefined;
+  private readonly onSubagentEvent: ((event: AgentUiEvent) => void) | undefined;
   private readonly subagentLimits: Partial<SubagentLimits> | undefined;
   private config: AgentConfig;
   /**
@@ -223,6 +222,9 @@ export class AgentHost {
       workspaceRoot: options.config.workspaceRoot,
       ...(options.config.profileId !== undefined
         ? {profileId: options.config.profileId}
+        : {}),
+      ...(options.config.memorySoftLimitBytes !== undefined
+        ? {softLimitBytes: options.config.memorySoftLimitBytes}
         : {}),
     });
     this.webSearch = options.webSearch;
@@ -271,6 +273,11 @@ export class AgentHost {
     // inherit the previous agent's remembered facts.
     this.memory.setWorkspaceRoot(config.workspaceRoot);
     this.memory.setProfileId(config.profileId);
+    // Read at call time by the tools, so moving the limit in Settings reaches the
+    // next read and write rather than the next launch.
+    this.memory.setSoftLimitBytes(
+      config.memorySoftLimitBytes ?? MEMORY_SOFT_LIMIT_BYTES,
+    );
     // Agents hold the model, key and tool closures, so a settings change
     // invalidates every cached runner.
     this.runners.clear();
@@ -567,13 +574,26 @@ export class AgentHost {
    * events into messages and attaches tool calls. Both readers want different
    * things from the same log, so the log is what is handed out.
    */
-  async eventsFor(sessionId: string): Promise<Awaited<ReturnType<FileSessionService['listEvents']>>> {
+  async eventsFor(
+    sessionId: string,
+  ): Promise<Awaited<ReturnType<FileSessionService['listEvents']>>> {
     return await this.sessionService.listEvents(sessionId);
   }
 
   /** What the agent currently remembers, as it would be injected. */
   async memoryText(): Promise<string> {
     return await this.memory.readForPrompt();
+  }
+
+  /**
+   * The size at which the memory tools warn, as the live store holds it.
+   *
+   * A readout rather than a second copy of the setting: the value lives on the
+   * store the tools call, and answering from anywhere else is how a window comes
+   * to display a limit the agent is not using.
+   */
+  memorySoftLimitBytes(): number {
+    return this.memory.softLimitBytes;
   }
 
   /** Adds a fact to memory, as if the agent had called `update_memory`. */
@@ -814,9 +834,7 @@ export class AgentHost {
         ...(this.discordService ? {discordService: this.discordService} : {}),
         ...(this.deskService ? {deskService: this.deskService} : {}),
         ...(this.skillService ? {skillService: this.skillService} : {}),
-        ...(this.mcpServers.length > 0
-          ? {mcpServers: this.mcpServers}
-          : {}),
+        ...(this.mcpServers.length > 0 ? {mcpServers: this.mcpServers} : {}),
         subagent: this.subagentDeps(),
       }),
     });

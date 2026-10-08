@@ -11,13 +11,15 @@ import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {PROVIDERS} from '@marimo/protocol';
-
 import {
-  chooseModel,
-  readLegacyProfileSeed,
-  SettingsStore,
-} from './settings.js';
+  DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+  MEMORY_SOFT_LIMIT_MAX_BYTES,
+  PROVIDERS,
+} from '@marimo/protocol';
+
+import {MAX_MEMORY_BYTES} from '@marimo/agent';
+
+import {chooseModel, readLegacyProfileSeed, SettingsStore} from './settings.js';
 
 describe('chooseModel', () => {
   it('keeps the current model while the provider still offers it', () => {
@@ -416,6 +418,76 @@ describe('SettingsStore providers', () => {
  * user folded away has to still be folded the next time they open the dialog, or
  * they will fold the same four sections on every launch.
  */
+/**
+ * The memory soft limit, which the Settings dialog draws as a slider.
+ *
+ * The schema is a client of it too — the renderer's slider can only produce
+ * values the schema accepts — so the bounds are what stops a hand-edited file
+ * from setting a limit that makes the agent's warning nonsense.
+ */
+describe('SettingsStore memorySoftLimitBytes', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-memlimit-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): SettingsStore {
+    return new SettingsStore(join(dir, 'settings.json'));
+  }
+
+  async function write(raw: unknown): Promise<void> {
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify(raw, null, 2),
+      'utf8',
+    );
+  }
+
+  it('defaults to the limit the agent warns at', async () => {
+    expect((await store().load()).memorySoftLimitBytes).toBe(
+      DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+    );
+  });
+
+  it('keeps a value the user chose', async () => {
+    const settings = store();
+    await settings.patch({memorySoftLimitBytes: 16 * 1024});
+    await settings.patch({temperature: 0.2});
+    expect((await settings.load()).memorySoftLimitBytes).toBe(16 * 1024);
+  });
+
+  /*
+   * A file holding a limit the agent cannot act on falls back rather than
+   * failing the whole document: losing every provider because somebody typed a
+   * bad number into one field would be the worse outcome.
+   */
+  it('falls back when the stored value is out of range', async () => {
+    await write({memorySoftLimitBytes: 1});
+    expect((await store().load()).memorySoftLimitBytes).toBe(
+      DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+    );
+  });
+
+  it('refuses a value that is not a whole KiB', async () => {
+    await write({memorySoftLimitBytes: 8 * 1024 + 1});
+    expect((await store().load()).memorySoftLimitBytes).toBe(
+      DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+    );
+  });
+
+  it('keeps the limit strictly under the hard cap it warns about', async () => {
+    // The ceiling the schema allows is half the hard cap, so a memory the user
+    // has told the agent to let grow still crosses the warning before writes
+    // start failing.
+    expect(MEMORY_SOFT_LIMIT_MAX_BYTES).toBeLessThan(MAX_MEMORY_BYTES);
+  });
+});
+
 describe('SettingsStore collapsedSections', () => {
   let dir: string;
 
@@ -678,7 +750,9 @@ describe('settings from another build', () => {
     await settings.load();
     await settings.patch({temperature: 0.5});
 
-    const written = JSON.parse(await readFile(file, 'utf8')) as {version: number};
+    const written = JSON.parse(await readFile(file, 'utf8')) as {
+      version: number;
+    };
     expect(written.version).toBe(1);
   });
 

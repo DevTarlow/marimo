@@ -23,6 +23,7 @@ import {
   companionSettingsSchema,
   defaultAppearance,
   defaultCompanionSettings,
+  DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
   defaultWindowState,
   defaultDiscordSettings,
   defaultProviders,
@@ -82,6 +83,9 @@ export function defaultStoredSettings(): StoredSettings {
     collapsedSections: [],
     // The size the window opened at before it remembered one, placed by the OS.
     window: defaultWindowState(),
+    // Where the agent starts being told that memory.md is getting full. Well
+    // under the hard cap, so the warning arrives while there is room to prune.
+    memorySoftLimitBytes: DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
     availableModels: defaultAvailableModels(),
   };
 }

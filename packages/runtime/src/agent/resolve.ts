@@ -104,6 +104,7 @@ export async function resolveAgentConfig(
       systemPrompt: profile.identity,
       profileId: profile.id,
       workspaceRoot,
+      memorySoftLimitBytes: settings.memorySoftLimitBytes,
       allowPrivateNetworkFetch: settings.allowPrivateNetworkFetch,
       enabledTools: [...profile.enabledTools],
       enabledSkills: [...profile.enabledSkills],
@@ -121,9 +122,7 @@ export async function resolveAgentConfig(
  * before anybody picks a folder — so this answers rather than throws, and the
  * caller turns it into that sentence above.
  */
-export function activeWorkspaceRoot(
-  profile: AgentProfile,
-): string | undefined {
+export function activeWorkspaceRoot(profile: AgentProfile): string | undefined {
   if (profile.activeWorkspaceId === null) {
     return undefined;
   }

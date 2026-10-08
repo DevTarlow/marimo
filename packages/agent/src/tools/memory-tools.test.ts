@@ -216,6 +216,41 @@ describe('memory tools', () => {
       expect(overLimit).toContain('prune_memory');
     });
 
+    /*
+     * The setting the user moves in the dialog is what these tools warn at. This
+     * is the test that stops that being a number the window draws and the agent
+     * never uses: the same file is under the raised limit and over the default.
+     */
+    it('warns at the limit the store was moved to', async () => {
+      await writeMemoryOfBytes(MEMORY_SOFT_LIMIT_BYTES + 1);
+      expect(await run(createReadMemoryTool({memory}), {})).toContain(
+        'soft limit',
+      );
+
+      const moved = MEMORY_SOFT_LIMIT_BYTES * 2;
+      memory.setSoftLimitBytes(moved);
+      const raised = await run(createReadMemoryTool({memory}), {});
+      expect(raised).not.toContain('soft limit');
+
+      memory.setSoftLimitBytes(moved / 2);
+      const lowered = await run(createUpdateMemoryTool({memory}), {
+        content: 'one more fact',
+      });
+      expect(lowered).toContain('soft limit');
+      expect(lowered).toContain(String(moved / 2));
+    });
+
+    it('can be built with a limit rather than moved to one', async () => {
+      await writeMemoryOfBytes(MEMORY_SOFT_LIMIT_BYTES + 1);
+      const roomy = new MemoryStore({
+        workspaceRoot: workDir,
+        softLimitBytes: MEMORY_SOFT_LIMIT_BYTES * 4,
+      });
+      expect(
+        await run(createReadMemoryTool({memory: roomy}), {}),
+      ).not.toContain('soft limit');
+    });
+
     it('warns on a write once it crosses the line', async () => {
       const under = await run(createUpdateMemoryTool({memory}), {
         content: 'x'.repeat(100),

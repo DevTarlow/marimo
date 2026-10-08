@@ -19,6 +19,8 @@ import {randomUUID} from 'node:crypto';
 import {copyFile, mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 
+import {MEMORY_SOFT_LIMIT_BYTES} from './size.js';
+
 /** Folder, inside the workspace, that holds agent state. */
 export const AGENT_DATA_DIR = '.marimo';
 /** Profile used until the app exposes a profile picker. */
@@ -57,6 +59,8 @@ export interface MemoryStoreOptions {
   /** Workspace the memory folder lives in; follows the user's workspace. */
   workspaceRoot: string;
   profileId?: string;
+  /** Overrides where the tools start suggesting a prune. */
+  softLimitBytes?: number;
 }
 
 export interface MemoryUpdate {
@@ -132,15 +136,42 @@ export class MemoryStore {
   private root: string;
   private profileId: string;
   private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * The size past which the tools warn.
+   *
+   * Mutable and read at call time rather than captured when the tools are built,
+   * because the user can move it in Settings while a window is open: a limit
+   * baked into a tool closure would keep quoting the number that was stored when
+   * the agent started, which is exactly the disagreement the setting exists to
+   * remove.
+   */
+  private softLimit: number = MEMORY_SOFT_LIMIT_BYTES;
 
   constructor(options: MemoryStoreOptions) {
     this.root = options.workspaceRoot;
     this.profileId = safeProfileId(options.profileId);
+    if (options.softLimitBytes !== undefined) {
+      this.softLimit = options.softLimitBytes;
+    }
   }
 
   /** Re-points memory at a new workspace; the profile id is kept. */
   setWorkspaceRoot(workspaceRoot: string): void {
     this.root = workspaceRoot;
+  }
+
+  /** Moves the size at which the tools start suggesting a prune. */
+  setSoftLimitBytes(bytes: number): void {
+    this.softLimit = bytes;
+  }
+
+  get softLimitBytes(): number {
+    return this.softLimit;
+  }
+
+  /** How many bytes the file is, for a size readout that is not a read. */
+  async bytes(): Promise<number> {
+    return Buffer.byteLength(await this.read(), 'utf8');
   }
 
   get file(): string {

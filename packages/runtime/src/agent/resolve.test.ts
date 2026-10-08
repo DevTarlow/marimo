@@ -13,7 +13,11 @@ import type {AgentProfile} from '@marimo/protocol';
 
 import type {SecretRead} from '../secrets.js';
 import {defaultStoredSettings} from '../settings.js';
-import {activeWorkspaceRoot, parseProfile, resolveAgentConfig} from './resolve.js';
+import {
+  activeWorkspaceRoot,
+  parseProfile,
+  resolveAgentConfig,
+} from './resolve.js';
 
 function profile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   return {
@@ -53,6 +57,25 @@ const unreadable: SecretRead = {
 };
 
 describe('resolveAgentConfig', () => {
+  /*
+   * The memory soft limit is a settings value, not a constant: it has to reach
+   * the configuration, or moving the control in Settings would change a number
+   * the agent never sees — a setting that does nothing.
+   */
+  it('carries the memory soft limit from settings into the configuration', async () => {
+    const result = await resolveAgentConfig({
+      settings: {...settingsWith(), memorySoftLimitBytes: 16 * 1024},
+      profile: profile(),
+      readSecret: async () => present('sk-test'),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.config.memorySoftLimitBytes).toBe(16 * 1024);
+  });
+
   it('builds a configuration from the settings and the profile', async () => {
     const result = await resolveAgentConfig({
       settings: settingsWith(),

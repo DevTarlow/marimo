@@ -48,4 +48,17 @@ describe('memorySizeWarning', () => {
     // failed, which is the situation it exists to arrive before.
     expect(MEMORY_SOFT_LIMIT_BYTES).toBeLessThan(64 * 1024);
   });
+
+  /*
+   * The limit is a parameter because the user can move it. A message that quoted
+   * the old number would be arguing with the setting the agent was given, and a
+   * warning that contradicts itself is one the model learns to ignore.
+   */
+  it('quotes the limit it was given, not the built-in one', () => {
+    const moved = MEMORY_SOFT_LIMIT_BYTES * 2;
+    expect(memorySizeWarning(moved - 1, moved)).toBe('');
+    const warning = memorySizeWarning(moved + 1, moved);
+    expect(warning).toContain(String(moved));
+    expect(warning).not.toContain(String(MEMORY_SOFT_LIMIT_BYTES));
+  });
 });

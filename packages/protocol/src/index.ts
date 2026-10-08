@@ -547,6 +547,19 @@ export const windowStateSchema = z.object({
 export type WindowState = z.infer<typeof windowStateSchema>;
 
 /**
+ * The bounds and default of the memory soft limit, shared by the schema above
+ * and anything that has to fall back to a limit without reading settings.
+ *
+ * Exported rather than written twice because the agent's warning and the
+ * settings file's default must be the same number: a default the prompt quotes
+ * and the settings dialog draws differently is the sort of disagreement nobody
+ * notices until the warning fires at the wrong size.
+ */
+export const MEMORY_SOFT_LIMIT_MIN_BYTES = 4 * 1024;
+export const MEMORY_SOFT_LIMIT_MAX_BYTES = 32 * 1024;
+export const DEFAULT_MEMORY_SOFT_LIMIT_BYTES = 8 * 1024;
+
+/**
  * The size a first launch opens at, and the window's own bounds in the CSS
  * pixels Electron reports.
  *
@@ -665,6 +678,32 @@ export const settingsSchema = z.object({
    * display was unplugged since.
    */
   window: windowStateSchema,
+  /**
+   * How large `memory.md` may get before the agent is told to prune it.
+   *
+   * A *soft* limit: writing past it still works and the tools say so, naming
+   * this number as the target. It sits well below `MAX_MEMORY_BYTES`, which is
+   * where writes start failing outright, because the point of the warning is to
+   * arrive while there is still room to act on it.
+   *
+   * Here rather than on a profile because it is a preference about the app's
+   * behaviour rather than a fact about an agent, and because memory is bounded
+   * by the same hard cap for every profile — a per-profile limit would be a
+   * second number to keep in range for no gain.
+   *
+   * Bounded and a whole KiB. The floor is where a memory holding a handful of
+   * real facts stops being plausible; the ceiling is half the hard cap, so a
+   * memory the user has told the agent to let grow still cannot reach the size
+   * at which writes fail without crossing the warning first. The step is a KiB
+   * because the control is a slider and a user thinks in kilobytes, not in the
+   * 8,391 bytes a free-form field would allow them to type.
+   */
+  memorySoftLimitBytes: z
+    .number()
+    .int()
+    .min(MEMORY_SOFT_LIMIT_MIN_BYTES)
+    .max(MEMORY_SOFT_LIMIT_MAX_BYTES)
+    .multipleOf(1024),
 });
 
 /**
@@ -1440,8 +1479,20 @@ export type AgentUiEvent =
    * would mean every future variant being legal in two places, and the window
    * having to be right about both.
    */
-  | {type: 'subagent.started'; sessionId: string; callId: string; name: string; task: string}
-  | {type: 'subagent.event'; sessionId: string; callId: string; name: string; text: string}
+  | {
+      type: 'subagent.started';
+      sessionId: string;
+      callId: string;
+      name: string;
+      task: string;
+    }
+  | {
+      type: 'subagent.event';
+      sessionId: string;
+      callId: string;
+      name: string;
+      text: string;
+    }
   | {
       type: 'subagent.finished';
       sessionId: string;

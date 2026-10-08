@@ -50,6 +50,15 @@ export interface AgentConfig {
   profileId?: string;
   /** File tools are confined here; also the default working directory. */
   workspaceRoot: string;
+  /**
+   * How large `memory.md` may get before the agent is told to prune.
+   *
+   * Absent means the built-in default. A preference rather than a fact about the
+   * agent, so it travels with the configuration and is applied to the memory
+   * store when the config changes — which is what makes moving it in Settings
+   * affect the next tool call rather than the next launch.
+   */
+  memorySoftLimitBytes?: number;
   allowPrivateNetworkFetch: boolean;
   /**
    * Tool names this profile may use. Absent means "no restriction", which is

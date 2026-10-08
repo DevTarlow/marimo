@@ -24,9 +24,14 @@ import type {
   McpStatus,
   ProfileCatalog,
   PublicSettings,
+  SettingsPatch,
 } from '@marimo/protocol';
 
-import {COMPANION_ANSWER_LENGTHS, PROVIDERS} from '@marimo/protocol';
+import {
+  COMPANION_ANSWER_LENGTHS,
+  PROVIDER_IDS,
+  PROVIDERS,
+} from '@marimo/protocol';
 
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
@@ -153,6 +158,15 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
    */
   const onByDefault = loaded.catalog.tools.filter((tool) => tool.byDefault);
   const offByDefault = loaded.catalog.tools.filter((tool) => !tool.byDefault);
+  /*
+   * The key section belongs to whichever provider is selected above, so it names
+   * it: "an API key" is not a thing anybody has, and a section that described a
+   * key without saying whose would be the one place the two halves of this
+   * dialog disagreed.
+   */
+  const activeProvider = PROVIDERS[loaded.settings.providers.active];
+  const keyStored =
+    loaded.settings.providerKeys[loaded.settings.providers.active];
 
   return (
     <div className="settings">
@@ -451,13 +465,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           </label>
         </section>
 
-        <Model />
-
-        <Memory />
-
-        <Connectors
-          servers={loaded.settings.mcpServers}
-          statuses={loaded.statuses}
+        <ProviderSection
           onChange={() => {
             void load();
           }}
@@ -466,17 +474,19 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
         <section className="settings-section">
           <h3>API key</h3>
           <p className="settings-muted">
-            {loaded.settings.hasApiKey
-              ? 'A key is stored for this provider.'
-              : 'No key yet — the agent cannot answer until there is one.'}
+            {keyStored
+              ? `A key for ${activeProvider.label} is stored. It is kept on this machine and never sent back to this window.`
+              : activeProvider.requiresApiKey
+                ? `No ${activeProvider.label} key yet — the agent cannot answer until there is one.`
+                : `${activeProvider.label} needs no key. Anything pasted here is sent as one.`}
           </p>
           <div className="settings-row">
             <input
               className="settings-input"
               type="password"
               value={apiKey}
-              placeholder="Paste a key"
-              aria-label="API key"
+              placeholder={activeProvider.keyPlaceholder}
+              aria-label={`${activeProvider.label} API key`}
               onChange={(event) => {
                 setApiKey(event.target.value);
               }}
@@ -496,6 +506,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               Save key
             </button>
           </div>
+          <p className="settings-muted">{activeProvider.keyHelp}</p>
 
           <label className="settings-check">
             <input
@@ -527,6 +538,16 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           </label>
         </section>
 
+        <Memory />
+
+        <Connectors
+          servers={loaded.settings.mcpServers}
+          statuses={loaded.statuses}
+          onChange={() => {
+            void load();
+          }}
+        />
+
         <section className="settings-section">
           <h3>Where it works</h3>
           <p className="settings-muted">
@@ -539,24 +560,43 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
 }
 
 /**
- * Which model the active provider should answer with.
+ * Which provider answers, where it is reached, and which of its models.
  *
- * A pick-list rather than a text box: the ids are the provider's own, and a
- * mistyped one is a 404 from the provider at the start of a turn — which reads
- * as "the agent is broken" rather than "that model does not exist". The stored
- * value is shown even when it is not in the list, because a model the provider
- * has stopped advertising may still work, and silently switching somebody off it
- * would be worse than an odd-looking list.
+ * The three are one section because none of them stands alone: a model id is
+ * only meaningful at one endpoint, and the base URL is what makes a llama.cpp
+ * server on the network reachable rather than only the one beside this app. The
+ * picker is drawn in the catalogue's order, which is alphabetical — see
+ * `PROVIDER_IDS` in the protocol, where a test holds that order.
+ *
+ * Two choices here are deliberate. The provider is a pick-list, because the ids
+ * are the app's own and a mistyped one would leave the settings file naming a
+ * provider nothing can resolve. The model is a pick-list for the same reason —
+ * a mistyped model id is a 404 at the start of a turn, which reads as "the agent
+ * is broken" rather than "that model does not exist" — and the stored value is
+ * shown even when the list no longer carries it, because a model the provider
+ * has stopped advertising may still work.
+ *
+ * Saving is immediate, like every other control here. The base URL is the one
+ * exception in *when*: it waits for the box to lose focus, because saving per
+ * keystroke would write a half-typed address to disk and offer it to the next
+ * turn.
  */
-function Model(): React.JSX.Element | null {
+function ProviderSection({
+  onChange,
+}: {
+  onChange?: () => void;
+}): React.JSX.Element | null {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [saving, setSaving] = useState(false);
+  /** What is in the base URL box, or null while it shows what is stored. */
+  const [baseUrlDraft, setBaseUrlDraft] = useState<string | null>(null);
 
   const load = (): void => {
     void window.marimo
       .call('settings.get', {})
       .then(({settings: loaded}) => {
         setSettings(loaded);
+        setBaseUrlDraft(null);
       })
       .catch(() => undefined);
   };
@@ -568,43 +608,131 @@ function Model(): React.JSX.Element | null {
   }
 
   const active = settings.providers.active;
-  const current = settings.providers.configs[active].model;
-  const options = settings.availableModels.includes(current)
+  const descriptor = PROVIDERS[active];
+  const config = settings.providers.configs[active];
+  const models = settings.availableModels.includes(config.model)
     ? settings.availableModels
-    : [current, ...settings.availableModels];
+    : [config.model, ...settings.availableModels];
+  const baseUrl = baseUrlDraft ?? config.baseUrl;
+  const keyStored = settings.providerKeys[active];
+
+  const save = (patch: SettingsPatch): void => {
+    setSaving(true);
+    void window.marimo
+      .call('settings.set', {patch})
+      .then(() => {
+        load();
+        /*
+         * The rest of the dialog is redrawn too, and that is not tidiness: the
+         * API-key section below names the provider this picker selects, so
+         * without this it would go on describing the one the user just left.
+         */
+        onChange?.();
+      })
+      .catch(() => {
+        /*
+         * Put the box back rather than leaving a refused address in it. Nothing
+         * else here can fail for a reason the user needs to read: the two
+         * pick-lists are the catalogue's own values.
+         */
+        setBaseUrlDraft(null);
+      })
+      .finally(() => {
+        setSaving(false);
+      });
+  };
 
   return (
     <section className="settings-section">
-      <h3>Model</h3>
+      <h3>Provider</h3>
       <p className="settings-muted">
-        Which model {PROVIDERS[active].label} answers with. Cheaper models are
-        fine for reading and summarising; harder questions want a bigger one.
+        Which service answers, and which of its models. Every provider keeps its
+        own address and model, so trying one and coming back does not cost you
+        the setup of the other.
       </p>
-      <select
-        className="settings-input"
-        value={current}
-        disabled={saving}
-        aria-label="Model"
-        onChange={(event) => {
-          const model = event.target.value;
-          setSaving(true);
-          void window.marimo
-            .call('settings.set', {
-              patch: {providers: {configs: {[active]: {model}}}},
-            })
-            .then(load)
-            .catch(() => undefined)
-            .finally(() => {
-              setSaving(false);
-            });
-        }}
-      >
-        {options.map((model) => (
-          <option key={model} value={model}>
-            {model}
-          </option>
-        ))}
-      </select>
+
+      <label className="settings-field">
+        <span>Provider</span>
+        <em className="settings-why">{descriptor.blurb}</em>
+        <select
+          className="settings-input"
+          value={active}
+          disabled={saving}
+          onChange={(event) => {
+            const next = PROVIDER_IDS.find((id) => id === event.target.value);
+            if (next === undefined) {
+              return;
+            }
+            save({providers: {active: next}});
+          }}
+        >
+          {PROVIDER_IDS.map((id) => (
+            <option key={id} value={id}>
+              {PROVIDERS[id].label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="settings-field">
+        <span>Base URL</span>
+        <em className="settings-why">
+          Where requests for {descriptor.label} go. The usual address is{' '}
+          <code>{descriptor.defaultBaseUrl}</code>; change it to point at a
+          server of your own.
+        </em>
+        <input
+          className="settings-input"
+          type="text"
+          value={baseUrl}
+          disabled={saving}
+          spellCheck={false}
+          onChange={(event) => {
+            setBaseUrlDraft(event.target.value);
+          }}
+          onBlur={() => {
+            const next = baseUrl.trim();
+            // An empty box is not an address: fall back to what is stored rather
+            // than writing a value the schema refuses and the user cannot see.
+            if (next.length === 0 || next === config.baseUrl) {
+              setBaseUrlDraft(null);
+              return;
+            }
+            save({providers: {configs: {[active]: {baseUrl: next}}}});
+          }}
+        />
+      </label>
+
+      <label className="settings-field">
+        <span>Model</span>
+        <em className="settings-why">
+          Cheaper models are fine for reading and summarising; harder questions
+          want a bigger one.
+        </em>
+        <select
+          className="settings-input"
+          value={config.model}
+          disabled={saving}
+          onChange={(event) => {
+            const model = event.target.value;
+            save({providers: {configs: {[active]: {model}}}});
+          }}
+        >
+          {models.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <p className="settings-muted">
+        {keyStored
+          ? `${descriptor.label} has a key stored.`
+          : descriptor.requiresApiKey
+            ? `No key stored for ${descriptor.label} — add one below.`
+            : `${descriptor.label} needs no key.`}
+      </p>
     </section>
   );
 }

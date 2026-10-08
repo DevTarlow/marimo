@@ -19,7 +19,7 @@ whether or not the app is open.
 | | |
 |---|---|
 | ✅ | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a conversation rail, light and dark following the OS or chosen |
-| ✅ | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming provider, 4 backends, ~30 tools, skills, `memory.md`, JSONL conversations |
+| ✅ | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming provider, 5 backends, ~30 tools, skills, `memory.md`, JSONL conversations |
 | ✅ | Approvals that survive a restart, because a pending call is derived from the stored conversation rather than held in memory |
 | ✅ | MCP connectors: add one by pasting a command, test it before saving, and choose whether to trust it — untrusted servers ask before every call |
 | ✅ | Helper agents: `spawn_agent` hands a separable piece of work to a sub-agent that shares the conversation, so its approvals are visible and its words are labelled |

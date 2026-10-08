@@ -43,14 +43,17 @@ import type {
   StoredSettings,
 } from '@marimo/protocol';
 
-/** The placeholder model list for each provider, before each has been asked. */
+/**
+ * The placeholder model list for each provider, before each has been asked.
+ *
+ * Derived from the catalogue rather than spelled out, because a provider missing
+ * from here is a provider whose picker opens on an empty select — the failure
+ * that looks like "the app has no models" rather than like a missing line.
+ */
 export function defaultAvailableModels(): Record<ProviderId, string[]> {
-  return {
-    deepseek: fallbackModelsFor('deepseek'),
-    llamacpp: fallbackModelsFor('llamacpp'),
-    gemini: fallbackModelsFor('gemini'),
-    openrouter: fallbackModelsFor('openrouter'),
-  };
+  return Object.fromEntries(
+    providerIdSchema.options.map((id) => [id, fallbackModelsFor(id)]),
+  ) as Record<ProviderId, string[]>;
 }
 
 export function defaultStoredSettings(): StoredSettings {
@@ -246,40 +249,66 @@ export class SettingsStore {
   }
 
   async patch(patch: SettingsPatch): Promise<StoredSettings> {
-    const current = await this.load();
-    const defined = definedOnly(patch);
-    /*
-     * Both nested blocks are merged rather than replaced.
-     *
-     * Their patch schemas accept any subset — that is the point, so flipping one
-     * switch does not mean sending the channel name and the bot's name back, and
-     * setting one provider's base URL does not mean sending the other two — but a
-     * shallow spread would then store the partial block and throw away the fields
-     * the window did not mention.
-     */
-    const discord = defined.discord
-      ? {...current.discord, ...definedOnly(defined.discord)}
-      : current.discord;
-    const companion = defined.companion
-      ? {...current.companion, ...definedOnly(defined.companion)}
-      : current.companion;
-    const providers = defined.providers
-      ? mergeProviders(current.providers, defined.providers)
-      : current.providers;
-    const appearance = defined.appearance
-      ? {...current.appearance, ...definedOnly(defined.appearance)}
-      : current.appearance;
-    const merged = storedSettingsSchema.parse({
-      ...current,
-      ...defined,
-      discord,
-      companion,
-      providers,
-      appearance,
+    return await this.enqueue(async () => {
+      const current = await this.load();
+      const defined = definedOnly(patch);
+      /*
+       * Both nested blocks are merged rather than replaced.
+       *
+       * Their patch schemas accept any subset — that is the point, so flipping one
+       * switch does not mean sending the channel name and the bot's name back, and
+       * setting one provider's base URL does not mean sending the other two — but a
+       * shallow spread would then store the partial block and throw away the fields
+       * the window did not mention.
+       */
+      const discord = defined.discord
+        ? {...current.discord, ...definedOnly(defined.discord)}
+        : current.discord;
+      const companion = defined.companion
+        ? {...current.companion, ...definedOnly(defined.companion)}
+        : current.companion;
+      const providers = defined.providers
+        ? mergeProviders(current.providers, defined.providers)
+        : current.providers;
+      const appearance = defined.appearance
+        ? {...current.appearance, ...definedOnly(defined.appearance)}
+        : current.appearance;
+      const merged = storedSettingsSchema.parse({
+        ...current,
+        ...defined,
+        discord,
+        companion,
+        providers,
+        appearance,
+      });
+      await this.write(merged);
+      this.cache = merged;
+      return merged;
     });
-    await this.write(merged);
-    this.cache = merged;
-    return merged;
+  }
+
+  /**
+   * The tail of the write queue.
+   *
+   * Every mutation here is a read-modify-write, and two of them can arrive in the
+   * same tick: the settings dialog saves a text box when it loses focus and the
+   * menu that took the focus in the same gesture, which is two `settings.set`
+   * calls from one click. Both would read the state from before either wrote, and
+   * the second write would drop the first edit — silently, because both writes
+   * succeed and neither caller is told.
+   */
+  private writes: Promise<unknown> = Promise.resolve();
+
+  /** Runs one mutation after every mutation queued before it, in that order. */
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const queued = this.writes.then(work);
+    /*
+     * The queue keeps moving after a failed write: one refused patch must not
+     * wedge every save after it. The caller still sees its own rejection, because
+     * this is the chain's tail rather than the promise handed back.
+     */
+    this.writes = queued.catch(() => undefined);
+    return queued;
   }
 
   /**
@@ -300,25 +329,27 @@ export class SettingsStore {
       return await this.load();
     }
 
-    const current = await this.load();
-    const config = current.providers.configs[provider];
-    const merged = storedSettingsSchema.parse({
-      ...current,
-      providers: {
-        ...current.providers,
-        configs: {
-          ...current.providers.configs,
-          [provider]: {
-            baseUrl: config.baseUrl,
-            model: chooseModel(unique, config.model),
+    return await this.enqueue(async () => {
+      const current = await this.load();
+      const config = current.providers.configs[provider];
+      const merged = storedSettingsSchema.parse({
+        ...current,
+        providers: {
+          ...current.providers,
+          configs: {
+            ...current.providers.configs,
+            [provider]: {
+              baseUrl: config.baseUrl,
+              model: chooseModel(unique, config.model),
+            },
           },
         },
-      },
-      availableModels: {...current.availableModels, [provider]: unique},
+        availableModels: {...current.availableModels, [provider]: unique},
+      });
+      await this.write(merged);
+      this.cache = merged;
+      return merged;
     });
-    await this.write(merged);
-    this.cache = merged;
-    return merged;
   }
 
   private async write(settings: StoredSettings): Promise<void> {
@@ -393,16 +424,13 @@ function fillBlock<T extends object>(
  * provider: a typo in the Gemini address must not cost the user the provider they
  * were actually using, or the address they typed for their own server.
  *
- * The list of providers is spelled out rather than looped over `providerIdSchema`,
- * and each entry is a different sentence: the schema can say that a key exists,
- * not which one a legacy top-level field belonged to. A provider added here but
- * not there would lose its address on every read, which is why the fill belongs
- * in the same commit as the catalogue entry.
- *
- * This is also where a file written before the picker existed is upgraded. That
- * file holds `model` and `baseUrl` at the top level, which the schema now strips
- * — they were DeepSeek's, so they become DeepSeek's entry in the new block, and
- * the user's model and (possibly local) base URL survive the upgrade.
+ * The loop runs over the catalogue, so a provider added to `PROVIDER_IDS` is
+ * filled here the moment it exists. The one per-provider difference the loop
+ * cannot express is which provider a file written before the picker existed
+ * belonged to: that file holds `model` and `baseUrl` at the top level, which the
+ * schema now strips. They were DeepSeek's — it was the only provider then — so
+ * they become DeepSeek's entry in the new block, and the user's model and
+ * (possibly local) base URL survive the upgrade.
  */
 function fillProviders(raw: Record<string, unknown>): Providers {
   const defaults = defaultProviders();
@@ -419,24 +447,17 @@ function fillProviders(raw: Record<string, unknown>): Providers {
   }
 
   const active = providerIdSchema.safeParse(source['active']);
+  const configs = {} as Record<ProviderId, ProviderConfig>;
+  for (const id of providerIdSchema.options) {
+    configs[id] = fillProviderConfig(
+      defaults.configs[id],
+      rawConfigs[id],
+      id === 'deepseek' ? legacy : {},
+    );
+  }
   return {
     active: active.success ? active.data : defaults.active,
-    configs: {
-      deepseek: fillProviderConfig(
-        defaults.configs.deepseek,
-        rawConfigs['deepseek'],
-        legacy,
-      ),
-      llamacpp: fillProviderConfig(
-        defaults.configs.llamacpp,
-        rawConfigs['llamacpp'],
-      ),
-      gemini: fillProviderConfig(defaults.configs.gemini, rawConfigs['gemini']),
-      openrouter: fillProviderConfig(
-        defaults.configs.openrouter,
-        rawConfigs['openrouter'],
-      ),
-    },
+    configs,
   };
 }
 
@@ -473,19 +494,23 @@ function firstNonEmpty(candidates: unknown[]): string {
  * picker has to show *something* before the first refresh and an empty select is
  * a worse answer than a name that may already be stale. A list stored before the
  * picker existed was a flat array, and it was DeepSeek's.
+ *
+ * Keyed off the catalogue like the two functions above it, so a new provider
+ * cannot be the one whose models are stored and then thrown away on the next
+ * read.
  */
 function readAvailableModels(raw: unknown): Record<ProviderId, string[]> {
   const byProvider = asRecord(raw);
   const legacyDeepSeek = Array.isArray(raw) ? raw : undefined;
-  return {
-    deepseek: storedModelList(
-      byProvider['deepseek'] ?? legacyDeepSeek,
-      'deepseek',
-    ),
-    llamacpp: storedModelList(byProvider['llamacpp'], 'llamacpp'),
-    gemini: storedModelList(byProvider['gemini'], 'gemini'),
-    openrouter: storedModelList(byProvider['openrouter'], 'openrouter'),
-  };
+  return Object.fromEntries(
+    providerIdSchema.options.map((id) => [
+      id,
+      storedModelList(
+        byProvider[id] ?? (id === 'deepseek' ? legacyDeepSeek : undefined),
+        id,
+      ),
+    ]),
+  ) as Record<ProviderId, string[]>;
 }
 
 function storedModelList(value: unknown, provider: ProviderId): string[] {

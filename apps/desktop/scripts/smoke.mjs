@@ -381,6 +381,79 @@ async function main() {
       ok('a fresh install asks for a key, without taking the window over');
     }
 
+    /*
+     * The provider picker, opened the way a person opens it.
+     *
+     * Its list is drawn from the protocol catalogue and its value comes from the
+     * settings schema, so a provider on one side and not the other is a menu
+     * that quietly offers the wrong set — and a `<select>` whose value matches no
+     * option shows its first entry instead of what is stored. Neither is visible
+     * from a unit test, because each side is right on its own.
+     */
+    await send('Runtime.evaluate', {
+      expression: `[...document.querySelectorAll('.head button')]
+        .find((entry) => entry.textContent.trim() === 'Settings')
+        ?.click()`,
+      returnByValue: true,
+    });
+    const picker = await until('the provider picker to appear', async () => {
+      const {result} = await send('Runtime.evaluate', {
+        expression: `(() => {
+          const section = [...document.querySelectorAll('.settings-section')]
+            .find((entry) => entry.querySelector('h3')?.textContent === 'Provider');
+          if (section === undefined) return undefined;
+          const [providers, models] = section.querySelectorAll('select');
+          const baseUrl = section.querySelector('input[type="text"]');
+          if (providers === undefined || models === undefined || baseUrl === null) {
+            return JSON.stringify({incomplete: true});
+          }
+          return JSON.stringify({
+            labels: [...providers.options].map((option) => option.textContent),
+            active: providers.value,
+            models: [...models.options].map((option) => option.textContent),
+            baseUrl: baseUrl.value,
+          });
+        })()`,
+        returnByValue: true,
+      });
+      return typeof result?.value === 'string'
+        ? JSON.parse(result.value)
+        : undefined;
+    });
+
+    const providerLabels = picker.labels ?? [];
+    const sortedLabels = [...providerLabels].sort((a, b) => a.localeCompare(b));
+    if (picker.incomplete === true) {
+      fail('the provider section is missing one of its controls');
+    } else if (providerLabels.length < 2) {
+      fail(`the provider picker offers ${providerLabels.length} provider(s)`);
+    } else if (providerLabels.join('\u0000') !== sortedLabels.join('\u0000')) {
+      fail(
+        `the provider picker is out of alphabetical order: ${providerLabels.join(', ')}`,
+      );
+    } else if (!Array.isArray(picker.models) || picker.models.length === 0) {
+      fail(`the model picker is empty for "${picker.active}"`);
+    } else if (!/^https?:\/\//u.test(picker.baseUrl ?? '')) {
+      fail(`the base URL box holds "${picker.baseUrl}"`);
+    } else {
+      ok(
+        `the provider picker offers ${String(providerLabels.length)} providers, ` +
+          `alphabetically: ${providerLabels.join(', ')}`,
+      );
+    }
+
+    /*
+     * Back to the chat before anything else is measured. The dialog covers the
+     * window, and every check after this one — and the screenshot — is about the
+     * window.
+     */
+    await send('Runtime.evaluate', {
+      expression: `[...document.querySelectorAll('.settings-head button')]
+        .find((entry) => entry.textContent.trim() === 'Back to chat')
+        ?.click()`,
+      returnByValue: true,
+    });
+
     ok(`the theme resolved to ${probe.theme}`);
     }
 

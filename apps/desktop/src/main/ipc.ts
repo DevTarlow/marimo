@@ -29,7 +29,6 @@ import type {
   PublicSettings,
   ThemeMode,
 } from '@marimo/protocol';
-import {defaultAvailableModels} from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
 
 import type {AgentService} from './agent.js';
@@ -130,7 +129,13 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
         providerKeys[settings.providers.active],
       providerKeys,
       encryptionAvailable: safeStorageCipher.available(),
-      availableModels: defaultAvailableModels()[settings.providers.active],
+      /*
+       * The stored list rather than the catalogue's placeholder, which is the
+       * same thing until something has actually asked the provider what it
+       * serves. Reading the placeholder here would mean a refreshed list was
+       * written to disk and then never shown.
+       */
+      availableModels: settings.availableModels[settings.providers.active],
       profiles: profiles.profiles,
       activeProfileId: profiles.activeProfileId,
       // The folder an agent with none of its own would work in. Shown rather

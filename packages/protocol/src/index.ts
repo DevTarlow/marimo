@@ -47,17 +47,28 @@ import type {McpServer} from './mcp.js';
  *
  * Every one of them speaks the OpenAI chat-completions dialect, so a single
  * transport serves them all and switching provider is a base URL, a key and a
- * model id rather than a second client. Gemini and OpenRouter are reached through
- * an OpenAI-compatibility layer rather than a vendor client for exactly that
- * reason: one code path to test, and one place where tool calls are translated.
+ * model id rather than a second client. Gemini, OpenRouter and OpenCode's Go
+ * gateway are reached through an OpenAI-compatibility layer rather than a vendor
+ * client for exactly that reason: one code path to test, and one place where tool
+ * calls are translated. Go is the one of them whose catalogue is mixed — some of
+ * its models answer only OpenAI's Responses dialect or Anthropic's Messages
+ * dialect — so `keyHelp` says which half this app can use rather than pretending
+ * the model list is all one shape.
  *
- * `deepseek` is first because it is the default and the only one a fresh install
- * is pointed at.
+ * The order is alphabetical by label, and it is the order the Settings picker
+ * draws: a list of five endpoints nobody can reorder in their head is one they
+ * have to read every time. `deepseek` is additionally the default a fresh
+ * install is pointed at, which alphabetical order happens to put first anyway.
+ *
+ * This array is the catalogue: the provider descriptors, the settings schemas
+ * and the picker are all keyed off it, so a provider added here is one added
+ * everywhere.
  */
 export const PROVIDER_IDS = [
   'deepseek',
-  'llamacpp',
   'gemini',
+  'llamacpp',
+  'opencode_go',
   'openrouter',
 ] as const;
 export const providerIdSchema = z.enum(PROVIDER_IDS);
@@ -119,6 +130,25 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
     reasoningChannel: true,
     usageInStream: true,
   },
+  gemini: {
+    id: 'gemini',
+    label: 'Google Gemini',
+    blurb: 'Gemini through Google’s OpenAI-compatible endpoint.',
+    // Trailing slash included, as Google documents it; the transport strips it.
+    defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    fallbackModels: ['gemini-3.6-flash', 'gemini-3.1-pro'],
+    requiresApiKey: true,
+    keyPlaceholder: 'AIza…',
+    keyHelp: 'From aistudio.google.com/apikey.',
+    reasoningChannel: false,
+    /*
+     * The compatibility layer documents no `stream_options` support and answers
+     * a request that carries it with an error rather than ignoring it. Usage
+     * arrives as zeroes and the token badge stays quiet, which is a much smaller
+     * loss than every turn failing.
+     */
+    usageInStream: false,
+  },
   llamacpp: {
     id: 'llamacpp',
     label: 'Local llama.cpp',
@@ -138,24 +168,42 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
     reasoningChannel: true,
     usageInStream: true,
   },
-  gemini: {
-    id: 'gemini',
-    label: 'Google Gemini',
-    blurb: 'Gemini through Google’s OpenAI-compatible endpoint.',
-    // Trailing slash included, as Google documents it; the transport strips it.
-    defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-    fallbackModels: ['gemini-3.6-flash', 'gemini-3.1-pro'],
-    requiresApiKey: true,
-    keyPlaceholder: 'AIza…',
-    keyHelp: 'From aistudio.google.com/apikey.',
-    reasoningChannel: false,
+  opencode_go: {
+    id: 'opencode_go',
+    label: 'OpenCode Go',
+    blurb:
+      'OpenCode’s Go subscription: a curated list of open coding models behind ' +
+      'one key and a monthly plan.',
     /*
-     * The compatibility layer documents no `stream_options` support and answers
-     * a request that carries it with an error rather than ignoring it. Usage
-     * arrives as zeroes and the token badge stays quiet, which is a much smaller
-     * loss than every turn failing.
+     * The `/v1` matters and is part of the address: Go's own catalogue is served
+     * under `zen/go`, and the OpenAI-shaped half of it — the half this transport
+     * speaks — lives one segment below.
      */
-    usageInStream: false,
+    defaultBaseUrl: 'https://opencode.ai/zen/go/v1',
+    /*
+     * Placeholders like every other entry's, and this catalogue churns: Go adds
+     * and retires models month to month. GLM 5.3 Flash is a name Go serves and
+     * one DeepSeek's own catalogue does not use, so a round billed through this
+     * provider can never be read as a round billed through that one.
+     */
+    fallbackModels: ['glm-5.3-flash'],
+    requiresApiKey: true,
+    keyPlaceholder: 'sk-…',
+    keyHelp:
+      'From opencode.ai/auth. Some Go models are served only in the Anthropic ' +
+      'or Responses dialect, which this app does not speak, so those refuse a ' +
+      'turn — pick another from the list.',
+    reasoningChannel: true,
+    usageInStream: true,
+    /*
+     * The dashboard also sends `x-opencode-session` — the conversation's id, so
+     * the gateway's routing and its per-conversation prompt cache follow the
+     * conversation rather than the connection. This transport cannot yet: the
+     * model client is built per model and shared by every conversation on it,
+     * so there is no session id in scope to name. Nothing is gated on the
+     * header, which is why the omission is a lost cache rather than a refused
+     * turn.
+     */
   },
   openrouter: {
     id: 'openrouter',
@@ -216,15 +264,17 @@ export type ProviderConfig = z.infer<typeof providerConfigSchema>;
  * so switching to the local server and back does not cost the user the address
  * they typed. Keys are not here — they are secrets, and they live in the
  * keychain under one file per provider (see the main process's `paths`).
+ *
+ * `configs` is a record over `providerIdSchema` rather than an object with one
+ * hand-typed key per provider, and that is not a shortcut: an exhaustive record
+ * *requires* every id the enum names and rejects one it does not, so a provider
+ * added to `PROVIDER_IDS` without a config here cannot compile, and a settings
+ * file that names a provider this build has never heard of is refused rather
+ * than carried around half-understood.
  */
 export const providersSchema = z.object({
   active: providerIdSchema,
-  configs: z.object({
-    deepseek: providerConfigSchema,
-    llamacpp: providerConfigSchema,
-    gemini: providerConfigSchema,
-    openrouter: providerConfigSchema,
-  }),
+  configs: z.record(providerIdSchema, providerConfigSchema),
 });
 
 export type Providers = z.infer<typeof providersSchema>;
@@ -238,16 +288,23 @@ export type Providers = z.infer<typeof providersSchema>;
  * base URL would mean sending all the others, and a stale window's copy of those
  * is exactly what must not win. The store merges each named provider over what it
  * has.
+ *
+ * Every provider entry is optional, which is what lets a patch name one and
+ * leave the rest out — and so is every field inside one, because setting a model
+ * must not mean sending the address back. The names it does use have to be ones
+ * the catalogue knows, so a patch cannot invent a provider that the settings
+ * file would then have to guess about.
+ *
+ * `partialRecord` rather than `record` with an optional value, and the
+ * difference is the type rather than the parse: a plain record's inferred input
+ * still demands a key for every provider, so a renderer setting one base URL
+ * would have to send all five — exactly the stale-window problem this schema
+ * exists to avoid.
  */
 export const providersPatchSchema = z.object({
   active: providerIdSchema.optional(),
   configs: z
-    .object({
-      deepseek: providerConfigSchema.partial().optional(),
-      llamacpp: providerConfigSchema.partial().optional(),
-      gemini: providerConfigSchema.partial().optional(),
-      openrouter: providerConfigSchema.partial().optional(),
-    })
+    .partialRecord(providerIdSchema, providerConfigSchema.partial())
     .optional(),
 });
 
@@ -256,24 +313,15 @@ export type ProvidersPatch = z.infer<typeof providersPatchSchema>;
 export function defaultProviders(): Providers {
   return {
     active: 'deepseek',
-    configs: {
-      deepseek: {
-        baseUrl: PROVIDERS.deepseek.defaultBaseUrl,
-        model: PROVIDERS.deepseek.fallbackModels[0]!,
-      },
-      llamacpp: {
-        baseUrl: PROVIDERS.llamacpp.defaultBaseUrl,
-        model: PROVIDERS.llamacpp.fallbackModels[0]!,
-      },
-      gemini: {
-        baseUrl: PROVIDERS.gemini.defaultBaseUrl,
-        model: PROVIDERS.gemini.fallbackModels[0]!,
-      },
-      openrouter: {
-        baseUrl: PROVIDERS.openrouter.defaultBaseUrl,
-        model: PROVIDERS.openrouter.fallbackModels[0]!,
-      },
-    },
+    configs: Object.fromEntries(
+      PROVIDER_IDS.map((id) => [
+        id,
+        {
+          baseUrl: PROVIDERS[id].defaultBaseUrl,
+          model: PROVIDERS[id].fallbackModels[0]!,
+        } satisfies ProviderConfig,
+      ]),
+    ) as Record<ProviderId, ProviderConfig>,
   };
 }
 

@@ -246,7 +246,7 @@ describe('SettingsStore providers', () => {
     );
   }
 
-  it('starts on DeepSeek with all four addresses ready', async () => {
+  it('starts on DeepSeek with every provider address ready', async () => {
     const settings = await store().load();
     expect(settings.providers.active).toBe('deepseek');
     expect(settings.providers.configs.llamacpp.baseUrl).toContain('127.0.0.1');
@@ -255,6 +255,35 @@ describe('SettingsStore providers', () => {
     );
     expect(settings.providers.configs.openrouter.baseUrl).toBe(
       PROVIDERS.openrouter.defaultBaseUrl,
+    );
+    expect(settings.providers.configs.opencode_go.baseUrl).toBe(
+      PROVIDERS.opencode_go.defaultBaseUrl,
+    );
+  });
+
+  /**
+   * Two saves from one gesture: the dialog writes a text box when it loses focus
+   * and the menu that took the focus in the same click. Both are
+   * read-modify-write, so without the store's write queue the second one stores
+   * the state from before the first wrote and that edit is gone — silently,
+   * because both writes succeed and neither caller is told.
+   *
+   * Read back through a *new* store, so this is the file that is being asserted
+   * on rather than the first store's cache.
+   */
+  it('keeps both edits when two patches arrive together', async () => {
+    const settings = store();
+    await Promise.all([
+      settings.patch({
+        providers: {configs: {deepseek: {baseUrl: 'http://box.local:8080/v1'}}},
+      }),
+      settings.patch({providers: {active: 'gemini'}}),
+    ]);
+
+    const reread = await store().load();
+    expect(reread.providers.active).toBe('gemini');
+    expect(reread.providers.configs.deepseek.baseUrl).toBe(
+      'http://box.local:8080/v1',
     );
   });
 
@@ -293,6 +322,31 @@ describe('SettingsStore providers', () => {
     // And it comes back out of a save unmangled, address included.
     expect(settings.availableModels.openrouter).toEqual([
       ...PROVIDERS.openrouter.fallbackModels,
+    ]);
+  });
+
+  /**
+   * The same case one provider later, and the reason it is worth a second test:
+   * OpenCode Go is the fifth entry, so a fill that looped over too short a list —
+   * or over a hand-typed one that had grown by one and no more — passes the
+   * OpenRouter case and fails this one.
+   */
+  it('adds OpenCode Go to a file written before it existed', async () => {
+    await write({
+      providers: {
+        active: 'openrouter',
+        configs: {openrouter: {model: 'openrouter/auto'}},
+      },
+    });
+    const settings = await store().load();
+
+    expect(settings.providers.active).toBe('openrouter');
+    expect(settings.providers.configs.opencode_go).toEqual({
+      baseUrl: PROVIDERS.opencode_go.defaultBaseUrl,
+      model: PROVIDERS.opencode_go.fallbackModels[0],
+    });
+    expect(settings.availableModels.opencode_go).toEqual([
+      ...PROVIDERS.opencode_go.fallbackModels,
     ]);
   });
 

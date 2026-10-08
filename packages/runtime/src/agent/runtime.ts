@@ -228,6 +228,33 @@ export class AgentRuntime {
     return after;
   }
 
+  /**
+   * Records what one provider says it serves.
+   *
+   * Asking the endpoint is the caller's job: it needs an API key, and this class
+   * is deliberately never handed one. So this is the write, plus the same host
+   * invalidation `updateSettings` does — recording a list can move the selected
+   * model onto one the endpoint actually offers, and a host still holding the
+   * retired name would fail the next turn for a reason nobody could see.
+   */
+  async setAvailableModels(
+    provider: ProviderId,
+    models: string[],
+  ): Promise<StoredSettings> {
+    const before = await this.settingsStore.load();
+    const after = await this.settingsStore.setAvailableModels(provider, models);
+
+    if (
+      JSON.stringify(before.providers.configs) !==
+      JSON.stringify(after.providers.configs)
+    ) {
+      for (const profileId of [...this.hosts.keys()]) {
+        this.dropHost(profileId);
+      }
+    }
+    return after;
+  }
+
   async updateProfile(
     profileId: string,
     patch: ProfilePatch,

@@ -197,6 +197,20 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       return {settings: await publicSettings()};
     },
 
+    /*
+     * The one settings-shaped call that reaches the network. The key is read
+     * inside `AgentService` and never crosses back to the window, which gets the
+     * same payload every settings call answers with — now carrying the model
+     * list the endpoint actually reported.
+     */
+    'models.fetch': async (params) => {
+      const settings = await agent().settings();
+      const providerId = params.provider ?? settings.providers.active;
+      await agent().fetchModels(providerId);
+      dependencies.onSettingsChanged?.();
+      return {settings: await publicSettings()};
+    },
+
     'mcp.set': async (params) => {
       const servers = await agent().setMcpServer(params.server);
       return {servers, statuses: agent().mcpStatuses()};

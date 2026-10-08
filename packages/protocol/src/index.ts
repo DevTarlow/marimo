@@ -96,11 +96,11 @@ export interface ProviderDescriptor {
    * Placeholder model ids, used only until the provider has been asked what it
    * actually serves.
    *
-   * `GET /models` is authoritative and replaces this list as soon as a call
-   * succeeds, because these names do go stale: DeepSeek has already renamed its
-   * models once (`deepseek-chat` / `deepseek-reasoner` are legacy names now), and
-   * Gemini renames its line far more often than that. Nothing the user sees
-   * should depend on this list surviving.
+   * `GET /models` is authoritative and replaces this list when the user asks
+   * the endpoint what it serves, because these names do go stale: DeepSeek has
+   * already renamed its models once (`deepseek-chat` / `deepseek-reasoner` are
+   * legacy names now), and Gemini renames its line far more often than that.
+   * Nothing the user sees should depend on this list surviving.
    */
   fallbackModels: readonly string[];
   /**
@@ -1844,6 +1844,15 @@ export const agentCallSchemas = {
     apiKey: z.string(),
     provider: providerIdSchema.optional(),
   }),
+  /*
+   * Asks one provider what it serves, so the model pick-list can be what the
+   * endpoint actually offers rather than the catalogue's placeholder. A call
+   * rather than a settings patch because it reaches the network: a write that
+   * quietly made a request would report success for something that did not
+   * happen. The provider defaults to the active one; the answer is the refreshed
+   * settings payload, whose `availableModels` is that provider's list.
+   */
+  'models.fetch': z.object({provider: providerIdSchema.optional()}),
 } as const;
 
 export type AgentCallMethod = keyof typeof agentCallSchemas;
@@ -1886,6 +1895,7 @@ export interface AgentCallResults {
   'settings.get': {settings: PublicSettings};
   'settings.set': {settings: PublicSettings};
   'settings.setApiKey': {settings: PublicSettings};
+  'models.fetch': {settings: PublicSettings};
 }
 
 /**

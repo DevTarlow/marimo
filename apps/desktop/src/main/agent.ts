@@ -36,9 +36,11 @@ import type {
   AgentUiEvent,
   McpStatus,
   PendingGate,
+  ProviderId,
   SessionSummary,
   TranscriptMessage,
 } from '@marimo/protocol';
+import {fetchProviderModels} from '@marimo/agent';
 import type {JobService} from '@marimo/agent';
 
 import {safeStorageCipher, secretStore} from './secrets.js';
@@ -244,6 +246,49 @@ export class AgentService {
     Awaited<ReturnType<AgentRuntime['settings']>>['providers']
   > {
     return (await this.runtime.settings()).providers;
+  }
+
+  /**
+   * Asks a provider what it serves, and records the answer.
+   *
+   * The key is read and decrypted here and handed straight to the request; it
+   * never reaches the renderer, which learns the result only as a longer model
+   * list in the settings payload it gets back. The provider is named explicitly
+   * because the picker's selection and the settings on disk can be a moment
+   * apart — the button belongs to the provider the panel is showing.
+   *
+   * A provider that needs a key and has none is refused before the request, so
+   * the message says what to do instead of being a 401 the user has to decode.
+   */
+  async fetchModels(providerId: ProviderId): Promise<void> {
+    const settings = await this.runtime.settings();
+    const descriptor = PROVIDERS[providerId];
+    const config = settings.providers.configs[providerId];
+    const store = secretStore(
+      this.options.paths.providerSecrets[providerId],
+      `${descriptor.label} API key`,
+    );
+    const stored = await store.read();
+    if (stored.state === 'unreadable') {
+      throw new Error(
+        `The stored ${descriptor.label} key could not be read: ` +
+          `${stored.reason} Re-save it, then fetch its models.`,
+      );
+    }
+    const apiKey = stored.state === 'present' ? stored.value : '';
+
+    if (descriptor.requiresApiKey && apiKey.length === 0) {
+      throw new Error(
+        `Save a ${descriptor.label} key before fetching its models.`,
+      );
+    }
+
+    const models = await fetchProviderModels({
+      provider: providerId,
+      apiKey,
+      baseUrl: config.baseUrl,
+    });
+    await this.runtime.setAvailableModels(providerId, models);
   }
 
   async start(): Promise<void> {

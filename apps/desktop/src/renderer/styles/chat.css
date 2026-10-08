@@ -719,6 +719,19 @@
   user-select: text;
 }
 
+/*
+ * A refused write or a failed model fetch, shown in the section that caused it.
+ * The dialog's own banner is at the top, and a message about a button halfway
+ * down the page is not attached to anything when it appears up there.
+ */
+.settings-problem {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .settings-row {
   display: flex;
   gap: var(--space-2);

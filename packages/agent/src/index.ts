@@ -39,6 +39,11 @@ export {
 export type {OpenAiCompatLlmOptions} from './models/openai-compat-llm.js';
 export {DeepSeekLlm, DeepSeekRequestError} from './models/deepseek-llm.js';
 export type {DeepSeekLlmOptions} from './models/deepseek-llm.js';
+export {
+  fetchProviderModels,
+  ProviderModelsError,
+} from './models/provider-models.js';
+export type {ProviderModelsOptions} from './models/provider-models.js';
 export {FileSessionService} from './sessions/file-session-service.js';
 export type {
   AdkEvent,

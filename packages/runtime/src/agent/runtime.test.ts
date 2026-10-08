@@ -103,6 +103,57 @@ describe('AgentRuntime', () => {
     });
   });
 
+  /*
+   * The Fetch Models button writes through here. What matters from the outside
+   * is that the list lands on disk, that the provider's own model is moved when
+   * the endpoint no longer offers it — a retired name is a 404 at the start of
+   * the next turn — and that no other provider is touched.
+   */
+  describe('recording what a provider serves', () => {
+    it('stores the list and moves a model the endpoint no longer offers', async () => {
+      const agent = runtime(noKey);
+      await agent.updateSettings({
+        providers: {configs: {deepseek: {model: 'gone-model'}}},
+      });
+
+      const after = await agent.setAvailableModels('deepseek', [
+        'deepseek-a',
+        'deepseek-b',
+      ]);
+
+      expect(after.availableModels.deepseek).toEqual([
+        'deepseek-a',
+        'deepseek-b',
+      ]);
+      expect(after.providers.configs.deepseek.model).toBe('deepseek-a');
+      expect((await agent.settings()).availableModels.deepseek).toEqual([
+        'deepseek-a',
+        'deepseek-b',
+      ]);
+    });
+
+    it('keeps the model when the endpoint still offers it', async () => {
+      const agent = runtime(noKey);
+      await agent.updateSettings({
+        providers: {configs: {deepseek: {model: 'deepseek-b'}}},
+      });
+
+      const after = await agent.setAvailableModels('deepseek', [
+        'deepseek-a',
+        'deepseek-b',
+      ]);
+      expect(after.providers.configs.deepseek.model).toBe('deepseek-b');
+    });
+
+    it('leaves every other provider alone', async () => {
+      const agent = runtime(noKey);
+      await agent.setAvailableModels('gemini', ['gemini-a']);
+
+      const after = await agent.setAvailableModels('deepseek', ['deepseek-a']);
+      expect(after.availableModels.gemini).toEqual(['gemini-a']);
+    });
+  });
+
   describe('when the agent cannot start', () => {
     it('says so from `host` rather than throwing', async () => {
       const result = await runtime(noKey).host(profileId);

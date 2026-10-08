@@ -63,7 +63,6 @@ interface Loaded {
 export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   /** The name and identity being edited. Committed on blur, not on every letter. */
   const [draft, setDraft] = useState<{name: string; identity: string} | null>(
@@ -158,15 +157,6 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
    */
   const onByDefault = loaded.catalog.tools.filter((tool) => tool.byDefault);
   const offByDefault = loaded.catalog.tools.filter((tool) => !tool.byDefault);
-  /*
-   * The key section belongs to whichever provider is selected above, so it names
-   * it: "an API key" is not a thing anybody has, and a section that described a
-   * key without saying whose would be the one place the two halves of this
-   * dialog disagreed.
-   */
-  const activeProvider = PROVIDERS[loaded.settings.providers.active];
-  const keyStored =
-    loaded.settings.providerKeys[loaded.settings.providers.active];
 
   return (
     <div className="settings">
@@ -471,73 +461,6 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           }}
         />
 
-        <section className="settings-section">
-          <h3>API key</h3>
-          <p className="settings-muted">
-            {keyStored
-              ? `A key for ${activeProvider.label} is stored. It is kept on this machine and never sent back to this window.`
-              : activeProvider.requiresApiKey
-                ? `No ${activeProvider.label} key yet — the agent cannot answer until there is one.`
-                : `${activeProvider.label} needs no key. Anything pasted here is sent as one.`}
-          </p>
-          <div className="settings-row">
-            <input
-              className="settings-input"
-              type="password"
-              value={apiKey}
-              placeholder={activeProvider.keyPlaceholder}
-              aria-label={`${activeProvider.label} API key`}
-              onChange={(event) => {
-                setApiKey(event.target.value);
-              }}
-            />
-            <button
-              type="button"
-              className="button button-primary"
-              disabled={saving || apiKey.trim().length === 0}
-              onClick={() => {
-                const value = apiKey;
-                void change(async () => {
-                  await window.marimo.call('settings.setApiKey', {apiKey: value});
-                  setApiKey('');
-                });
-              }}
-            >
-              Save key
-            </button>
-          </div>
-          <p className="settings-muted">{activeProvider.keyHelp}</p>
-
-          <label className="settings-check">
-            <input
-              type="checkbox"
-              checked={loaded.settings.allowPlaintextApiKey}
-              disabled={saving}
-              onChange={(event) => {
-                const on = event.target.checked;
-                void change(async () => {
-                  await window.marimo.call('settings.set', {
-                    patch: {allowPlaintextApiKey: on},
-                  });
-                });
-              }}
-            />
-            <span>
-              Store secrets as plain text
-              <em className="settings-why">
-                {loaded.settings.encryptionAvailable
-                  ? 'Your key will be readable by anything that can read the file. ' +
-                    'Needed only if you want scheduled jobs to run while the app is ' +
-                    'closed — the background runner has no keychain to unlock it. ' +
-                    'Re-save the key after changing this.'
-                  : 'This machine has no keychain, so a key cannot be encrypted ' +
-                    'either way. Turning this on is what lets scheduled jobs run ' +
-                    'while the app is closed.'}
-              </em>
-            </span>
-          </label>
-        </section>
-
         <Memory />
 
         <Connectors
@@ -560,13 +483,15 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
 }
 
 /**
- * Which provider answers, where it is reached, and which of its models.
+ * Which provider answers, how it is reached, and which of its models.
  *
- * The three are one section because none of them stands alone: a model id is
- * only meaningful at one endpoint, and the base URL is what makes a llama.cpp
- * server on the network reachable rather than only the one beside this app. The
- * picker is drawn in the catalogue's order, which is alphabetical — see
- * `PROVIDER_IDS` in the protocol, where a test holds that order.
+ * One section because none of these stands alone: a model id is only meaningful
+ * at one endpoint, the address is what makes a llama.cpp server on the network
+ * reachable rather than only the one beside this app, and both are unusable
+ * without the key that endpoint wants. They were two sections for a while — a
+ * Provider card and a detached API key card — and the split was arbitrary: the
+ * key belongs to the picker above it, and the model list could not be refreshed
+ * without leaving the section it lives in.
  *
  * Two choices here are deliberate. The provider is a pick-list, because the ids
  * are the app's own and a mistyped one would leave the settings file naming a
@@ -575,6 +500,12 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
  * is broken" rather than "that model does not exist" — and the stored value is
  * shown even when the list no longer carries it, because a model the provider
  * has stopped advertising may still work.
+ *
+ * "Fetch Models" is what replaces those placeholder names with what the endpoint
+ * actually serves, and it is offered only once a key is on file: asking a
+ * service that will answer 401 is a button whose only outcome is an error. A
+ * provider that needs no key — a llama.cpp server beside the app — is asked
+ * directly.
  *
  * Saving is immediate, like every other control here. The base URL is the one
  * exception in *when*: it waits for the box to lose focus, because saving per
@@ -588,8 +519,14 @@ function ProviderSection({
 }): React.JSX.Element | null {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [saving, setSaving] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const [apiKey, setApiKey] = useState('');
   /** What is in the base URL box, or null while it shows what is stored. */
   const [baseUrlDraft, setBaseUrlDraft] = useState<string | null>(null);
+  /** What went wrong, shown in this section rather than only in the banner. */
+  const [problem, setProblem] = useState<string | null>(null);
+  /** What a good fetch found, so the button's effect is visible. */
+  const [note, setNote] = useState<string | null>(null);
 
   const load = (): void => {
     void window.marimo
@@ -618,23 +555,22 @@ function ProviderSection({
 
   const save = (patch: SettingsPatch): void => {
     setSaving(true);
+    setProblem(null);
+    setNote(null);
     void window.marimo
       .call('settings.set', {patch})
       .then(() => {
         load();
         /*
-         * The rest of the dialog is redrawn too, and that is not tidiness: the
-         * API-key section below names the provider this picker selects, so
-         * without this it would go on describing the one the user just left.
+         * The rest of the dialog is redrawn too. A provider change is a fact the
+         * other cards can act on, and a copy of the settings that still names the
+         * old one is how a change looks like it did not take.
          */
         onChange?.();
       })
-      .catch(() => {
-        /*
-         * Put the box back rather than leaving a refused address in it. Nothing
-         * else here can fail for a reason the user needs to read: the two
-         * pick-lists are the catalogue's own values.
-         */
+      .catch((failure) => {
+        setProblem(describe(failure));
+        // Put the box back rather than leaving a refused address in it.
         setBaseUrlDraft(null);
       })
       .finally(() => {
@@ -642,13 +578,77 @@ function ProviderSection({
       });
   };
 
+  /** Writes the key for this section's provider and reloads what is stored. */
+  const saveKey = (): void => {
+    const value = apiKey;
+    setSaving(true);
+    setProblem(null);
+    setNote(null);
+    void window.marimo
+      .call('settings.setApiKey', {apiKey: value})
+      .then(() => {
+        setApiKey('');
+        load();
+        onChange?.();
+      })
+      .catch((failure) => {
+        setProblem(describe(failure));
+      })
+      .finally(() => {
+        setSaving(false);
+      });
+  };
+
+  /**
+   * Asks the endpoint what it serves and redraws the list from the answer.
+   *
+   * A base URL still sitting in the box has not been written yet — that field
+   * saves on blur — while the fetch reads the stored address. Committing the
+   * draft first is what stops this from asking the address the user just
+   * replaced, which would look like the button ignored the edit.
+   */
+  const fetchModels = (): void => {
+    setFetching(true);
+    setProblem(null);
+    setNote(null);
+    void (async () => {
+      try {
+        const draft = baseUrlDraft?.trim() ?? '';
+        if (draft.length > 0 && draft !== config.baseUrl) {
+          await window.marimo.call('settings.set', {
+            patch: {providers: {configs: {[active]: {baseUrl: draft}}}},
+          });
+          setBaseUrlDraft(null);
+        }
+
+        const {settings: refreshed} = await window.marimo.call(
+          'models.fetch',
+          {},
+        );
+        setSettings(refreshed);
+        setNote(
+          `${PROVIDERS[refreshed.providers.active].label} returned ` +
+            `${String(refreshed.availableModels.length)} model(s).`,
+        );
+        onChange?.();
+      } catch (failure) {
+        setProblem(describe(failure));
+      } finally {
+        setFetching(false);
+      }
+    })();
+  };
+
+  const canFetch =
+    !fetching && !saving && (!descriptor.requiresApiKey || keyStored);
+
   return (
     <section className="settings-section">
       <h3>Provider</h3>
       <p className="settings-muted">
-        Which service answers, and which of its models. Every provider keeps its
-        own address and model, so trying one and coming back does not cost you
-        the setup of the other.
+        Which service answers, how the app reaches it, and which of its models.
+        Every provider keeps its own address, model and key, so trying one and
+        coming back does not cost you the setup of the other.
       </p>
 
       <label className="settings-field">
@@ -673,6 +673,63 @@ function ProviderSection({
           ))}
         </select>
       </label>
+
+      <div className="settings-field">
+        <span>API key</span>
+        <p className="settings-muted">
+          {keyStored
+            ? `A key for ${descriptor.label} is stored. It is kept on this machine and never sent back to this window.`
+            : descriptor.requiresApiKey
+              ? `No ${descriptor.label} key yet — the agent cannot answer, and its models cannot be fetched, until there is one.`
+              : `${descriptor.label} needs no key. Anything pasted here is sent as one.`}
+        </p>
+        <div className="settings-row">
+          <input
+            className="settings-input"
+            type="password"
+            value={apiKey}
+            placeholder={descriptor.keyPlaceholder}
+            aria-label={`${descriptor.label} API key`}
+            disabled={saving}
+            onChange={(event) => {
+              setApiKey(event.target.value);
+            }}
+          />
+          <button
+            type="button"
+            className="button button-primary"
+            disabled={saving || apiKey.trim().length === 0}
+            onClick={saveKey}
+          >
+            Save key
+          </button>
+        </div>
+        <p className="settings-muted">{descriptor.keyHelp}</p>
+
+        <label className="settings-check">
+          <input
+            type="checkbox"
+            checked={settings.allowPlaintextApiKey}
+            disabled={saving}
+            onChange={(event) => {
+              save({allowPlaintextApiKey: event.target.checked});
+            }}
+          />
+          <span>
+            Store secrets as plain text
+            <em className="settings-why">
+              {settings.encryptionAvailable
+                ? 'Your key will be readable by anything that can read the file. ' +
+                  'Needed only if you want scheduled jobs to run while the app is ' +
+                  'closed — the background runner has no keychain to unlock it. ' +
+                  'Re-save the key after changing this.'
+                : 'This machine has no keychain, so a key cannot be encrypted ' +
+                  'either way. Turning this on is what lets scheduled jobs run ' +
+                  'while the app is closed.'}
+            </em>
+          </span>
+        </label>
+      </div>
 
       <label className="settings-field">
         <span>Base URL</span>
@@ -703,36 +760,46 @@ function ProviderSection({
         />
       </label>
 
-      <label className="settings-field">
+      <div className="settings-field">
         <span>Model</span>
         <em className="settings-why">
           Cheaper models are fine for reading and summarising; harder questions
           want a bigger one.
         </em>
-        <select
-          className="settings-input"
-          value={config.model}
-          disabled={saving}
-          onChange={(event) => {
-            const model = event.target.value;
-            save({providers: {configs: {[active]: {model}}}});
-          }}
-        >
-          {models.map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <p className="settings-muted">
-        {keyStored
-          ? `${descriptor.label} has a key stored.`
-          : descriptor.requiresApiKey
-            ? `No key stored for ${descriptor.label} — add one below.`
-            : `${descriptor.label} needs no key.`}
-      </p>
+        <div className="settings-row">
+          <select
+            className="settings-input"
+            aria-label="Model"
+            value={config.model}
+            disabled={saving || fetching}
+            onChange={(event) => {
+              const model = event.target.value;
+              save({providers: {configs: {[active]: {model}}}});
+            }}
+          >
+            {models.map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="button button-quiet"
+            disabled={!canFetch}
+            title={
+              descriptor.requiresApiKey && !keyStored
+                ? `Save a ${descriptor.label} key first`
+                : undefined
+            }
+            onClick={fetchModels}
+          >
+            {fetching ? 'Fetching…' : 'Fetch Models'}
+          </button>
+        </div>
+        {note !== null && <p className="settings-muted">{note}</p>}
+        {problem !== null && <p className="settings-problem">{problem}</p>}
+      </div>
     </section>
   );
 }

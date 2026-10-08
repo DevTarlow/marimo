@@ -418,11 +418,22 @@ async function main() {
           if (providers === undefined || models === undefined || baseUrl === null) {
             return JSON.stringify({incomplete: true});
           }
+          /*
+           * The key box and the Fetch button are asserted *in this section*:
+           * they were moved here from a separate API key card, and a section
+           * that lost them would still pass every check above.
+           */
+          const keyInput = section.querySelector('input[type="password"]');
+          const fetchButton = [...section.querySelectorAll('button')]
+            .find((entry) => entry.textContent.trim() === 'Fetch Models');
           return JSON.stringify({
             labels: [...providers.options].map((option) => option.textContent),
             active: providers.value,
             models: [...models.options].map((option) => option.textContent),
             baseUrl: baseUrl.value,
+            hasKeyInput: keyInput !== null,
+            hasFetchButton: fetchButton !== undefined,
+            fetchDisabled: fetchButton?.disabled ?? null,
           });
         })()`,
         returnByValue: true,
@@ -446,10 +457,22 @@ async function main() {
       fail(`the model picker is empty for "${picker.active}"`);
     } else if (!/^https?:\/\//u.test(picker.baseUrl ?? '')) {
       fail(`the base URL box holds "${picker.baseUrl}"`);
+    } else if (picker.hasKeyInput !== true) {
+      fail('the API key box is not in the provider section');
+    } else if (picker.hasFetchButton !== true) {
+      fail('the provider section has no Fetch Models button');
+    } else if (picker.fetchDisabled !== true) {
+      // A fresh install has no key stored, so there is nothing to ask the
+      // endpoint yet — the button is present but refused.
+      fail('Fetch Models is offered before a key is stored');
     } else {
       ok(
         `the provider picker offers ${String(providerLabels.length)} providers, ` +
           `alphabetically: ${providerLabels.join(', ')}`,
+      );
+      ok(
+        'the provider section carries the key box and a key-gated Fetch Models ' +
+          'button',
       );
     }
 

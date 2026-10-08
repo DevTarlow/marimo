@@ -14,12 +14,13 @@
  * Without a provider key the expected result is exactly what it prints: the job
  * recorded as an error saying so, rather than silence.
  */
-import {spawn} from 'node:child_process';
 import {mkdtemp, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {setTimeout as wait} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
+
+import {startApp, stopApp} from './app-process.mjs';
 
 const appRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repo = dirname(dirname(appRoot));
@@ -70,9 +71,10 @@ await writeFile(
   ),
 );
 
-const child = spawn('./node_modules/.bin/electron', ['.', '--no-sandbox'], {
+const child = startApp({
+  command: './node_modules/.bin/electron',
+  args: ['.', '--no-sandbox'],
   cwd: appRoot,
-  stdio: ['ignore', 'pipe', 'pipe'],
   env: {
     ...process.env,
     MARIMO_USER_DATA_DIR: dir,
@@ -90,10 +92,14 @@ child.stderr.on('data', (chunk) => {
 });
 
 await wait(7000);
-child.kill('SIGTERM');
-await wait(800);
-if (child.exitCode === null) {
-  child.kill('SIGKILL');
+/*
+ * Waited for, not fired and forgotten, and that is what makes the read below
+ * mean anything: the app holds its quit while it stops the agent, and a job it
+ * was midway through recording would otherwise be read as one it never ran.
+ */
+if (!(await stopApp())) {
+  console.error('the app could not be stopped, and is still running');
+  process.exitCode = 1;
 }
 
 const after = JSON.parse(await readFile(paths.jobs, 'utf8'));

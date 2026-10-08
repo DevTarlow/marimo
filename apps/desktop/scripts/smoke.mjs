@@ -22,6 +22,12 @@
  *   temporary directory, which is also what keeps it from fighting a running
  *   copy of the app for the single-instance lock.
  *
+ * And it puts the app away again before it exits, on every path out, including a
+ * Ctrl-C: this opens a real window on whatever display the check is running on,
+ * and an agent left sitting in somebody's tray afterwards is a mess they have to
+ * clean up rather than a result. `app-process.mjs` is where that lives, and why
+ * it means the process group rather than the pid.
+ *
  * Usage:
  *   node scripts/smoke.mjs [--shot <file.png>]
  *
@@ -29,11 +35,12 @@
  * where `chrome-sandbox` cannot be setuid-root. It is opt-in because it is a
  * real reduction in isolation and must not be what a normal run quietly gets.
  */
-import {spawn} from 'node:child_process';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+
+import {startApp, stopApp} from './app-process.mjs';
 
 const appRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const electron = join(appRoot, 'node_modules', '.bin', 'electron');
@@ -90,8 +97,9 @@ async function main() {
     args.push('--no-sandbox');
   }
 
-  const child = spawn(electron, args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
+  const child = startApp({
+    command: electron,
+    args,
     env: {...process.env, MARIMO_USER_DATA_DIR: userData},
   });
 
@@ -531,11 +539,8 @@ async function main() {
     }
   } finally {
     socket?.close();
-    child.kill('SIGTERM');
-    // Give it a moment to release the user-data directory, then insist.
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    if (child.exitCode === null) {
-      child.kill('SIGKILL');
+    if (!(await stopApp())) {
+      fail('the app could not be stopped, and is still running');
     }
     await rm(userData, {recursive: true, force: true});
   }

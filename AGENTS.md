@@ -202,6 +202,31 @@ pnpm --filter @marimo/desktop smoke   # boot a real window and prove it works
 pnpm --filter @marimo/desktop jobs-check   # prove a due job runs in the app
 ```
 
+**Those last three open a real window, on whatever display you are running on,
+and this app is tray-resident: closing its window does not end it.** That is the
+point of it and it is also the trap — an agent left behind is an icon in
+somebody's tray that only they can clear, holding the single-instance lock and a
+user-data directory while it sits there.
+
+The pid a launcher hands back is the trap inside the trap: `.bin/electron` is a
+shim that execs a node script which *spawns* the real binary, so a kill aimed at
+that pid stops the wrapper and leaves the app running. `scripts/app-process.mjs`
+is where that is handled once for both driver scripts — the app is started
+`detached`, so it leads a process group, and `stopApp` signals the group and waits
+for it to empty, on Ctrl-C as well as on the way out. Anything you start by hand
+is still yours to put down. Before you call the work finished, check:
+
+```bash
+ps -eo pid,cmd | grep '[e]lectron/dist/electron'   # empty is the only good answer
+```
+
+If it is not empty, close it — the `^/` keeps this from matching the shell that
+runs it:
+
+```bash
+pkill -f '^/.*electron/dist/electron'
+```
+
 `pnpm build` and `pnpm build:web` are not alternatives and neither implies the
 other. The root `build` is `tsc -b` alone; the renderer bundle only comes from
 the desktop package's own `build`, which is what `build:web` filters to. Running

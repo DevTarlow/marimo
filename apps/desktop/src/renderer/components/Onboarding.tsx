@@ -11,9 +11,12 @@
  * box stays, Settings stays reachable, and somebody who wants to look around
  * before signing up for anything can.
  *
- * It says which provider it is asking about, because "an API key" is not a thing
- * anybody has — a DeepSeek key is. And it says where keys come from, because a
- * blank box with no way to fill it is a dead end.
+ * It does *not* name the active provider. The app runs against several of them,
+ * and a welcome that says "a DeepSeek key" reads as though that were the only
+ * model it takes, which is the wrong first impression to give someone who has
+ * not opened Settings yet. So the message is "any model, add a key for the one
+ * you are using", and where to get that key is still a link rather than a dead
+ * end: a blank box with no way to fill it is worse than a generic one.
  */
 import {useState} from 'react';
 
@@ -63,16 +66,16 @@ export function Onboarding({
       {provider.requiresApiKey ? (
         <>
           <p className="onboarding-lead">
-            One thing before it can answer anything: a {provider.label} key.
-            It stays on this computer.
+            Marimo Agent works with any model. Add a key for the one you are
+            using, and it stays on this computer.
           </p>
           <div className="onboarding-row">
             <input
               className="onboarding-input"
               type="password"
               value={key}
-              placeholder={`Paste your ${provider.label} key`}
-              aria-label={`${provider.label} API key`}
+              placeholder="Paste your API key"
+              aria-label="API key"
               disabled={busy}
               onChange={(event) => {
                 setKey(event.target.value);
@@ -105,7 +108,7 @@ export function Onboarding({
                 target="_blank"
                 rel="noreferrer noopener"
               >
-                Get a {provider.label} key
+                Get a key
               </a>
             )}{' '}
             — or{' '}

@@ -112,6 +112,13 @@ describe('filesystem tools', () => {
       expect(fileIndex).toBeGreaterThan(subIndex);
       expect(output).toContain('(3 bytes)');
     });
+
+    it('defaults to the workspace root when no path is given', async () => {
+      await writeFile(join(workDir, 'a.txt'), 'abc', 'utf8');
+      const output = await run(createListDirTool({workspaceRoot: workDir}), {});
+      expect(output).toContain(workDir);
+      expect(output).toContain('a.txt');
+    });
   });
 
   describe('write_file', () => {

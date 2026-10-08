@@ -84,14 +84,21 @@ export function createListDirTool(context: FileToolContext) {
       "List the entries of a directory inside the user's workspace, with sizes " +
       'and whether each entry is a directory. Not recursive.',
     parameters: z.object({
+      /*
+       * Optional, because the description promises a default and the model
+       * believes it: a call with no `path` used to fail Zod validation and end
+       * the turn, so "list my workspace" — the commonest way to start — was the
+       * one call the tool could not answer.
+       */
       path: z
         .string()
+        .optional()
         .describe('Directory to list. Defaults to the workspace root.'),
     }),
     execute: async ({path: candidate}) => {
       const resolved = await resolveInsideWorkspace(
         context.workspaceRoot,
-        candidate,
+        candidate ?? '.',
       );
       const entries = await readdir(resolved, {withFileTypes: true});
       entries.sort((a, b) => {

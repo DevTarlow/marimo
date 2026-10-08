@@ -1096,6 +1096,23 @@
   font-size: var(--text-sm);
 }
 
+/*
+ * The provider picker. Laid out like the key row beneath it, and the same width,
+ * so the two read as one question — which service, then its key — rather than a
+ * form that happens to have two controls in a column.
+ */
+.onboarding-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  max-width: 42ch;
+  margin-top: var(--space-2);
+  text-align: left;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
 .onboarding-row {
   display: flex;
   gap: var(--space-2);
@@ -1139,13 +1156,6 @@
   color: var(--danger);
   font-size: var(--text-sm);
   overflow-wrap: anywhere;
-}
-
-/* A link in prose, not a button — it is part of the sentence. */
-.onboarding-link {
-  color: var(--accent);
-  text-decoration: underline;
-  font: inherit;
 }
 
 /* ------------------------------------------------------------ what it knows */

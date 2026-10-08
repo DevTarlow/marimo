@@ -11,16 +11,17 @@
  * box stays, Settings stays reachable, and somebody who wants to look around
  * before signing up for anything can.
  *
- * It does *not* name the active provider. The app runs against several of them,
- * and a welcome that says "a DeepSeek key" reads as though that were the only
- * model it takes, which is the wrong first impression to give someone who has
- * not opened Settings yet. So the message is "any model, add a key for the one
- * you are using", and where to get that key is still a link rather than a dead
- * end: a blank box with no way to fill it is worse than a generic one.
+ * It names the active provider and lets the user switch, because a key on its
+ * own does not say whose it is: "Paste your API key" is a question nobody can
+ * answer without knowing which service is about to read it. Showing the picker
+ * here also frames the choice as one of several — the point of the "any model"
+ * lead — instead of leaving a newcomer to guess that DeepSeek is the only one.
+ * And it says where the key comes from, because a blank box with no way to fill
+ * it is a dead end.
  */
 import {useState} from 'react';
 
-import {PROVIDERS} from '@marimo/protocol';
+import {PROVIDER_IDS, PROVIDERS} from '@marimo/protocol';
 import type {ProviderId, PublicSettings} from '@marimo/protocol';
 
 /** Where to get a key, per provider. Absent for the ones that need none. */
@@ -58,6 +59,36 @@ export function Onboarding({
     }
   };
 
+  /*
+   * Switching provider from here is the same write Settings makes, and it has
+   * to reload the settings afterwards: the key box below belongs to the
+   * provider, so without the reload the user would choose one service and be
+   * shown another one's field. A provider that needs no key makes `hasApiKey`
+   * true on the way back, which is what takes this screen down and leaves the
+   * chat — the same behaviour as choosing it in Settings.
+   */
+  const choose = async (id: ProviderId): Promise<void> => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await window.marimo.call('settings.set', {
+        patch: {providers: {active: id}},
+      });
+      /*
+       * A part-typed key belonged to the provider that was selected when it was
+       * typed. Leaving it in the box would offer it up to the next provider's
+       * Save button, which is how the wrong secret gets stored under the wrong
+       * name.
+       */
+      setKey('');
+      onSaved();
+    } catch (failure) {
+      setProblem(describe(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="onboarding">
       <img className="onboarding-mark" src="./marimo-logo.png" alt="" />
@@ -66,16 +97,38 @@ export function Onboarding({
       {provider.requiresApiKey ? (
         <>
           <p className="onboarding-lead">
-            Marimo Agent works with any model. Add a key for the one you are
-            using, and it stays on this computer.
+            Marimo Agent works with any model. Pick a provider below and paste
+            its key — the key stays on this computer.
           </p>
+          <label className="onboarding-field">
+            <span>Provider</span>
+            <select
+              className="onboarding-input"
+              value={settings.providers.active}
+              disabled={busy}
+              onChange={(event) => {
+                const next = PROVIDER_IDS.find(
+                  (id) => id === event.target.value,
+                );
+                if (next !== undefined) {
+                  void choose(next);
+                }
+              }}
+            >
+              {PROVIDER_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {PROVIDERS[id].label}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="onboarding-row">
             <input
               className="onboarding-input"
               type="password"
               value={key}
-              placeholder="Paste your API key"
-              aria-label="API key"
+              placeholder={`Paste your ${provider.label} key`}
+              aria-label={`${provider.label} API key`}
               disabled={busy}
               onChange={(event) => {
                 setKey(event.target.value);
@@ -108,13 +161,9 @@ export function Onboarding({
                 target="_blank"
                 rel="noreferrer noopener"
               >
-                Get a key
+                Get a {provider.label} key
               </a>
-            )}{' '}
-            — or{' '}
-            <button type="button" className="onboarding-link" onClick={onOpenSettings}>
-              choose a different provider
-            </button>
+            )}
             .
           </p>
         </>

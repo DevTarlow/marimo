@@ -1,13 +1,19 @@
 /**
  * The conversation, in the window.
  *
- * Two sources feed the transcript, and keeping them apart is the whole design:
+ * Three sources feed the transcript, and keeping them apart is the whole design:
  *
  * - **The stored transcript** is what was actually written down. It is read when
  *   a conversation is opened and again when a turn ends.
  * - **The live turn** is what is arriving right now, assembled from the event
  *   stream so the answer appears as it is written rather than after it is
  *   finished.
+ * - **The outbox** is the user's own words between pressing send and the next
+ *   transcript read. There is nothing else to draw them from: a send is an IPC
+ *   round trip and then a turn that begins in the main process, and the
+ *   conversation on disk is not re-read until that turn ends — so without this
+ *   a sent message sat in no source at all, and the window looked as if it had
+ *   swallowed it.
  *
  * At the end of every turn the live copy is thrown away and the stored one is
  * re-read. That is not belt-and-braces: a stream can be interrupted, an abort
@@ -78,7 +84,19 @@ export interface AgentController {
   /** Gates the open conversation is waiting on, stored or live. */
   pending: PendingGate[];
   live: LiveTurn | null;
-  send: (text: string) => Promise<void>;
+  /**
+   * The user's own words, sent but not yet read back from the conversation.
+   *
+   * Drawn after the stored transcript and before the live turn, which is where
+   * the message will be once the turn ends and the store is read again.
+   */
+  outbox: string | null;
+  /**
+   * A turn is in flight — including the moment between sending and the turn's
+   * first event, when there is nothing to show yet but a message on its way.
+   */
+  busy: boolean;
+  send: (text: string, origin?: 'window' | 'pet') => Promise<void>;
   decide: (callId: string, confirmed: boolean) => Promise<void>;
   stop: () => Promise<void>;
   open: (sessionId: string) => Promise<void>;
@@ -95,15 +113,6 @@ export interface AgentController {
   themeMode: ThemeMode;
   newSession: () => Promise<void>;
   dismissError: () => void;
-  /**
-   * Puts a failure on screen, in the one place this window draws them.
-   *
-   * For a caller that has to make its own IPC call — the companion, which sends
-   * its turns with an origin the controller does not know about. `describe` is
-   * applied here rather than at the call site so Electron's wrapper prefix is
-   * stripped the same way every other failure is.
-   */
-  reportError: (failure: unknown) => void;
 }
 
 /** Electron wraps a rejected `invoke` in its own prefix, which is noise here. */
@@ -121,6 +130,7 @@ export function useAgent(): AgentController {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [storedPending, setStoredPending] = useState<PendingGate[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
+  const [outbox, setOutbox] = useState<string | null>(null);
   const [openSettings, setOpenSettings] = useState(0);
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
 
@@ -149,6 +159,12 @@ export function useAgent(): AgentController {
       }
       setMessages(result.messages);
       setStoredPending(result.pending);
+      /*
+       * The stored copy is here, so the echo has nothing left to stand in for.
+       * Cleared in the same batch as the messages it replaces, because the two
+       * are the same bubble: a frame apart would blink it.
+       */
+      setOutbox(null);
     },
     [],
   );
@@ -159,6 +175,7 @@ export function useAgent(): AgentController {
       setLive(null);
       setStoredPending([]);
       setMessages([]);
+      setOutbox(null);
       if (profile) {
         await loadTranscript(profile.id, id);
       }
@@ -448,24 +465,42 @@ export function useAgent(): AgentController {
   }, []);
 
   const send = useCallback(
-    async (text: string): Promise<void> => {
+    async (
+      text: string,
+      origin: 'window' | 'pet' = 'window',
+    ): Promise<void> => {
       if (profile === undefined || sessionId === null) {
         return;
       }
       setError(null);
+      /*
+       * Drawn before the round trip rather than after it. The words are the one
+       * thing the window already has, and a send that shows nothing until a turn
+       * starts in another process reads as a message that did not go.
+       */
+      setOutbox(text);
       try {
-        await window.marimo.call('chat.send', {
+        const {accepted} = await window.marimo.call('chat.send', {
           profileId: profile.id,
           sessionId,
           text,
           /*
-           * Which surface asked. Stated rather than left to the default, so the
-           * one caller that is *not* the window — the companion, which sends
-           * through its own path — cannot end up looking like one by omission.
+           * Which surface asked. Stated rather than left to the default, so a
+           * caller cannot end up looking like another by omission.
            */
-          origin: 'window',
+          origin,
         });
+        /*
+         * Refused — a turn already running, an unknown conversation. The refusal
+         * arrives as `turn.failed` and is drawn where every other failure is;
+         * the echo goes with it, because a message that was never stored is not
+         * one to leave on screen as if it had been.
+         */
+        if (!accepted) {
+          setOutbox(null);
+        }
       } catch (failure) {
+        setOutbox(null);
         setError(describe(failure));
       }
     },
@@ -523,12 +558,20 @@ export function useAgent(): AgentController {
       setMessages([]);
       setStoredPending([]);
       setLive(null);
+      setOutbox(null);
     } catch (failure) {
       setError(describe(failure));
     }
   }, [profile]);
 
   const pending = useMemo(() => storedPending, [storedPending]);
+
+  /*
+   * Waiting, from the moment the message is sent. `live` alone would leave the
+   * gap between the send and the turn's first event unaccounted for, which is
+   * the one moment the user is certain something should be happening.
+   */
+  const busy = live?.running === true || outbox !== null;
 
   return {
     ready,
@@ -539,6 +582,8 @@ export function useAgent(): AgentController {
     messages,
     pending,
     live,
+    outbox,
+    busy,
     send,
     decide,
     stop,
@@ -547,9 +592,6 @@ export function useAgent(): AgentController {
     themeMode,
     reload: boot,
     newSession,
-    reportError: (failure: unknown) => {
-      setError(describe(failure));
-    },
     dismissError: () => {
       setError(null);
     },

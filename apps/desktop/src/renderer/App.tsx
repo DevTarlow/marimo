@@ -103,7 +103,7 @@ export function App(): React.JSX.Element {
       .catch(() => undefined);
   };
 
-  const busy = agent.live?.running === true;
+  const busy = agent.busy;
   const disabled = agent.profile === undefined;
 
   if (showSettings) {
@@ -221,6 +221,7 @@ export function App(): React.JSX.Element {
         ) : (
           <Transcript
             messages={agent.messages}
+            outbox={agent.outbox}
             live={agent.live}
             pending={agent.pending}
             onDecide={(callId, confirmed) => {

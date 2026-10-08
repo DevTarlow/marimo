@@ -43,13 +43,23 @@ describe('the companion window', () => {
 
   it('asks as the pet rather than as the window', async () => {
     const source = await readFile(pet, 'utf8');
+    const hook = await readFile(
+      join(appRoot, 'src', 'renderer', 'hooks', 'useAgent.ts'),
+      'utf8',
+    );
 
     /*
      * The whole of the answer-length setting rests on this one field: without
      * it the turn looks like any other and the agent answers at the window's
      * length, which is a setting that appears to do nothing.
+     *
+     * There are two links now rather than one, because the pet sends through the
+     * window's own `send` — that is what buys the local echo, so a question
+     * asked at the moss appears on screen the moment it is asked. Both are
+     * asserted, since either one dropping the origin loses the setting.
      */
-    expect(source).toContain("origin: 'pet'");
+    expect(source).toContain("agent.send(text, 'pet')");
+    expect(hook).toContain("origin?: 'window' | 'pet'");
   });
 
   it('leads the bar with a new-chat button, and refuses it mid-turn', async () => {

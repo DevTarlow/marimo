@@ -367,11 +367,6 @@
   }
 }
 
-.working-note {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
 /* -------------------------------------------------------------- approval */
 
 .approval {

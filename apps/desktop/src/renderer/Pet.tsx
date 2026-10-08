@@ -55,7 +55,7 @@ export function Pet(): React.JSX.Element {
   const clickThrough = useRef(settings.clickThrough);
   clickThrough.current = settings.clickThrough;
 
-  const busy = agent.live?.running === true;
+  const busy = agent.busy;
 
   useEffect(() => {
     let cancelled = false;
@@ -119,12 +119,17 @@ export function Pet(): React.JSX.Element {
     -settings.visibleMessages,
   );
 
+  /*
+   * The outbox is in the dependencies as well as the stored messages: the echo
+   * is a bubble that has to be visible without scrolling as soon as it exists,
+   * and the transcript it will be replaced by has not grown yet.
+   */
   useEffect(() => {
     const element = column.current;
     if (element !== null) {
       element.scrollTop = element.scrollHeight;
     }
-  }, [shown.length, agent.live?.text.length]);
+  }, [shown.length, agent.outbox, agent.live?.text.length]);
 
   const submit = (): void => {
     const text = draft.trim();
@@ -137,26 +142,15 @@ export function Pet(): React.JSX.Element {
       return;
     }
     /*
-     * Sent here rather than through `agent.send`, because the one extra fact
-     * this turn needs is the one `useAgent` does not know: it was asked at the
-     * moss. The agent answers it more briefly, and the window keeps answering
-     * at its own length — the conversation is shared, the manner is not.
-     *
-     * A failure is reported the way `useAgent` reports its own — as the error
-     * line in the column above — because that is the shape this window already
-     * draws, and a message that vanished on a rejected call with nothing on
-     * screen is indistinguishable from a pet that is ignoring you.
+     * Through the window's own send rather than by posting `chat.send` here.
+     * The origin is still the one extra fact this turn needs — asked at the
+     * moss, the agent answers more briefly than the window, and the window keeps
+     * answering at its own length — but passing it in buys the local echo that
+     * puts the question on screen the moment it is asked, which is the same
+     * thing the window does. A rejected call is reported the way `useAgent`
+     * reports its own, as the error line in the column above.
      */
-    window.marimo
-      .call('chat.send', {
-        profileId: agent.profile.id,
-        sessionId: agent.sessionId,
-        text,
-        origin: 'pet',
-      })
-      .catch((failure: unknown) => {
-        agent.reportError(failure);
-      });
+    void agent.send(text, 'pet');
     setDraft('');
   };
 
@@ -179,13 +173,17 @@ export function Pet(): React.JSX.Element {
           </div>
         ))}
 
+        {agent.outbox !== null && (
+          <div className="pet-bubble pet-user">{agent.outbox}</div>
+        )}
+
         {agent.live !== null && agent.live.text.length > 0 && (
           <div className="pet-bubble pet-assistant">
             <Markdown text={agent.live.text} />
           </div>
         )}
 
-        {busy && agent.live?.text.length === 0 && (
+        {busy && (agent.live?.text.length ?? 0) === 0 && (
           <div className="pet-bubble pet-assistant pet-thinking" aria-label="Working">
             <span />
             <span />

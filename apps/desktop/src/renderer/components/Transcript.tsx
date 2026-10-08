@@ -177,18 +177,29 @@ function Message({message}: {message: TranscriptMessage}): React.JSX.Element {
 
 export function Transcript({
   messages,
+  outbox,
   live,
   pending,
   onDecide,
   busy,
 }: {
   messages: TranscriptMessage[];
+  /**
+   * The user's words while they are sent but not yet read back from the
+   * conversation. Drawn in the position the stored copy will take, so the turn
+   * ending does not move it.
+   */
+  outbox: string | null;
   live: LiveTurn | null;
   pending: PendingGate[];
   onDecide: (callId: string, confirmed: boolean) => void;
   busy: boolean;
 }): React.JSX.Element {
-  const empty = messages.length === 0 && live === null && pending.length === 0;
+  const empty =
+    messages.length === 0 &&
+    outbox === null &&
+    live === null &&
+    pending.length === 0;
 
   const view = useRef<HTMLDivElement>(null);
   const [jumpable, setJumpable] = useState(false);
@@ -233,7 +244,7 @@ export function Transcript({
    * Keyed on emptiness rather than on the messages themselves, so arriving text
    * does not re-run it and fight the follow rule above.
    */
-  const blank = messages.length === 0 && live === null;
+  const blank = messages.length === 0 && outbox === null && live === null;
   useEffect(() => {
     follow.current = true;
     setJumpable(false);
@@ -269,6 +280,12 @@ export function Transcript({
         <Message key={message.id} message={message} />
       ))}
 
+      {outbox !== null && (
+        <article className="message message-user">
+          <div className="bubble">{outbox}</div>
+        </article>
+      )}
+
       {live !== null && (
         <article className="message message-assistant">
           {live.toolCalls.length > 0 && (
@@ -300,8 +317,21 @@ export function Transcript({
         <ApprovalCard key={gate.callId} gate={gate} onDecide={onDecide} />
       ))}
 
+      {/*
+        The turn is on its way but has not streamed its first event, so there is
+        no live copy to hang the dots on yet. The same dots in the same shape as
+        the live article's, because waiting is one thing and should look like
+        one — the paragraph that used to be here could not draw at all, since
+        `busy` was defined as a live turn running and this branch requires none.
+      */}
       {busy && pending.length === 0 && live === null && (
-        <p className="working-note">Working…</p>
+        <article className="message message-assistant">
+          <div className="bubble thinking" aria-label="Working">
+            <span />
+            <span />
+            <span />
+          </div>
+        </article>
       )}
     </div>
 

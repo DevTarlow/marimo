@@ -42,3 +42,5 @@ export {
   renderSectionGuide,
 } from './sections.js';
 export type {CanonicalSection} from './sections.js';
+
+export {MEMORY_SOFT_LIMIT_BYTES, memorySizeWarning} from './size.js';

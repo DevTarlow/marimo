@@ -13,6 +13,7 @@
 import {FunctionTool} from '@google/adk';
 import {z} from 'zod';
 
+import {memorySizeWarning} from '../memory/size.js';
 import type {MemoryStore} from '../memory/index.js';
 
 export interface MemoryToolContext {
@@ -30,10 +31,16 @@ export function createReadMemoryTool(context: MemoryToolContext) {
     execute: async () => {
       try {
         const text = await context.memory.read();
+        const bytes = Buffer.byteLength(text, 'utf8');
+        // Reported on every read, so the size is visible before the hard cap is
+        // what makes it visible — the truncation in the prompt is the last
+        // moment and by then the file has been heavy for a while.
+        const sizeWarning = memorySizeWarning(bytes);
+        const suffix = sizeWarning ? `\n\n${sizeWarning}` : '';
         if (text.trim().length === 0) {
           return `memory.md is empty (${context.memory.file}). Use update_memory to record durable facts.`;
         }
-        return `${context.memory.file}\n\n${text}`;
+        return `${context.memory.file} (${String(bytes)} bytes)\n\n${text}${suffix}`;
       } catch (error) {
         return `Could not read memory.md: ${describeError(error)}`;
       }
@@ -94,27 +101,37 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
       } catch (error) {
         return `Could not update memory.md: ${describeError(error)}`;
       }
-      const size = `${byteLength(report.content)} bytes`;
+      const bytes = byteLength(report.content);
+      const size = `${bytes} bytes`;
       /*
        * The correction path is reported in as many words, including when it did
        * nothing. The model cannot see the file, so "Replaced ..." is the only
        * evidence it has that the old bullet is gone — and a silent no-op would
        * let it believe it corrected something it did not.
        */
+      let outcome: string;
       switch (report.supersede.outcome) {
         case 'removed':
-          return `Updated ${context.memory.file} (now ${size}). Replaced "${report.supersede.removed}". The new contents are in your prompt on the next request.`;
+          outcome = `Updated ${context.memory.file} (now ${size}). Replaced "${report.supersede.removed}". The new contents are in your prompt on the next request.`;
+          break;
         case 'absent':
-          return `Updated ${context.memory.file} (now ${size}), but nothing in "${
+          outcome = `Updated ${context.memory.file} (now ${size}), but nothing in "${
             (section ?? 'Notes').trim() || 'Notes'
           }" matched "${replaces}" so no old bullet was removed. The fact you were correcting may still be there under other words; check read_memory and retry if so.`;
+          break;
         case 'ambiguous':
-          return `Updated ${context.memory.file} (now ${size}), but "${replaces}" matched ${String(
+          outcome = `Updated ${context.memory.file} (now ${size}), but "${replaces}" matched ${String(
             report.supersede.matches ?? 0,
           )} bullets, so none was removed. Pass more of the bullet you mean, or use mode "replace" to rewrite the section.`;
+          break;
         default:
-          return `Updated ${context.memory.file} (now ${size}). The new contents are in your prompt on the next request.`;
+          outcome = `Updated ${context.memory.file} (now ${size}). The new contents are in your prompt on the next request.`;
       }
+      // A write is the moment the file got bigger, so the size advice lands
+      // here as well as on a read: a run that never calls read_memory still
+      // gets told before the file is the cap's problem.
+      const warning = memorySizeWarning(bytes);
+      return warning ? `${outcome}\n\n${warning}` : outcome;
     },
   });
 }

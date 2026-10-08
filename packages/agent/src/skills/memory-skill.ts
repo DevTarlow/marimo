@@ -42,5 +42,9 @@ export const memorySkill: Skill = {
     '- When memory has grown noisy, repetitive, or contradictory, call',
     '  prune_memory with a deduplicated rewrite. It replaces the whole file, so',
     '  keep every fact that still matters.',
+    '- read_memory and update_memory say so when the file is past its soft size',
+    '  limit. Take that as a cue to prune soon rather than as an error: the write',
+    '  already happened, and the file keeps working until the much larger hard',
+    '  cap, after which memory stops accepting anything at all.',
   ].join('\n'),
 };

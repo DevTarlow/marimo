@@ -1,13 +1,13 @@
 /**
  * Memory tool tests, driven through the same `runAsync` path ADK uses.
  */
-import {mkdir, mkdtemp, readFile, rm} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import type {BaseTool, Context} from '@google/adk';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {MemoryStore} from '../memory/index.js';
+import {MEMORY_SOFT_LIMIT_BYTES, MemoryStore} from '../memory/index.js';
 import {
   createPruneMemoryTool,
   createReadMemoryTool,
@@ -181,5 +181,76 @@ describe('memory tools', () => {
       content: 'x',
     });
     expect(writeOutput).toContain('Could not update memory.md');
+  });
+
+  /*
+   * A file of an exact byte size, written where the store will read it. The
+   * tools count bytes off the real file, so the fixture has to be a real one
+   * rather than a string handed to a pure function.
+   */
+  async function writeMemoryOfBytes(bytes: number): Promise<void> {
+    await mkdir(join(workDir, '.marimo', 'default'), {recursive: true});
+    await writeFile(
+      memory.file,
+      `${'- '.padEnd(bytes, 'x')}\n`.slice(0, bytes),
+    );
+  }
+
+  describe('the soft size limit', () => {
+    it('says nothing about a small memory on read', async () => {
+      await run(createUpdateMemoryTool({memory}), {content: 'one small fact'});
+      const output = await run(createReadMemoryTool({memory}), {});
+      expect(output).not.toContain('soft limit');
+      expect(output).not.toContain('prune_memory');
+    });
+
+    it('says nothing exactly at the limit, and warns one byte over', async () => {
+      await writeMemoryOfBytes(MEMORY_SOFT_LIMIT_BYTES);
+      const atLimit = await run(createReadMemoryTool({memory}), {});
+      expect(atLimit).toContain(`${MEMORY_SOFT_LIMIT_BYTES} bytes`);
+      expect(atLimit).not.toContain('soft limit');
+
+      await writeMemoryOfBytes(MEMORY_SOFT_LIMIT_BYTES + 1);
+      const overLimit = await run(createReadMemoryTool({memory}), {});
+      expect(overLimit).toContain('soft limit');
+      expect(overLimit).toContain('prune_memory');
+    });
+
+    it('warns on a write once it crosses the line', async () => {
+      const under = await run(createUpdateMemoryTool({memory}), {
+        content: 'x'.repeat(100),
+      });
+      expect(under).not.toContain('soft limit');
+
+      /*
+       * Distinct lines, because a single bullet is capped at MAX_ENTRY_CHARS and
+       * a repeated one is dropped as a duplicate — neither would reach the
+       * limit this test is about.
+       */
+      const over = await run(createUpdateMemoryTool({memory}), {
+        content: Array.from(
+          {length: 5},
+          (_value, index) => `y${String(index)}${'y'.repeat(1_900)}`,
+        ).join('\n'),
+      });
+      expect(over).toContain('soft limit');
+      expect(over).toContain('prune_memory');
+      // The write still happened: the warning is a cue, not a refusal.
+      expect(await memory.read()).toContain('- y0yyy');
+    });
+
+    it('stops warning after a prune brings the file back under', async () => {
+      await writeMemoryOfBytes(MEMORY_SOFT_LIMIT_BYTES * 2);
+      expect(await run(createReadMemoryTool({memory}), {})).toContain(
+        'soft limit',
+      );
+
+      await run(createPruneMemoryTool({memory}), {
+        content: '- one fact\n',
+        reason: 'too big',
+      });
+      const after = await run(createReadMemoryTool({memory}), {});
+      expect(after).not.toContain('soft limit');
+    });
   });
 });

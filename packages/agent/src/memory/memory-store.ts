@@ -32,7 +32,12 @@ export const MAX_PROMPT_CHARS = 64 * 1024;
 /** Longest single bullet, in characters. */
 export const MAX_ENTRY_CHARS = 2_000;
 
-/** Section used when an update names none. */
+/**
+ * Section used when an update names none. Kept equal to the `Notes` entry in
+ * `./sections.js`, which is the vocabulary the model is shown; a test pins the
+ * two together, because a fallback the prompt does not mention is a layer the
+ * model cannot choose on purpose.
+ */
 export const DEFAULT_SECTION = 'Notes';
 
 export class MemoryTooLargeError extends Error {
@@ -60,6 +65,37 @@ export interface MemoryUpdate {
   content: string;
   /** `append` (default) adds bullets; `replace` rewrites the section. */
   mode?: 'append' | 'replace';
+  /**
+   * An existing bullet in that section, or a leading substring of one, to
+   * remove before the new fact is added.
+   *
+   * This is the correction path: "we use tabs now" has to take the old bullet
+   * out, because a memory holding both versions is worse than one holding
+   * neither — the next session reads a contradiction and has no way to tell
+   * which half is current.
+   */
+  replaces?: string;
+}
+
+/**
+ * What happened to a `replaces` target.
+ *
+ * `absent` and `ambiguous` are reported rather than silently ignored: a model
+ * that believes it corrected something it did not leaves the file exactly as
+ * wrong as it was, and says so confidently.
+ */
+export interface SupersedeReport {
+  /** The bullet that was removed, verbatim. */
+  removed?: string;
+  outcome: 'none' | 'removed' | 'absent' | 'ambiguous';
+  /** How many bullets the target matched, when it was not unique. */
+  matches?: number;
+}
+
+/** What `update` wrote, and what it did with the bullet it was told to replace. */
+export interface UpdateReport {
+  content: string;
+  supersede: SupersedeReport;
 }
 
 export interface MemoryPruneRequest {
@@ -167,12 +203,12 @@ export class MemoryStore {
   }
 
   /** Merges facts into the document, creating the section when needed. */
-  async update(update: MemoryUpdate): Promise<string> {
+  async update(update: MemoryUpdate): Promise<UpdateReport> {
     return await this.withLock(async () => {
       const current = await this.readOrEmpty();
-      const next = applyUpdate(current, update);
-      await this.writeNow(next);
-      return next;
+      const report = applyUpdateWithReport(current, update);
+      await this.writeNow(report.content);
+      return report;
     });
   }
 
@@ -288,6 +324,20 @@ function comparable(text: string): string {
  * empty.
  */
 export function applyUpdate(current: string, update: MemoryUpdate): string {
+  return applyUpdateWithReport(current, update).content;
+}
+
+/**
+ * `applyUpdate`, plus what happened to a `replaces` target.
+ *
+ * The caller needs the outcome, not just the new text: a correction that matched
+ * nothing is the case where the model most needs telling, and the report is the
+ * only place that fact survives.
+ */
+export function applyUpdateWithReport(
+  current: string,
+  update: MemoryUpdate,
+): UpdateReport {
   const mode = update.mode ?? 'append';
   const heading = (update.section ?? DEFAULT_SECTION).trim() || DEFAULT_SECTION;
   const bullets = toBullets(update.content);
@@ -300,21 +350,56 @@ export function applyUpdate(current: string, update: MemoryUpdate): string {
   );
 
   if (index === -1) {
+    /*
+     * A `replaces` against a section the file does not have has removed
+     * nothing. `absent` is the honest answer whether the bullet is missing
+     * because the section is, or because the model rephrased it — and a section
+     * that does not exist yet has no other bullets for it to have matched.
+     */
+    const report: SupersedeReport =
+      (update.replaces ?? '').trim().length === 0
+        ? {outcome: 'none'}
+        : {outcome: 'absent', matches: 0};
     if (bullets.length === 0) {
-      return renderMemory(blocks);
+      return {content: renderMemory(blocks), supersede: report};
     }
     blocks.push({heading, lines: bullets});
-    return renderMemory(blocks);
+    return {content: renderMemory(blocks), supersede: report};
   }
 
   const existing = blocks[index] as Block;
+
+  /*
+   * Supersede runs before the mode branch, so it composes with both: the common
+   * case is a corrected fact appended, and a whole-section rewrite can still
+   * name the stale bullet it is replacing.
+   */
+  const removed = removeTarget(existing.lines, update.replaces);
+  if (removed.lines !== undefined) {
+    existing.lines = removed.lines;
+  }
+
   if (mode === 'replace') {
     if (bullets.length === 0) {
       blocks.splice(index, 1);
-      return renderMemory(blocks);
+      existing.lines = [];
+    } else {
+      existing.lines = bullets;
     }
-    existing.lines = bullets;
-    return renderMemory(blocks);
+    /*
+     * A supersede can empty a section just as a replace can. `## Preferences`
+     * with no bullets under it reads as a layer that exists and is blank, and
+     * the next writer appends into a heading nobody chose. Only the section this
+     * call emptied goes: a blank heading the user wrote is left alone.
+     */
+    const nextBlocks =
+      existing.lines.length === 0
+        ? blocks.filter((block) => block !== existing)
+        : blocks;
+    return {
+      content: renderMemory(nextBlocks),
+      supersede: removed.report,
+    };
   }
 
   const seen = new Set(existing.lines.map(comparable));
@@ -327,7 +412,72 @@ export function applyUpdate(current: string, update: MemoryUpdate): string {
     return true;
   });
   existing.lines = [...trimBlankEdges(existing.lines), ...additions];
-  return renderMemory(blocks);
+  // Drop only the section this call emptied: an untouched empty heading is one
+  // the user wrote by hand, and removing it would edit their file behind them.
+  const nextBlocks =
+    existing.lines.length === 0
+      ? blocks.filter((block) => block !== existing)
+      : blocks;
+  return {
+    content: renderMemory(nextBlocks),
+    supersede: removed.report,
+  };
+}
+
+/**
+ * Removes the one line a `replaces` names.
+ *
+ * Matching is on the leading substring, compared case-insensitively with runs of
+ * whitespace collapsed, so a model can quote as much of the bullet as it is sure
+ * of. Exact equality wins outright; otherwise any prefix counts, and the matches
+ * are counted first because a prefix that is too short to be unique must refuse
+ * rather than pick one. Removing a bullet nobody named is the same failure as
+ * leaving both versions in place, only harder to see.
+ */
+function removeTarget(
+  lines: string[],
+  replaces: string | undefined,
+): {lines?: string[]; report: SupersedeReport} {
+  const target = collapse(replaces ?? '');
+  if (target.length === 0) {
+    return {report: {outcome: 'none'}};
+  }
+
+  let exact = -1;
+  const prefixes: number[] = [];
+  for (const [index, line] of lines.entries()) {
+    // Collapsed on both sides: a model that re-typed a bullet from the prompt
+    // may have lost the original spacing, and that is not a different fact.
+    const candidate = collapse(line).replace(/^[-*]\s+/, '');
+    if (candidate.length === 0) {
+      continue;
+    }
+    if (candidate === target) {
+      exact = index;
+    } else if (candidate.startsWith(target)) {
+      prefixes.push(index);
+    }
+  }
+
+  const matched = exact >= 0 ? [exact] : prefixes;
+  if (matched.length === 0) {
+    return {report: {outcome: 'absent', matches: 0}};
+  }
+  if (matched.length > 1) {
+    return {report: {outcome: 'ambiguous', matches: matched.length}};
+  }
+
+  const at = matched[0] as number;
+  const removedLine = lines[at] ?? '';
+  return {
+    lines: lines.filter((_line, index) => index !== at),
+    report: {outcome: 'removed', removed: removedLine.trim()},
+  };
+}
+
+/** Lowercased with every run of whitespace reduced to one space. */
+function collapse(text: string): string {
+  return comparable(text).replaceAll(/\s+/gu, ' ');
 }
 
 function trimBlankEdges(lines: string[]): string[] {

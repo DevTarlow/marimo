@@ -9,6 +9,7 @@ export {
   MemoryStore,
   MemoryTooLargeError,
   applyUpdate,
+  applyUpdateWithReport,
   resolveAgentDataDir,
   resolveMemoryFile,
   splitMemory,
@@ -18,6 +19,8 @@ export type {
   MemoryPruneRequest,
   MemoryStoreOptions,
   MemoryUpdate,
+  SupersedeReport,
+  UpdateReport,
 } from './memory-store.js';
 
 export {

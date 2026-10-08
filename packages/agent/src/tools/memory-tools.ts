@@ -45,9 +45,11 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
   return new FunctionTool({
     name: 'update_memory',
     description:
-      "Add or replace a fact in memory.md, the agent's long-term memory for " +
-      'this workspace. Use it for durable things a future session should know: ' +
-      'user preferences, project conventions, environment quirks, decisions. ' +
+      "Add, correct or replace a fact in memory.md, the agent's long-term " +
+      'memory for this workspace. Use it for durable things a future session ' +
+      'should know: user preferences, project conventions, environment quirks, ' +
+      'decisions. When the user corrects something you already remembered, pass ' +
+      'the old bullet as "replaces" so the wrong version does not stay behind. ' +
       'Never store secrets, credentials, or transient output. Duplicate facts ' +
       'are dropped rather than repeated.',
     parameters: z.object({
@@ -61,7 +63,8 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
         .string()
         .optional()
         .describe(
-          'Section to write into, e.g. "Preferences" or "Project facts". Defaults to "Notes".',
+          'Layer to write into, e.g. "Preferences and tone", "Environment and ' +
+            'conventions", "Project pointers", "Boundaries". Defaults to "Notes".',
         ),
       mode: z
         .enum(['append', 'replace'])
@@ -69,17 +72,48 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
         .describe(
           'append (default) adds facts that are not already present; replace rewrites the whole section.',
         ),
+      replaces: z
+        .string()
+        .optional()
+        .describe(
+          'When correcting a fact, the existing bullet to remove first — either ' +
+            'the whole bullet or a leading substring of it, in the same section. ' +
+            'The old bullet is deleted and the new one added, so both versions ' +
+            'never sit next to each other.',
+        ),
     }),
-    execute: async ({content, section, mode}) => {
+    execute: async ({content, section, mode, replaces}) => {
+      let report: Awaited<ReturnType<MemoryStore['update']>>;
       try {
-        const next = await context.memory.update({
+        report = await context.memory.update({
           content,
           ...(section !== undefined ? {section} : {}),
           ...(mode !== undefined ? {mode} : {}),
+          ...(replaces !== undefined ? {replaces} : {}),
         });
-        return `Updated ${context.memory.file} (now ${byteLength(next)} bytes). The new contents are in your prompt on the next request.`;
       } catch (error) {
         return `Could not update memory.md: ${describeError(error)}`;
+      }
+      const size = `${byteLength(report.content)} bytes`;
+      /*
+       * The correction path is reported in as many words, including when it did
+       * nothing. The model cannot see the file, so "Replaced ..." is the only
+       * evidence it has that the old bullet is gone — and a silent no-op would
+       * let it believe it corrected something it did not.
+       */
+      switch (report.supersede.outcome) {
+        case 'removed':
+          return `Updated ${context.memory.file} (now ${size}). Replaced "${report.supersede.removed}". The new contents are in your prompt on the next request.`;
+        case 'absent':
+          return `Updated ${context.memory.file} (now ${size}), but nothing in "${
+            (section ?? 'Notes').trim() || 'Notes'
+          }" matched "${replaces}" so no old bullet was removed. The fact you were correcting may still be there under other words; check read_memory and retry if so.`;
+        case 'ambiguous':
+          return `Updated ${context.memory.file} (now ${size}), but "${replaces}" matched ${String(
+            report.supersede.matches ?? 0,
+          )} bullets, so none was removed. Pass more of the bullet you mean, or use mode "replace" to rewrite the section.`;
+        default:
+          return `Updated ${context.memory.file} (now ${size}). The new contents are in your prompt on the next request.`;
       }
     },
   });

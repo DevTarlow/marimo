@@ -19,6 +19,7 @@ import {
   MemoryStore,
   MemoryTooLargeError,
   applyUpdate,
+  applyUpdateWithReport,
   resolveAgentDataDir,
   resolveMemoryFile,
   splitMemory,
@@ -123,6 +124,139 @@ describe('applyUpdate', () => {
     const next = applyUpdate('', {content: 'x'.repeat(MAX_ENTRY_CHARS + 50)});
     const bullet = next.split('\n')[1] ?? '';
     expect(bullet.length).toBe(MAX_ENTRY_CHARS + 2);
+  });
+});
+
+describe('superseding a fact', () => {
+  /*
+   * The correction path. A memory holding "always use npm" beside "always use
+   * pnpm" is worse than one holding neither: the next session reads both and
+   * has no way to tell which is current.
+   */
+  it('removes the old bullet and adds the new one', () => {
+    const current = '## Preferences and tone\n- Always use npm.\n- Be terse.\n';
+    const report = applyUpdateWithReport(current, {
+      section: 'Preferences and tone',
+      content: 'Always use pnpm.',
+      replaces: 'Always use npm',
+    });
+
+    expect(report.content).toBe(
+      '## Preferences and tone\n- Be terse.\n- Always use pnpm.\n',
+    );
+    expect(report.supersede).toEqual({
+      outcome: 'removed',
+      removed: '- Always use npm.',
+    });
+  });
+
+  it('matches a leading substring however the model phrases the spacing', () => {
+    const report = applyUpdateWithReport(
+      '## Notes\n- Prefers   pnpm over npm\n',
+      {
+        content: 'Prefers pnpm.',
+        replaces: 'prefers pnpm',
+      },
+    );
+    expect(report.supersede.outcome).toBe('removed');
+    expect(report.content).toBe('## Notes\n- Prefers pnpm.\n');
+  });
+
+  it('prefers an exact match over a shorter bullet that starts the same way', () => {
+    const report = applyUpdateWithReport(
+      '## Notes\n- Uses pnpm.\n- Uses pnpm for scripts.\n',
+      {
+        content: 'Uses bun.',
+        replaces: 'Uses pnpm.',
+      },
+    );
+    expect(report.supersede.removed).toBe('- Uses pnpm.');
+    expect(report.content).toBe(
+      '## Notes\n- Uses pnpm for scripts.\n- Uses bun.\n',
+    );
+  });
+
+  /*
+   * Refusing is the safe half of a correction. A prefix short enough to hit two
+   * bullets is one the model has not actually identified, and deleting a fact
+   * nobody named is the same failure as leaving both versions in place.
+   */
+  it('removes nothing when the target is not unique, and says how many it hit', () => {
+    const current =
+      '## Environment and conventions\n- Runs the app with pnpm\n- Runs the tests with vitest\n';
+    const report = applyUpdateWithReport(current, {
+      section: 'Environment and conventions',
+      content: 'Runs everything with bun.',
+      replaces: 'Runs the',
+    });
+
+    expect(report.supersede).toEqual({outcome: 'ambiguous', matches: 2});
+    expect(report.content).toContain('- Runs the app with pnpm');
+    expect(report.content).toContain('- Runs everything with bun.');
+  });
+
+  /*
+   * The failure the report exists for: a silent no-op would let the model
+   * believe it corrected something it did not.
+   */
+  it('reports a target that matched nothing instead of ignoring it', () => {
+    const current = '## Boundaries\n- Never push.\n';
+    const report = applyUpdateWithReport(current, {
+      section: 'Boundaries',
+      content: 'Never push to main.',
+      replaces: 'Always use tabs',
+    });
+
+    expect(report.supersede).toEqual({outcome: 'absent', matches: 0});
+    expect(report.content).toContain('- Never push.');
+    expect(report.content).toContain('- Never push to main.');
+  });
+
+  it('reports a target in a section the document does not have', () => {
+    const report = applyUpdateWithReport('## Notes\n- something\n', {
+      section: 'Project pointers',
+      content: 'See docs/state.md.',
+      replaces: 'See README.md.',
+    });
+    expect(report.supersede.outcome).toBe('absent');
+    expect(report.content).toBe(
+      '## Notes\n- something\n\n## Project pointers\n- See docs/state.md.\n',
+    );
+  });
+
+  it('says nothing was asked to be replaced when replaces is blank', () => {
+    const report = applyUpdateWithReport('', {
+      content: 'a fact',
+      replaces: '  ',
+    });
+    expect(report.supersede).toEqual({outcome: 'none'});
+    expect(report.content).toBe('## Notes\n- a fact\n');
+  });
+
+  it('can supersede the last bullet of a section without leaving a gap', () => {
+    const report = applyUpdateWithReport(
+      '## Notes\n- old\n\n## Other\n- keep\n',
+      {
+        content: '',
+        replaces: 'old',
+      },
+    );
+    expect(report.supersede.outcome).toBe('removed');
+    expect(report.content).toBe('## Other\n- keep\n');
+  });
+
+  /*
+   * Only the section this call emptied goes. A blank heading the user wrote is
+   * still their file, and a replace aimed at a neighbour is not a reason to
+   * tidy it away behind them.
+   */
+  it('leaves a blank heading it did not empty alone', () => {
+    const report = applyUpdateWithReport('## To fill in\n\n## Facts\n- old\n', {
+      section: 'Facts',
+      content: 'new',
+      mode: 'replace',
+    });
+    expect(report.content).toBe('## To fill in\n\n## Facts\n- new\n');
   });
 });
 
@@ -242,5 +376,23 @@ describe('MemoryStore', () => {
     const text = await store.read();
     expect(text).toContain('- a');
     expect(text).toContain('- b');
+  });
+
+  it('lands a correction on disk with only the new version left', async () => {
+    const store = new MemoryStore({workspaceRoot: workDir});
+    await store.update({
+      section: 'Preferences and tone',
+      content: 'Always use npm',
+    });
+    const report = await store.update({
+      section: 'Preferences and tone',
+      content: 'Always use pnpm',
+      replaces: 'Always use npm',
+    });
+
+    expect(report.supersede.outcome).toBe('removed');
+    const text = await store.read();
+    expect(text).toContain('- Always use pnpm');
+    expect(text).not.toContain('- Always use npm');
   });
 });

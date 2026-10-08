@@ -76,6 +76,82 @@ describe('memory tools', () => {
     expect(await memory.read()).toBe('## Facts\n- new\n');
   });
 
+  /*
+   * The correction path, through the tool the model actually calls. The result
+   * has to say the old bullet went, because the model cannot see the file and
+   * otherwise has no evidence its correction landed.
+   */
+  it('supersedes the bullet a correction names', async () => {
+    await run(createUpdateMemoryTool({memory}), {
+      section: 'Preferences and tone',
+      content: 'Always use npm',
+    });
+    const output = await run(createUpdateMemoryTool({memory}), {
+      section: 'Preferences and tone',
+      content: 'Always use pnpm',
+      replaces: 'Always use npm',
+    });
+
+    expect(output).toContain('Replaced');
+    const text = await memory.read();
+    expect(text).toContain('- Always use pnpm');
+    expect(text).not.toContain('- Always use npm');
+  });
+
+  /*
+   * A silent no-op is the failure worth designing against: the model would
+   * report having fixed the memory while both versions sat there.
+   */
+  it('says when a correction matched nothing', async () => {
+    await run(createUpdateMemoryTool({memory}), {
+      section: 'Preferences and tone',
+      content: 'Always use npm',
+    });
+    const output = await run(createUpdateMemoryTool({memory}), {
+      section: 'Preferences and tone',
+      content: 'Always use pnpm',
+      replaces: 'Prefers tabs',
+    });
+
+    expect(output).toContain('no old bullet was removed');
+    expect(output).toContain('read_memory');
+    // And the old bullet is still there, which is what the message warns about.
+    expect(await memory.read()).toContain('- Always use npm');
+  });
+
+  it('refuses an ambiguous correction and explains why', async () => {
+    await run(createUpdateMemoryTool({memory}), {
+      section: 'Environment and conventions',
+      content: 'Runs the app with pnpm\nRuns the tests with vitest',
+    });
+    const output = await run(createUpdateMemoryTool({memory}), {
+      section: 'Environment and conventions',
+      content: 'Runs everything with bun',
+      replaces: 'Runs the',
+    });
+
+    expect(output).toContain('2 bullets');
+    expect(output).toContain('none was removed');
+    expect(await memory.read()).toContain('- Runs the app with pnpm');
+  });
+
+  it('keeps a correction inside its own section', async () => {
+    await run(createUpdateMemoryTool({memory}), {
+      section: 'Boundaries',
+      content: 'Never push',
+    });
+    await run(createUpdateMemoryTool({memory}), {
+      section: 'Notes',
+      content: 'Never push',
+      replaces: 'Never push',
+    });
+    // The same words in another layer are another fact, so nothing was removed
+    // from Notes for the copy in Boundaries to disappear.
+    expect(await memory.read()).toBe(
+      '## Boundaries\n- Never push\n\n## Notes\n- Never push\n',
+    );
+  });
+
   it('prunes the document and keeps a backup', async () => {
     await run(createUpdateMemoryTool({memory}), {content: 'first'});
     const output = await run(createPruneMemoryTool({memory}), {

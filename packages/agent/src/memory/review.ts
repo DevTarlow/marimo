@@ -29,6 +29,8 @@
  */
 import {z} from 'zod';
 
+import {CANONICAL_SECTIONS, renderSectionGuide} from './sections.js';
+
 /** One thing the agent would remember, if the user agrees. */
 export interface MemoryProposal {
   /** Where it would go in `memory.md`. */
@@ -46,6 +48,29 @@ export const MAX_PROPOSALS = 5;
 export const MAX_REVIEW_CHARS = 24_000;
 
 /**
+ * The longest section name a proposal may carry.
+ *
+ * A named section the file already has is always allowed, so this is a bound
+ * rather than a whitelist — but it is derived from the canonical vocabulary
+ * instead of being a literal, because a name too long to propose is a layer the
+ * reviewer silently cannot use.
+ */
+export const MAX_SECTION_CHARS = Math.max(
+  48,
+  ...CANONICAL_SECTIONS.map((section) => section.name.length),
+);
+
+/**
+ * The layer the JSON example uses.
+ *
+ * A model copies the shape of the example, so this has to be a real layer and
+ * not the fallback — an example written into `Notes` silently undoes the
+ * layering the prompt just asked for. Exported so the test can assert the two
+ * agree rather than restating the name.
+ */
+export const PROPOSAL_EXAMPLE_SECTION = 'Preferences and tone';
+
+/**
  * The shapes a proposal may take.
  *
  * `text` is bounded because it becomes a line in a file that is injected into
@@ -55,7 +80,7 @@ export const MAX_REVIEW_CHARS = 24_000;
  * conversation they came from.
  */
 const proposalSchema = z.object({
-  section: z.string().trim().min(1).max(48),
+  section: z.string().trim().min(1).max(MAX_SECTION_CHARS),
   text: z.string().trim().min(3).max(400),
   reason: z.string().trim().max(200),
 });
@@ -70,11 +95,17 @@ const answerSchema = z.object({
  * Written as a list of exclusions as much as inclusions. "Anything worth
  * remembering" produces a queue nobody reads; naming what does *not* count is
  * what keeps it to the things a person would actually want written down.
+ *
+ * The sections are named rather than left to the model, because memory is
+ * layered: a fact proposed into `Notes` is one the agent will read in the same
+ * pile as everything else, and the layer it belongs in is exactly what decides
+ * whether it is still relevant. The example therefore uses a real section
+ * instead of the fallback — a model copies the shape of the example.
  */
 export function reviewPrompt(conversation: string): string {
   return [
     'You are reviewing a conversation between a user and their desktop agent,',
-    'to find facts worth keeping in the agent\'s long-term memory.',
+    "to find facts worth keeping in the agent's long-term memory.",
     '',
     'Long-term memory is shown to the agent at the start of every future',
     'conversation. Propose something only if it would still be true and still',
@@ -93,8 +124,16 @@ export function reviewPrompt(conversation: string): string {
     '- anything you inferred rather than were told',
     '- secrets, keys, passwords or tokens — never these, under any framing',
     '',
+    'Put each proposal in the layer it belongs in:',
+    renderSectionGuide(),
+    '',
+    'Those are the common layers, not the only ones: a section the memory below',
+    'already has is fine to use, and "Notes" is the fallback when nothing fits.',
+    '',
     'Answer with JSON only, no prose around it:',
-    '{"proposals":[{"section":"Notes","text":"...","reason":"..."}]}',
+    '{"proposals":[{"section":"' +
+      PROPOSAL_EXAMPLE_SECTION +
+      '","text":"...","reason":"..."}]}',
     '',
     'At most 5. An empty list is the right answer for most conversations.',
     '',

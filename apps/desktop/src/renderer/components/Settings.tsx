@@ -173,7 +173,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
         <section className="settings-section">
           <h3>Your agents</h3>
           <p className="settings-muted">
-            Each agent has its own instructions, its own abilities and its own
+            Each agent has its own identity, its own abilities and its own
             conversations. Making a second one is how you keep two jobs from
             sharing one memory.
           </p>
@@ -244,7 +244,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               />
             </label>
             <label className="settings-field">
-              <span>Instructions</span>
+              <span>Identity</span>
               <em className="settings-why">
                 Who this agent is and how it should behave. Written as an
                 instruction to it, and sent at the start of every conversation.

@@ -39,6 +39,11 @@ pnpm install
 pnpm build
 pnpm test
 
+# Linux only, once per Electron version: let Electron's sandbox start. It asks
+# for sudo. Distribution versions that do not restrict user namespaces exit
+# immediately, so it is safe to paste blindly.
+./scripts/fix-linux-sandbox.sh
+
 # Open the app
 pnpm --filter @marimo/desktop dev
 
@@ -52,13 +57,18 @@ Two environment quirks are worth knowing about up front, both covered in
 - If Electron's binary download fails with `ENOENT ... ~/.cache/electron`, wrap
   the command: `./scripts/with-local-caches.sh pnpm install`. The project keeps
   every tool cache inside the repository.
-- On Ubuntu 24.04 and later, Electron refuses to start with `The SUID sandbox
-  helper binary was found, but is not configured correctly`. Those releases stop
-  an ordinary process from creating the user namespace Chromium's sandbox is
-  built on, so Chromium falls back to a setuid helper that Electron ships as a
-  plain user-owned file. Run `./scripts/fix-linux-sandbox.sh` once. In a
-  container, where AppArmor cannot be configured at all, the smoke check takes
-  `MARIMO_NO_SANDBOX=1` instead.
+- The sandbox line is the only step in the quick start that fixes the machine
+  rather than the checkout, which makes it the one place a failure has nothing to
+  do with the code. Without it Electron dies — *after* Vite has printed its URL,
+  so it reads as a renderer that failed to paint rather than a host policy that
+  refused a syscall:
+  `The SUID sandbox helper binary was found, but is not configured correctly`.
+  In a container, where AppArmor cannot be configured at all, the smoke check
+  takes `MARIMO_NO_SANDBOX=1` instead.
+
+If you change the Electron version, run the sandbox script again: the AppArmor
+profile is attached to the versioned path inside `.pnpm`, so a stale one stops
+matching and the abort returns.
 
 ## Why it is built this way
 

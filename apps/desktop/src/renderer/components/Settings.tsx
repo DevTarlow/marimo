@@ -35,6 +35,18 @@ import {
 
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
+import {ModelPicker} from './ModelPicker.js';
+
+/**
+ * Above this many models the field becomes a searchable picker.
+ *
+ * The native `<select>` is the better control for the handful a provider like
+ * DeepSeek serves, so it stays. OpenRouter answers its `/models` with several
+ * hundred, and a list that long is one you scroll rather than choose from — the
+ * threshold is data, not a provider id, so any endpoint that turns out to be
+ * this generous gets the same treatment.
+ */
+const SEARCHABLE_MODEL_THRESHOLD = 12;
 
 /**
  * The three lengths, in the words the user is choosing between.
@@ -642,6 +654,10 @@ function ProviderSection({
   const canFetch =
     !fetching && !saving && (!descriptor.requiresApiKey || keyStored);
 
+  const chooseModel = (model: string): void => {
+    save({providers: {configs: {[active]: {model}}}});
+  };
+
   return (
     <section className="settings-section">
       <h3>Provider</h3>
@@ -767,22 +783,30 @@ function ProviderSection({
           want a bigger one.
         </em>
         <div className="settings-row">
-          <select
-            className="settings-input"
-            aria-label="Model"
-            value={config.model}
-            disabled={saving || fetching}
-            onChange={(event) => {
-              const model = event.target.value;
-              save({providers: {configs: {[active]: {model}}}});
-            }}
-          >
-            {models.map((model) => (
-              <option key={model} value={model}>
-                {model}
-              </option>
-            ))}
-          </select>
+          {models.length > SEARCHABLE_MODEL_THRESHOLD ? (
+            <ModelPicker
+              models={models}
+              value={config.model}
+              disabled={saving || fetching}
+              onChange={chooseModel}
+            />
+          ) : (
+            <select
+              className="settings-input"
+              aria-label="Model"
+              value={config.model}
+              disabled={saving || fetching}
+              onChange={(event) => {
+                chooseModel(event.target.value);
+              }}
+            >
+              {models.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="button"
             className="button button-quiet"

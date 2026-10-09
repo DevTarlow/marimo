@@ -732,6 +732,96 @@
   user-select: text;
 }
 
+/*
+ * The searchable model picker.
+ *
+ * Absolutely positioned over the cards below rather than pushing them down: the
+ * list is a temporary overlay, and a three-hundred-row list that reflowed the
+ * dialog every time it opened would move the Fetch button out from under the
+ * pointer that just pressed it.
+ */
+.model-picker {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.model-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+
+.model-picker-trigger:disabled {
+  cursor: not-allowed;
+}
+
+.model-picker-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-chevron {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.model-picker-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  padding: var(--space-2);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.model-picker-search {
+  width: 100%;
+}
+
+.model-picker-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  /* Tall enough to read a handful at once, short enough to stay on screen. */
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.model-picker-option {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.model-picker-option.is-highlighted {
+  background: var(--surface-hover);
+}
+
+/* The model that is actually saved, marked apart from the one the keyboard is
+   merely on. */
+.model-picker-option.is-selected {
+  color: var(--accent);
+}
+
+.model-picker-empty {
+  padding: var(--space-2);
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
 .settings-row {
   display: flex;
   gap: var(--space-2);

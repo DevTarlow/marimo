@@ -648,6 +648,14 @@ export class AgentService {
     return await this.runtime.setSessionModel(profileId, sessionId, model);
   }
 
+  /** The folder a conversation works in, for judging an attached file. */
+  async conversationFolder(
+    profileId: string,
+    sessionId: string,
+  ): Promise<string | undefined> {
+    return await this.runtime.conversationFolder(profileId, sessionId);
+  }
+
   async deleteSession(profileId: string, sessionId: string): Promise<void> {
     await this.runtime.deleteSession(profileId, sessionId);
   }

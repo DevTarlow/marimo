@@ -261,15 +261,15 @@ async function main() {
     );
     const menu = await until('the conversation menu to open', async () =>
       await evaluate(`(() => {
-        const menu = document.querySelector('.rail-menu');
+        const menu = document.querySelector('.popover');
         if (menu === null) return undefined;
-        const id = menu.querySelector('.rail-menu-id code');
+        const id = menu.querySelector('.popover-id code');
         return JSON.stringify({
           id: id === null ? null : id.textContent,
           copy: [...menu.querySelectorAll('button')].some((button) =>
             /copy/i.test(button.textContent ?? ''),
           ),
-          actions: [...menu.querySelectorAll('.rail-menu-item')].map(
+          actions: [...menu.querySelectorAll('.popover-item')].map(
             (item) => item.textContent ?? '',
           ),
         });
@@ -292,7 +292,7 @@ async function main() {
     await evaluate(
       `document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
     );
-    if ((await evaluate(`document.querySelector('.rail-menu') === null`)) !== true) {
+    if ((await evaluate(`document.querySelector('.popover') === null`)) !== true) {
       fail('Escape did not close the conversation menu');
     } else {
       ok('Escape closes the conversation menu');
@@ -723,6 +723,62 @@ async function main() {
       fail(`the send button is not the arrow it should be: ${shape}`);
     } else {
       ok('the composer types and sends on one line, with a round arrow');
+    }
+
+    /*
+     * The `+` menu: the things a message can carry that are not typed. Drawn by
+     * the popover primitive the rail menus share, which is why a break here shows
+     * up as a menu that never opens — and it has to open *upwards*, because the
+     * control it belongs to sits at the bottom of the window.
+     */
+    await evaluate(`document.querySelector('.composer-add')?.click()`);
+    const addMenu = await until('the + menu to open', async () => {
+      const state = await evaluate(`(() => {
+        const menu = document.querySelector('.popover');
+        const plus = document.querySelector('.composer-add');
+        if (menu === null || plus === null) return undefined;
+        const box = menu.getBoundingClientRect();
+        const anchor = plus.getBoundingClientRect();
+        return JSON.stringify({
+          items: [...menu.querySelectorAll('.popover-item')].map((item) =>
+            item.textContent.trim(),
+          ),
+          above: box.bottom <= anchor.top + 1,
+          /*
+           * The rule the popover exists to keep: the menu is on screen. On this
+           * screen there is room below the `+` — a fresh install shows the
+           * welcome card instead of a transcript, so the composer is not yet at
+           * the bottom of the window — and in a conversation there is none, so
+           * what is asserted is that it flipped exactly when it had to.
+           */
+          withinViewport: box.top >= 0 && box.bottom <= window.innerHeight,
+          needsFlip:
+            anchor.bottom + 4 + box.height + 8 > window.innerHeight,
+          where: {
+            menuBottom: Math.round(box.bottom),
+            plusBottom: Math.round(anchor.bottom),
+            viewport: window.innerHeight,
+          },
+        });
+      })()`);
+      return state === undefined ? undefined : JSON.parse(state);
+    });
+    if (!addMenu.items.includes('Add files…')) {
+      fail(`the + menu has no way to add a file: ${JSON.stringify(addMenu.items)}`);
+    } else if (addMenu.withinViewport !== true) {
+      fail(
+        `the + menu is off the bottom of the window: ${JSON.stringify(addMenu.where)}`,
+      );
+    } else if (addMenu.needsFlip === true && addMenu.above !== true) {
+      fail('the + menu did not flip above a trigger with no room below it');
+    } else {
+      ok(`the + menu opens on screen with: ${addMenu.items.join(', ')}`);
+    }
+    await evaluate(
+      `document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
+    );
+    if ((await evaluate(`document.querySelector('.popover') === null`)) !== true) {
+      fail('Escape did not close the + menu');
     }
 
     /*

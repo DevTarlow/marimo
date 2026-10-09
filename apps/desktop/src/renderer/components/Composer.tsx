@@ -19,6 +19,12 @@
  * for the conversation only, and the popover offers the way back to the app
  * default, so using it once does not pin the chat for good.
  *
+ * `+` is on the left of the same row, for the things a message can carry that
+ * are not typed: a file to hand over, and the commands that act on the
+ * conversation itself. Its menu opens upwards, which is what the popover
+ * primitive already does when there is no room below — and there never is, at the
+ * bottom of the window.
+ *
  * While a turn is running the button becomes Stop rather than the box becoming
  * disabled. A disabled box is the wrong shape: people compose their next thought
  * while waiting, and taking the words away — or losing them on send — is how a
@@ -26,7 +32,13 @@
  */
 import {useEffect, useRef, useState} from 'react';
 
+import type {PickedFile, SkippedFile} from '@marimo/protocol';
+
+import {composeMessage, describeSkipped} from '../attachments.js';
+import {describe} from '../describe.js';
 import {ModelPicker} from './ModelPicker.js';
+import {Popover, PopoverItem} from './Popover.js';
+import type {PopoverAnchor} from './Popover.js';
 
 export function Composer({
   onSend,
@@ -37,6 +49,7 @@ export function Composer({
   model,
   usingDefault,
   onSelectModel,
+  onPickFiles,
 }: {
   /**
    * Resolves `true` when the turn was accepted.
@@ -58,9 +71,23 @@ export function Composer({
   usingDefault: boolean;
   /** `null` gives up the choice, so the conversation follows the default again. */
   onSelectModel: (model: string | null) => Promise<void>;
+  /**
+   * Asks for files, judged against the folder this conversation works in.
+   *
+   * Rejects with a sentence when there is no folder to attach from; answers with
+   * what was accepted and what was refused otherwise. A refusal is not an error —
+   * a file outside the folder is a file the agent cannot read, and saying so is
+   * the answer.
+   */
+  onPickFiles: () => Promise<{files: PickedFile[]; skipped: SkippedFile[]}>;
 }): React.JSX.Element {
   const [text, setText] = useState('');
+  const [attached, setAttached] = useState<PickedFile[]>([]);
+  /** The last thing that happened, drawn in the hint slot. */
+  const [note, setNote] = useState<{text: string; failed: boolean} | null>(null);
+  const [menu, setMenu] = useState<PopoverAnchor | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  const add = useRef<HTMLButtonElement>(null);
 
   /* Grow with the content, then stop. */
   useEffect(() => {
@@ -72,20 +99,72 @@ export function Composer({
     element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
   }, [text]);
 
-  const ready = text.trim().length > 0 && !busy && !disabled;
+  const ready =
+    (text.trim().length > 0 || attached.length > 0) && !busy && !disabled;
 
   const submit = async (): Promise<void> => {
     if (!ready) {
       return;
     }
-    if (await onSend(text.trim())) {
+    /*
+     * Cleared only once the turn was accepted, and cleared as a pair: the words
+     * and the files are one message, so a refusal must not leave the box empty
+     * with two chips the user now has to remove by hand.
+     */
+    if (await onSend(composeMessage(text, attached))) {
       setText('');
+      setAttached([]);
+      setNote(null);
     }
   };
+
+  const pick = async (): Promise<void> => {
+    try {
+      const {files, skipped} = await onPickFiles();
+      if (files.length > 0) {
+        setAttached((current) => [...current, ...files]);
+      }
+      const refused = describeSkipped(skipped);
+      setNote(
+        refused === null ? null : {text: `Not attached — ${refused}`, failed: true},
+      );
+    } catch (failure) {
+      setNote({text: describe(failure), failed: true});
+    }
+  };
+
+  const hint =
+    busy
+      ? 'Working…'
+      : note !== null
+        ? note.text
+        : 'Enter to send, Shift+Enter for a new line';
 
   return (
     <div className="composer">
       <div className="composer-box">
+        {attached.length > 0 && (
+          <div className="composer-chips">
+            {attached.map((file) => (
+              <span className="composer-chip" key={file.path} title={file.path}>
+                <span className="composer-chip-name">{file.name}</span>
+                <button
+                  type="button"
+                  className="composer-chip-remove"
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() => {
+                    setAttached((current) =>
+                      current.filter((entry) => entry.path !== file.path),
+                    );
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         <div className="composer-line">
           <textarea
             ref={box}
@@ -136,9 +215,38 @@ export function Composer({
         </div>
 
         <div className="composer-foot">
-          <span className="composer-hint">
-            {busy ? 'Working…' : 'Enter to send, Shift+Enter for a new line'}
+          <button
+            ref={add}
+            type="button"
+            className="composer-add"
+            aria-label="Add files or run a command"
+            title="Add files or run a command"
+            aria-haspopup="menu"
+            aria-expanded={menu !== null}
+            disabled={disabled}
+            onClick={() => {
+              const rect = add.current?.getBoundingClientRect();
+              setMenu(
+                menu !== null || rect === undefined
+                  ? null
+                  : {top: rect.top, bottom: rect.bottom, left: rect.left},
+              );
+            }}
+          >
+            <span aria-hidden="true">+</span>
+          </button>
+
+          <span
+            className={
+              note === null || !note.failed
+                ? 'composer-hint'
+                : 'composer-hint is-failure'
+            }
+            role={note?.failed === true ? 'alert' : undefined}
+          >
+            {hint}
           </span>
+
           <div className="composer-model">
             <ModelPicker
               models={models}
@@ -161,6 +269,25 @@ export function Composer({
           </div>
         </div>
       </div>
+
+      {menu !== null && (
+        <Popover
+          anchor={menu}
+          label="Add to the message"
+          onClose={() => {
+            setMenu(null);
+          }}
+        >
+          <PopoverItem
+            onSelect={() => {
+              setMenu(null);
+              void pick();
+            }}
+          >
+            Add files…
+          </PopoverItem>
+        </Popover>
+      )}
     </div>
   );
 }

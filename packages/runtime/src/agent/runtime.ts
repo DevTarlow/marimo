@@ -558,6 +558,28 @@ export class AgentRuntime {
   }
 
   /**
+   * The folder a conversation works in — where its file tools are confined.
+   *
+   * The same two facts a turn resolves through: the folder the conversation was
+   * filed under, falling back to the current one. Attaching a file is judged
+   * against *this*, because the point of attaching it is that the agent can read
+   * it, and a file outside the root the turn runs in is one that `read_file`
+   * would refuse — after the user had already watched it appear in the message.
+   *
+   * Worth the method rather than a second derivation in the window: the two
+   * answers have to be the same one, and they differ the moment browsing the
+   * rail selects another folder.
+   */
+  async conversationFolder(
+    profileId: string,
+    sessionId: string,
+  ): Promise<string | undefined> {
+    const host = await this.ensureHost(profileId);
+    const filed = await host.sessionWorkspaceId(sessionId);
+    return workspaceRootFor(await this.workspaceStore.load(), filed);
+  }
+
+  /**
    * Re-files a conversation, or unfiles it with `null`.
    *
    * The placeholder-config host, for the same reason `transcript` uses one:

@@ -41,6 +41,7 @@ import type {
 } from '@marimo/protocol';
 import type {AppPaths} from '@marimo/runtime';
 
+import {attachableFiles} from './attach.js';
 import type {AgentService} from './agent.js';
 import {providerSecretStore, safeStorageCipher} from './secrets.js';
 import type {Companion} from './companion.js';
@@ -205,7 +206,47 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     }
   }
 
+  /**
+   * Asks for files, in the folder this conversation works in.
+   *
+   * The dialog opens there, and the chosen paths are then judged by
+   * `attachableFiles` — a native picker cannot be confined to a folder, so the
+   * offer is the dialog and the decision is the function beside this one. An
+   * empty list means the user closed the dialog, which is an answer rather than
+   * a failure.
+   */
+  async function pickFiles(root: string): Promise<string[]> {
+    const options: OpenDialogOptions = {
+      title: 'Attach files',
+      buttonLabel: 'Attach',
+      properties: ['openFile', 'multiSelections'],
+      defaultPath: root,
+    };
+    const parent = BrowserWindow.getFocusedWindow();
+    const result =
+      parent === null
+        ? await dialog.showOpenDialog(options)
+        : await dialog.showOpenDialog(parent, options);
+    return result.canceled ? [] : result.filePaths;
+  }
+
   const handlers: Handlers = {
+    'files.pick': async (params) => {
+      const service = agent();
+      const folder = await service.conversationFolder(
+        params.profileId,
+        params.sessionId,
+      );
+      if (folder === undefined) {
+        throw new Error(
+          'This conversation has no folder yet. Load one, then attach files ' +
+            'from it.',
+        );
+      }
+      const picked = await pickFiles(folder);
+      return {...(await attachableFiles(folder, picked)), folder};
+    },
+
     'app.info': (): AppInfo => ({
       name: app.getName(),
       version: app.getVersion(),

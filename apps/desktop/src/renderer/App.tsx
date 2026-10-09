@@ -310,6 +310,26 @@ export function App(): React.JSX.Element {
               await agent.setSessionModel(agent.sessionId, model);
             }
           }}
+          /*
+           * Asked for by conversation, not by folder: the main process judges
+           * every picked file against the folder *this* conversation works in —
+           * the same one its turn's file tools are confined to — so a file the
+           * window would happily attach is one the agent can actually read.
+           */
+          onPickFiles={async () => {
+            const profile = agent.profile;
+            const sessionId = agent.sessionId;
+            if (profile === undefined || sessionId === null) {
+              throw new Error(
+                'There is no conversation open to attach a file to.',
+              );
+            }
+            const {files, skipped} = await window.marimo.call('files.pick', {
+              profileId: profile.id,
+              sessionId,
+            });
+            return {files, skipped};
+          }}
           onSend={async (text) => await agent.send(text)}
           onStop={() => {
             void agent.stop();

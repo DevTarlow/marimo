@@ -40,6 +40,7 @@ import type {
 } from '@marimo/protocol';
 
 import {folderForSession} from '../workspace-groups.js';
+import {describe} from '../describe.js';
 
 /*
  * A tool call in flight and a tool call read back from disk are the same shape,
@@ -155,12 +156,6 @@ export interface AgentController {
   setSessionModel: (sessionId: string, model: string | null) => Promise<void>;
   /** Deletes a conversation, and lands somewhere sensible if it was open. */
   removeSession: (sessionId: string) => Promise<void>;
-}
-
-/** Electron wraps a rejected `invoke` in its own prefix, which is noise here. */
-function describe(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return raw.replace(/^Error invoking remote method '[^']*':\s*/u, '');
 }
 
 export function useAgent(): AgentController {

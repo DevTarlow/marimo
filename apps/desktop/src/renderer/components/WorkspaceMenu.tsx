@@ -10,8 +10,8 @@ import {useState} from 'react';
 
 import type {Workspace} from '@marimo/protocol';
 
-import {RailMenuItem, RailPopover} from './RailPopover.js';
-import type {PopoverAnchor} from './RailPopover.js';
+import {PopoverItem, Popover} from './Popover.js';
+import type {PopoverAnchor} from './Popover.js';
 
 export function WorkspaceMenu({
   workspace,
@@ -31,21 +31,21 @@ export function WorkspaceMenu({
   const [confirming, setConfirming] = useState(false);
 
   return (
-    <RailPopover
+    <Popover
       anchor={anchor}
       label={`Actions for ${workspace.name}`}
       onClose={onClose}
     >
-      <span className="rail-menu-path" title={workspace.path}>
+      <span className="popover-path" title={workspace.path}>
         {workspace.path}
       </span>
       {confirming ? (
-        <div className="rail-menu-confirm">
+        <div className="popover-confirm">
           <p>
             Remove &ldquo;{workspace.name}&rdquo; from the list? The folder and
             everything in it are left untouched; its chats move to Other chats.
           </p>
-          <div className="rail-menu-row">
+          <div className="popover-row">
             <button
               type="button"
               className="button button-quiet button-small"
@@ -66,19 +66,19 @@ export function WorkspaceMenu({
         </div>
       ) : (
         <>
-          <RailMenuItem onSelect={onRename}>Rename…</RailMenuItem>
-          <RailMenuItem onSelect={onOpen}>Open folder</RailMenuItem>
-          <div className="rail-menu-sep" />
-          <RailMenuItem
+          <PopoverItem onSelect={onRename}>Rename…</PopoverItem>
+          <PopoverItem onSelect={onOpen}>Open folder</PopoverItem>
+          <div className="popover-sep" />
+          <PopoverItem
             onSelect={() => {
               setConfirming(true);
             }}
             danger
           >
             Remove from list…
-          </RailMenuItem>
+          </PopoverItem>
         </>
       )}
-    </RailPopover>
+    </Popover>
   );
 }

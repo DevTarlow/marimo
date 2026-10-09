@@ -34,6 +34,7 @@ import {
   PROVIDERS,
 } from '@marimo/protocol';
 
+import {describe} from '../describe.js';
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
 import {ModelPicker} from './ModelPicker.js';
@@ -963,8 +964,3 @@ function ToolRow({
   );
 }
 
-/** Electron wraps a rejected `invoke` in its own prefix, which is noise here. */
-function describe(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return raw.replace(/^Error invoking remote method '[^']*':\s*/u, '');
-}

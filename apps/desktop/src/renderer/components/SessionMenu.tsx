@@ -14,8 +14,8 @@ import {useState} from 'react';
 
 import type {SessionSummary, Workspace} from '@marimo/protocol';
 
-import {RailMenuItem, RailPopover} from './RailPopover.js';
-import type {PopoverAnchor} from './RailPopover.js';
+import {PopoverItem, Popover} from './Popover.js';
+import type {PopoverAnchor} from './Popover.js';
 
 export function SessionMenu({
   session,
@@ -38,13 +38,13 @@ export function SessionMenu({
   const [confirming, setConfirming] = useState(false);
 
   return (
-    <RailPopover
+    <Popover
       anchor={anchor}
       label={`Actions for ${session.title}`}
       onClose={onClose}
     >
-      <div className="rail-menu-id">
-        <span className="rail-menu-label">Session ID</span>
+      <div className="popover-id">
+        <span className="popover-label">Session ID</span>
         <code>{session.id}</code>
         <button
           type="button"
@@ -69,12 +69,12 @@ export function SessionMenu({
       </div>
 
       {confirming ? (
-        <div className="rail-menu-confirm">
+        <div className="popover-confirm">
           <p>
             Delete &ldquo;{session.title}&rdquo;? The conversation and its file
             are removed for good.
           </p>
-          <div className="rail-menu-row">
+          <div className="popover-row">
             <button
               type="button"
               className="button button-quiet button-small"
@@ -95,19 +95,19 @@ export function SessionMenu({
         </div>
       ) : (
         <>
-          <RailMenuItem onSelect={onRename}>Rename…</RailMenuItem>
-          <RailMenuItem
+          <PopoverItem onSelect={onRename}>Rename…</PopoverItem>
+          <PopoverItem
             onSelect={() => {
               setConfirming(true);
             }}
             danger
           >
             Delete chat…
-          </RailMenuItem>
-          <div className="rail-menu-sep" />
-          <span className="rail-menu-label">Move to</span>
+          </PopoverItem>
+          <div className="popover-sep" />
+          <span className="popover-label">Move to</span>
           {workspaces.map((workspace) => (
-            <RailMenuItem
+            <PopoverItem
               key={workspace.id}
               disabled={workspace.id === session.workspaceId}
               onSelect={() => {
@@ -115,23 +115,23 @@ export function SessionMenu({
               }}
             >
               {workspace.name}
-            </RailMenuItem>
+            </PopoverItem>
           ))}
           {/*
             Always offered, and disabled for a conversation that is already
             unfiled — which is how the user finds out where it currently is
             rather than wondering why the entry does nothing.
           */}
-          <RailMenuItem
+          <PopoverItem
             disabled={session.workspaceId === undefined}
             onSelect={() => {
               onMove(null);
             }}
           >
             Other chats
-          </RailMenuItem>
+          </PopoverItem>
         </>
       )}
-    </RailPopover>
+    </Popover>
   );
 }

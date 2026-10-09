@@ -20,7 +20,7 @@ import {groupSessions} from '../workspace-groups.js';
 import {KeepRunning} from './KeepRunning.js';
 import {SessionMenu} from './SessionMenu.js';
 import {WorkspaceMenu} from './WorkspaceMenu.js';
-import type {PopoverAnchor} from './RailPopover.js';
+import type {PopoverAnchor} from './Popover.js';
 
 /** Which row's menu is open, and where its trigger was when it opened. */
 type OpenMenu =

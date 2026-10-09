@@ -1,18 +1,21 @@
 /**
- * The little menu a rail row opens.
+ * The little menu a control opens.
  *
- * One primitive for both the conversation menu and the folder menu, because the
- * hard parts are not the items: the rail is a scroll container, so a menu
- * positioned inside a row would be clipped at the container's edge, and one
- * opened near the bottom would be cut off entirely. `position: fixed` escapes
- * that, at the price of having to decide the place from the trigger's measured
- * rectangle — which is what this does, flipping above the trigger when there is
- * no room below.
+ * One primitive for the conversation menu, the folder menu and the composer's
+ * `+`, because the hard parts are not the items: the rail is a scroll container,
+ * so a menu positioned inside a row would be clipped at the container's edge,
+ * and one opened near the bottom would be cut off entirely. `position: fixed`
+ * escapes that, at the price of having to decide the place from the trigger's
+ * measured rectangle — which is what this does, flipping above the trigger when
+ * there is no room below. That flip is the whole reason the composer can use it:
+ * the composer sits at the bottom of the window, so its menu always opens
+ * upwards, without knowing anything about being at the bottom.
  *
  * It closes on the four things that mean "not this any more": a click outside,
- * Escape, a resize, and a scroll of the rail. The last one is the one that is
- * easy to miss — the menu is anchored to a rectangle that scrolls away beneath
- * it, and a menu left floating over the wrong row is worse than no menu.
+ * Escape, a resize, and a scroll of whatever it is anchored over. The last one is
+ * the one that is easy to miss — the menu is anchored to a rectangle that scrolls
+ * away beneath it, and a menu left floating over the wrong row is worse than no
+ * menu.
  */
 import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 
@@ -23,7 +26,7 @@ export interface PopoverAnchor {
   left: number;
 }
 
-export function RailPopover({
+export function Popover({
   anchor,
   label,
   onClose,
@@ -107,7 +110,7 @@ export function RailPopover({
   return (
     <div
       ref={root}
-      className="rail-menu"
+      className="popover"
       role="menu"
       aria-label={label}
       style={{top: `${String(placed.top)}px`, left: `${String(placed.left)}px`}}
@@ -118,7 +121,7 @@ export function RailPopover({
 }
 
 /** One item in a rail menu. A button, so the keyboard already knows what to do. */
-export function RailMenuItem({
+export function PopoverItem({
   onSelect,
   disabled = false,
   danger = false,
@@ -133,7 +136,7 @@ export function RailMenuItem({
     <button
       type="button"
       role="menuitem"
-      className={danger ? 'rail-menu-item is-danger' : 'rail-menu-item'}
+      className={danger ? 'popover-item is-danger' : 'popover-item'}
       disabled={disabled}
       onClick={onSelect}
     >

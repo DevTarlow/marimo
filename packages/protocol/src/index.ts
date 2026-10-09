@@ -1307,6 +1307,35 @@ export type FileListing = z.infer<typeof fileListingSchema>;
  */
 export const FILE_LISTING_LIMIT = 500;
 
+/**
+ * A file the user attached to a message.
+ *
+ * The path is what travels, not the contents. The agent's own `read_file` is
+ * what turns it into text: it is the path that is already confined to the
+ * conversation's folder, already capped at 64 KiB with the truncation stated,
+ * and already gated by the same rules as every other file the agent touches.
+ * Reading the file here instead would be a second reader to keep in step with
+ * that one, and a message whose stored text was not what the model read.
+ */
+export interface PickedFile {
+  /** Absolute, resolved: symlinks followed, which is what confined it. */
+  path: string;
+  /** The file's own name, for the chip. */
+  name: string;
+  /**
+   * The path relative to the conversation's folder, which is what the message
+   * names — a relative path is what the agent's tools describe themselves in
+   * terms of, and it does not leak the user's home directory into the transcript.
+   */
+  relative: string;
+}
+
+/** A file the picker refused, and the sentence explaining why. */
+export interface SkippedFile {
+  name: string;
+  reason: string;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Jobs                                                                        */
 /* -------------------------------------------------------------------------- */
@@ -1867,6 +1896,20 @@ export const agentCallSchemas = {
    */
   'workspaces.open': z.object({workspaceId: z.string().min(1)}),
 
+  /*
+   * Asks the user for files to attach to the next message.
+   *
+   * Named by conversation rather than by folder, because the files are judged
+   * against the folder *that conversation* works in — the same folder its turn's
+   * file tools will be confined to. The window never sends the path it wants
+   * checked: it says which conversation is asking, and the answer says which
+   * folder the offer was measured against.
+   */
+  'files.pick': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+  }),
+
   /* Conversations. */
   'sessions.list': z.object({profileId: z.string().min(1).optional()}),
   'sessions.create': z.object({profileId: z.string().min(1)}),
@@ -2071,6 +2114,11 @@ export interface AgentCallResults {
   'sessions.rename': {session: SessionSummary};
   'sessions.setModel': {session: SessionSummary};
   'sessions.delete': {deleted: boolean};
+  /**
+   * What was attached and what was refused, with the folder both were judged
+   * against — so the window can name the folder rather than describing it.
+   */
+  'files.pick': {files: PickedFile[]; skipped: SkippedFile[]; folder: string};
   'workspaces.list': WorkspaceState;
   'workspaces.add': WorkspaceState & {added: boolean};
   'workspaces.select': WorkspaceState;

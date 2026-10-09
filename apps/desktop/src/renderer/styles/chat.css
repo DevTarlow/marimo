@@ -240,7 +240,7 @@
  * escapes the rail's own scroll container — and above everything else, because
  * a menu under the transcript is not a menu.
  */
-.rail-menu {
+.popover {
   position: fixed;
   z-index: 30;
   display: flex;
@@ -255,7 +255,7 @@
   box-shadow: var(--shadow);
 }
 
-.rail-menu-item {
+.popover-item {
   display: block;
   width: 100%;
   padding: var(--space-1) var(--space-2);
@@ -266,19 +266,19 @@
   transition: background var(--transition-fast);
 }
 
-.rail-menu-item:hover:not(:disabled) {
+.popover-item:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 
-.rail-menu-item:disabled {
+.popover-item:disabled {
   color: var(--text-faint);
 }
 
-.rail-menu-item.is-danger {
+.popover-item.is-danger {
   color: var(--danger);
 }
 
-.rail-menu-label {
+.popover-label {
   display: block;
   padding: var(--space-1) var(--space-2) 0;
   color: var(--text-faint);
@@ -287,14 +287,14 @@
   text-transform: uppercase;
 }
 
-.rail-menu-path {
+.popover-path {
   padding: 0 var(--space-2) var(--space-1);
   color: var(--text-faint);
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
 }
 
-.rail-menu-id {
+.popover-id {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -302,27 +302,27 @@
   padding: 0 var(--space-2) var(--space-2);
 }
 
-.rail-menu-id code {
+.popover-id code {
   font-size: var(--text-xs);
   color: var(--text-muted);
   overflow-wrap: anywhere;
   user-select: text;
 }
 
-.rail-menu-sep {
+.popover-sep {
   height: 1px;
   margin: var(--space-1) 0;
   background: var(--border);
 }
 
-.rail-menu-confirm p {
+.popover-confirm p {
   margin: 0;
   padding: 0 var(--space-2);
   color: var(--text-muted);
   font-size: var(--text-sm);
 }
 
-.rail-menu-row {
+.popover-row {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
@@ -794,6 +794,41 @@
   min-height: 22px;
 }
 
+/*
+ * `+`: the things a message can carry that are not typed. A circle matching the
+ * arrow at the other end of the box, in the quiet surface, because it opens a
+ * menu rather than doing the thing — the accent belongs to the one action that
+ * ends the message.
+ */
+.composer-add {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  line-height: 1;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.composer-add:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--accent-border);
+  color: var(--text);
+}
+
+.composer-add:disabled {
+  border-color: var(--border);
+  color: var(--text-faint);
+}
+
 .composer-hint {
   flex: 1;
   min-width: 0;
@@ -802,6 +837,59 @@
   white-space: nowrap;
   color: var(--text-faint);
   font-size: var(--text-xs);
+}
+
+/* A refusal the user needs to act on — a file outside the folder, a picker with
+   nowhere to open. Still one line, because the layout is one row. */
+.composer-hint.is-failure {
+  color: var(--danger);
+}
+
+/*
+ * Attached files, above the text: they are part of the message being written,
+ * so they live inside the box rather than in a strip beside it.
+ */
+.composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 2px var(--space-1) 2px var(--space-2);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.composer-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-chip-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.composer-chip-remove:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 /*

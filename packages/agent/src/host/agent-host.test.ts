@@ -955,7 +955,10 @@ describe('AgentHost', () => {
       // Same provider as the running host, so the turn still reaches the fake.
       ...createConfig(fake?.baseUrl ?? ''),
       systemPrompt: 'You are a terse research assistant.',
-      enabledSkills: ['reasoning'],
+      // Which capability skills come along is now a property of the tool list
+      // rather than a second selection, so the narrowest profile is the one that
+      // grants nothing — and it still carries the app's operating protocol.
+      enabledTools: [],
     });
     await collect(host.run(session, 'hi'));
 

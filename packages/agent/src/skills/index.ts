@@ -5,6 +5,12 @@
  * what it currently remembers. The protocol and the memory block are appended by
  * the agent layer rather than stored in settings, so a prompt saved by an older
  * build still gets both.
+ *
+ * What is *in* the prompt is a property of the profile's tools, not of a second
+ * list of switches. The operating protocol is unconditional, because the app's
+ * own rules ship with the app; a capability skill rides along with the tools it
+ * describes. That leaves `enabledSkills` naming the user's own skills and
+ * nothing else, which is the one thing it can honestly mean.
  */
 import {knowledgeSkill} from './knowledge-skill.js';
 import {memorySkill} from './memory-skill.js';
@@ -20,6 +26,18 @@ export const SKILLS: readonly Skill[] = [
   memorySkill,
   knowledgeSkill,
 ];
+
+/**
+ * Names the app ships, which a user's skill may never take.
+ *
+ * Checked whatever the profile's tools are, rather than only against the skills
+ * that happen to be carried: a profile can change between turns, and a saved
+ * `memory` that was hidden while the memory tools were off would reappear as a
+ * second `## memory` heading the moment they were switched back on.
+ */
+const BUILT_IN_NAMES: ReadonlySet<string> = new Set(
+  SKILLS.map((skill) => skill.name),
+);
 
 export interface ComposeInstructionOptions {
   /** The profile's identity: persona and formatting. */
@@ -37,21 +55,30 @@ export interface ComposeInstructionOptions {
    */
   instruction?: string;
   /**
-   * Skill names this profile carries. Absent means all of them; an empty array
-   * means the profile deliberately carries none, which drops the operating
-   * protocol, the skills and the memory block — an agent that was not given the
-   * memory skill must not be told to use it, nor have facts injected for it.
-   */
-  skills?: string[];
-  /**
-   * Skills the user wrote, from `/learn`.
+   * Tool names this profile may use, or absent for a caller with no profile
+   * concept at all.
    *
-   * They are selected by the same names as the built-in ones — one list of
-   * checkboxes in Settings, one `enabledSkills` on the profile — so a saved skill
-   * is switched on and off like any other. Absent means the app has none, which
-   * is what a test with no skill store wants.
+   * Absent is not "no tools" — it is "unrestricted", which is how a test or a
+   * future CLI gets every skill. An empty array is a profile that can do nothing,
+   * and it carries the protocol and none of the capability skills.
    */
-  extraSkills?: readonly Skill[];
+  tools?: readonly string[];
+  /**
+   * Names of the user's own skills to carry, from `/learn`.
+   *
+   * Absent means all of them, which is what a caller with no profile concept
+   * wants; an empty array means this profile carries none of them. The built-in
+   * skills are not named here and cannot be selected here — they follow `tools`.
+   */
+  userSkillNames?: string[];
+  /**
+   * The user's skills themselves, for `userSkillNames` to select from.
+   *
+   * Absent means the app has none, which is what a test with no skill store
+   * wants. These are definitions, not a selection: which of them are carried is
+   * `userSkillNames`.
+   */
+  userSkills?: readonly Skill[];
 }
 
 const EMPTY_MEMORY =
@@ -71,17 +98,19 @@ export function composeInstruction({
   base,
   memory: memoryText,
   instruction,
-  skills,
-  extraSkills,
+  tools,
+  userSkillNames,
+  userSkills,
 }: ComposeInstructionOptions): string {
-  const selected = selectSkills(skills, extraSkills ?? []);
-  const reasoning = selected.find(
+  const reachable = SKILLS.filter((skill) => canCarry(skill, tools));
+  const reasoning = reachable.find(
     (skill) => skill.name === reasoningSkill.name,
   );
-  const memory = selected.find((skill) => skill.name === memorySkill.name);
-  const capabilitySkills = selected.filter(
-    (skill) => skill.name !== reasoningSkill.name,
-  );
+  const memory = reachable.find((skill) => skill.name === memorySkill.name);
+  const capabilitySkills = [
+    ...reachable.filter((skill) => skill.name !== reasoningSkill.name),
+    ...userSkillsFor(userSkillNames, userSkills ?? []),
+  ];
   const memoryBody =
     memoryText.trim().length > 0 ? memoryText.trim() : EMPTY_MEMORY;
 
@@ -91,9 +120,10 @@ export function composeInstruction({
     capabilitySkills.length > 0
       ? `# Skills\n\n${renderSkills(capabilitySkills)}`
       : '',
-    // Only an agent that carries the memory skill gets its memory: the block is
-    // otherwise a set of facts from a system this profile was told to ignore,
-    // and an instruction to use tools it may not have.
+    // Only an agent that can act on memory is given it: the block is otherwise a
+    // set of facts from a system this profile was told to ignore, and an
+    // instruction to use tools it may not have. It follows the memory skill,
+    // which follows the memory tools.
     memory ? `# Long-term memory (memory.md)\n\n${memoryBody}` : '',
     // Last, and after everything else that has an opinion: this is the surface
     // the question was asked at, and it is the most specific instruction in the
@@ -108,37 +138,47 @@ export function composeInstruction({
 }
 
 /**
- * The skills a profile carries, in the canonical order and no other.
+ * Whether a skill about tools belongs in this profile's prompt.
  *
- * The user's own come last and in the order they were written: the built-ins are
- * the operating protocol and the app's own capabilities, and a skill made from a
- * conversation is a procedure layered on top of them rather than a replacement
- * for any of it.
- *
- * `names === undefined` means every skill, which is what a caller with no profile
- * concept wants; it includes the user's, because "all of them" has to mean all of
- * them for a saved skill to be usable at all.
+ * "At least one" rather than "all": a capability skill is one piece of guidance
+ * covering a group of tools, and requiring the whole group would drop the
+ * workspace-first search advice from every profile that has not also granted an
+ * arbitrary-URL fetch. Absent `tools` is the unrestricted caller, which gets
+ * everything.
  */
-export function selectSkills(
-  names?: string[],
-  extra: readonly Skill[] = [],
+function canCarry(skill: Skill, tools?: readonly string[]): boolean {
+  return (
+    skill.tools === undefined ||
+    tools === undefined ||
+    skill.tools.some((name) => tools.includes(name))
+  );
+}
+
+/**
+ * The user's skills this profile carries, in the order they were written.
+ *
+ * Filtered by `userSkillNames` rather than passing everything: a skill is prompt
+ * text carried on every single request, so one the user switched off is a cost
+ * they have already declined to pay.
+ */
+function userSkillsFor(
+  names: string[] | undefined,
+  userSkills: readonly Skill[],
 ): Skill[] {
-  const available = dedupeByName([...SKILLS, ...extra]);
-  if (names === undefined) {
-    return available;
-  }
-  const allowed = new Set(names);
-  return available.filter((skill) => allowed.has(skill.name));
+  const allowed = names === undefined ? undefined : new Set(names);
+  return dedupeByName(
+    userSkills.filter((skill) => !BUILT_IN_NAMES.has(skill.name)),
+  ).filter((skill) => allowed === undefined || allowed.has(skill.name));
 }
 
 /**
  * One skill per name, first one wins.
  *
  * Two `## memory` headings in one prompt is the sort of thing a model reads as
- * two conflicting instructions, and a saved skill is named by the same string the
- * built-ins are. `save_skill` refuses a name the app already ships, so this is
- * not the guard that matters — it is the backstop for a hand-edited
- * `skills.json`, where there is no one left to refuse anything.
+ * two conflicting instructions. `save_skill` refuses a built-in name and the
+ * store refuses a duplicate, so this is not the guard that matters — it is the
+ * backstop for a hand-edited `skills.json`, where there is no one left to refuse
+ * anything.
  */
 function dedupeByName(skills: readonly Skill[]): Skill[] {
   const seen = new Set<string>();

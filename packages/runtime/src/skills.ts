@@ -38,8 +38,11 @@ export interface SkillStoreOptions {
    *
    * Passed in rather than imported, because the names live in the agent package
    * and this store is about the file. The rule belongs here anyway: the file is
-   * the namespace, and a saved `memory` would shadow the built-in in the one list
-   * — `enabledSkills` — that decides which skills an agent carries.
+   * the namespace, and the system prompt is the other place a name is a heading.
+   * A saved `memory` would be filtered out of every prompt rather than shadowing
+   * anything — `composeInstruction` gives a built-in name to the built-in — so
+   * the refusal is what turns "your skill is carried but never sent" into a
+   * sentence the user can act on.
    */
   reserved?: readonly string[];
 }

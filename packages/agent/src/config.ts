@@ -66,11 +66,18 @@ export interface AgentConfig {
    * an empty array means the agent gets no tools at all.
    */
   enabledTools?: string[];
-  /** Skill names to carry in the instruction. Absent means all of them. */
+  /**
+   * Names of the *user's* skills to carry in the instruction.
+   *
+   * Not the built-in ones: the operating protocol is unconditional and a
+   * capability skill follows `enabledTools`, so this list names only what came
+   * out of `/learn`. Absent means all of the user's, an empty array none of them
+   * — which is what every profile written before skills could be saved carries,
+   * and correctly means "no skills of mine" rather than "no prompt at all".
+   */
   enabledSkills?: string[];
   /**
-   * Skills the user wrote, for `composeInstruction` to select from by name
-   * alongside the built-in ones.
+   * The user's skills themselves, for the agent to select from by name.
    *
    * Part of the configuration rather than a host option because it is prompt
    * content, exactly like `systemPrompt` beside it: the runner is rebuilt when

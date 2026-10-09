@@ -156,6 +156,15 @@ export class AgentRuntime {
        * capability that is simply never offered.
        */
       defaultTools: [...SAFE_DEFAULT_TOOLS],
+      /*
+       * And no *user* skills, which is all this list can name.
+       *
+       * The app's own prompt is not gated here: the operating protocol is
+       * unconditional and the memory and knowledge skills follow the tools just
+       * granted, so a fresh agent carries the app's rules without anyone having
+       * to switch them on. This empty list means "no `/learn` skills of mine",
+       * which is the only thing a profile's `enabledSkills` decides.
+       */
       defaultSkills: [],
     });
     this.workspaceStore = new WorkspaceStore({
@@ -817,11 +826,12 @@ export class AgentRuntime {
   }
 
   /**
-   * The skills a profile carries, in the shape the prompt wants.
+   * The user's skills a profile carries, in the shape the prompt wants.
    *
    * Filtered by `enabledSkills` rather than passing everything: a skill is
    * prompt text carried on every single request, so one the user switched off is
-   * a cost they have already declined to pay.
+   * a cost they have already declined to pay. The built-in skills are not here
+   * at all — `composeInstruction` picks those up from the profile's tools.
    */
   private async skillsFor(profile: AgentProfile): Promise<Skill[]> {
     if (profile.enabledSkills.length === 0) {

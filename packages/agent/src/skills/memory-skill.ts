@@ -10,6 +10,14 @@ import type {Skill} from './types.js';
 export const memorySkill: Skill = {
   name: 'memory',
   description: 'What to keep in long-term memory, and when to prune it.',
+  /*
+   * All three, because the skill is one piece of judgement — what is worth
+   * keeping, and when to prune — and it is carried when the profile can reach
+   * any of the tools that act on it. The whole group is granted together by
+   * `SAFE_DEFAULT_TOOLS`; a profile that has switched them all off gets neither
+   * the instructions nor the memory block composed below.
+   */
+  tools: ['read_memory', 'update_memory', 'prune_memory'],
   instructions: [
     'memory.md is your long-term memory for this workspace, and its current',
     'contents are included in this prompt on every request. Treat it as data about',

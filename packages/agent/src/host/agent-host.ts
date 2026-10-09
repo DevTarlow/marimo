@@ -823,14 +823,21 @@ export class AgentHost {
           ...(this.config.instruction !== undefined
             ? {instruction: this.config.instruction}
             : {}),
+          // Which capabilities the prompt may describe. Read per request for the
+          // same reason as memory above: a profile edited in Settings while a
+          // turn is in flight should reach that turn's next request rather than
+          // the next turn.
+          ...(this.config.enabledTools !== undefined
+            ? {tools: this.config.enabledTools}
+            : {}),
           ...(this.config.enabledSkills !== undefined
-            ? {skills: this.config.enabledSkills}
+            ? {userSkillNames: this.config.enabledSkills}
             : {}),
           // Read from the config on every request, like memory above it: a skill
           // saved midway through a turn is in the very next request that turn
           // makes, which is what makes `/learn` take effect immediately.
           ...(this.config.userSkills !== undefined
-            ? {extraSkills: this.config.userSkills}
+            ? {userSkills: this.config.userSkills}
             : {}),
         }),
       tools: createTools(this.config, {

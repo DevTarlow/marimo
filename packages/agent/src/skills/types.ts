@@ -13,4 +13,19 @@ export interface Skill {
   description: string;
   /** The instructions themselves. */
   instructions: string;
+  /**
+   * The tools this skill's guidance is about, if it is about any.
+   *
+   * A capability skill is carried only when the profile grants at least one of
+   * these. Without that, guidance about `search_knowledge_base` reaches an agent
+   * whose profile has switched search off, which is the failure invariant 9 is
+   * named after: a capability the user turned off is absent, not *described*.
+   *
+   * Absent means the skill mentions no tool and is therefore always carried —
+   * that is the operating protocol, which is about how to work rather than what
+   * to work with.
+   *
+   * A user's own skill has no tools: it is selected by name alone.
+   */
+  tools?: readonly string[];
 }

@@ -586,6 +586,33 @@ export class AgentRuntime {
     return await host.renameSession(sessionId, title, profileId);
   }
 
+  /**
+   * Chooses the model for one conversation, or clears the choice with `null`.
+   *
+   * The index is read back afterwards rather than the write being echoed: the
+   * answer is the `SessionSummary` the rail replaces its copy with, and only the
+   * entry says whether the conversation has a model of its own or is following
+   * the app default again.
+   *
+   * The placeholder-config host, like `renameSession`: choosing a model has
+   * nothing to do with a *working* provider, and a missing key must not stop the
+   * picker from being used.
+   */
+  async setSessionModel(
+    profileId: string,
+    sessionId: string,
+    model: string | null,
+  ): Promise<SessionSummary> {
+    const host = await this.ensureHost(profileId);
+    await host.setSessionModel(sessionId, model ?? undefined, profileId);
+    const listed = await host.listSessions(profileId);
+    const entry = listed.find((session) => session.id === sessionId);
+    if (entry === undefined) {
+      throw new Error(`Unknown session: ${sessionId}`);
+    }
+    return entry;
+  }
+
   /** Deletes a conversation, aborting a run in it if there is one. */
   async deleteSession(profileId: string, sessionId: string): Promise<void> {
     const host = await this.ensureHost(profileId);

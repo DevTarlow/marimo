@@ -833,6 +833,32 @@ describe('folders and filing', () => {
     ).not.toContain(id);
   });
 
+  it('chooses a conversation\'s model, and gives the choice up again', async () => {
+    const agent = runtime();
+    const session = await agent.createSession(profileId);
+    const id = session?.id ?? '';
+
+    expect(
+      (await agent.setSessionModel(profileId, id, 'deepseek-v4-pro')).model,
+    ).toBe('deepseek-v4-pro');
+    // Read back from the index rather than echoed: this is what the rail draws.
+    expect(
+      (await agent.listSessions(profileId)).find((entry) => entry.id === id)
+        ?.model,
+    ).toBe('deepseek-v4-pro');
+
+    /*
+     * `null` is the way back to following the app default, and it has to be a
+     * real state in the entry — a conversation that kept showing a model after
+     * giving the choice up would never follow a changed default again.
+     */
+    expect((await agent.setSessionModel(profileId, id, null)).model).toBeUndefined();
+
+    await expect(
+      agent.setSessionModel('someone-else', id, 'deepseek-flash'),
+    ).rejects.toThrow(/Unknown session/u);
+  });
+
   /*
    * An accepted fact has to land in the project it came from, not in whichever
    * folder happens to be current when the user presses Accept — which can be a

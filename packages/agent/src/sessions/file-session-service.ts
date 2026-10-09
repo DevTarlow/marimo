@@ -176,12 +176,24 @@ export class FileSessionService extends BaseSessionService {
   }
 
   /**
-   * Records the model this conversation should use. It lives in the sidebar
-   * index so a per-chat choice survives a restart.
+   * Records the model this conversation should use, or clears the choice.
+   *
+   * It lives in the sidebar index so a per-chat choice survives a restart, and
+   * `undefined` *removes* it rather than storing a sentinel: absent is what "no
+   * choice of its own, follow the app default" means, and it is the state every
+   * conversation that has never used the picker is already in. An empty string
+   * would be a second spelling of the same thing, resolved by a coincidence in
+   * `resolveModel`.
+   *
+   * `updatedAt` is left alone, for the reason `setSessionWorkspace` below leaves
+   * it alone: the sidebar sorts on it and reads it as when the conversation last
+   * had something happen *in* it. It used to be stamped here, which meant
+   * choosing a model reordered the rail under the cursor of the person who had
+   * just used the picker. Picking a model is not a turn.
    */
   async setSessionModel(
     sessionId: string,
-    model: string,
+    model: string | undefined,
   ): Promise<SessionIndexEntry | undefined> {
     return await this.withLock(async () => {
       const index = await this.readIndex();
@@ -189,8 +201,11 @@ export class FileSessionService extends BaseSessionService {
       if (!entry) {
         return undefined;
       }
-      entry.model = model;
-      entry.updatedAt = new Date().toISOString();
+      if (model === undefined) {
+        delete entry.model;
+      } else {
+        entry.model = model;
+      }
       await this.writeIndex(index);
       return entry;
     });

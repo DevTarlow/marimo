@@ -639,6 +639,15 @@ export class AgentService {
     return await this.runtime.renameSession(profileId, sessionId, title);
   }
 
+  /** Chooses the model for one conversation, or clears the choice with `null`. */
+  async setSessionModel(
+    profileId: string,
+    sessionId: string,
+    model: string | null,
+  ): Promise<SessionSummary> {
+    return await this.runtime.setSessionModel(profileId, sessionId, model);
+  }
+
   async deleteSession(profileId: string, sessionId: string): Promise<void> {
     await this.runtime.deleteSession(profileId, sessionId);
   }

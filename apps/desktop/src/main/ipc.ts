@@ -445,6 +445,14 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       ),
     }),
 
+    'sessions.setModel': async (params) => ({
+      session: await agent().setSessionModel(
+        params.profileId,
+        params.sessionId,
+        params.model,
+      ),
+    }),
+
     'sessions.delete': async (params) => {
       await agent().deleteSession(params.profileId, params.sessionId);
       return {deleted: true};

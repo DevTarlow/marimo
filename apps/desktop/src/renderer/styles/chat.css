@@ -804,6 +804,63 @@
   font-size: var(--text-xs);
 }
 
+/*
+ * The model this conversation uses, at the right of the foot row.
+ *
+ * The picker's own styles are the Settings field's, so what changes here is the
+ * field-ness: a quiet pill on the composer's surface rather than a bordered box
+ * that would read as a second input.
+ */
+.composer-model {
+  flex: none;
+  max-width: 46%;
+}
+
+.composer-model .model-picker {
+  flex: none;
+}
+
+.composer-model .model-picker-trigger {
+  width: auto;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.composer-model .model-picker-trigger:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.composer-model .model-picker-chevron {
+  font-size: var(--text-xs);
+}
+
+/* "default": the model shown is the app's, not this conversation's choice. */
+.model-picker-note {
+  flex: none;
+  padding: 0 var(--space-1);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+/*
+ * Anchored to the right edge and given a width of its own: the trigger is a
+ * narrow pill, and a list that inherited its width would be one word per row.
+ */
+.composer-model .model-picker-popover {
+  left: auto;
+  right: 0;
+  width: 300px;
+}
+
 /* --------------------------------------------------------------- buttons */
 
 .button {
@@ -1124,6 +1181,33 @@
 
 .model-picker-search {
   width: 100%;
+}
+
+/* Opened upwards, for a trigger at the bottom of the window: the composer. */
+.model-picker-popover.is-above {
+  top: auto;
+  bottom: calc(100% + var(--space-1));
+}
+
+/*
+ * "Follow the app default", above the list. A row of the popover rather than an
+ * option in the listbox — it is not a model — so it is separated from the list
+ * the keyboard walks.
+ */
+.model-picker-default {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.model-picker-default:hover {
+  background: var(--surface-hover);
 }
 
 .model-picker-list {

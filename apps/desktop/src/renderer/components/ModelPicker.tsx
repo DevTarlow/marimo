@@ -12,6 +12,11 @@
  * A free-text field would let a typo into the settings file, and a mistyped model
  * id is a 404 at the start of a turn, which reads as "the agent is broken"
  * rather than "that model does not exist".
+ *
+ * Two placements, because the same control is used in the two places a model can
+ * be chosen: Settings, where it is a field in a form and the list opens under it,
+ * and the composer, where the box sits at the bottom of the window and a list
+ * that opened downwards would be off screen.
  */
 import {useEffect, useId, useMemo, useRef, useState} from 'react';
 
@@ -21,12 +26,32 @@ export function ModelPicker({
   models,
   value,
   disabled = false,
+  placement = 'below',
+  note,
+  onUseDefault,
   onChange,
 }: {
   /** What the provider offers. The caller guarantees `value` is among them. */
   models: readonly string[];
   value: string;
   disabled?: boolean;
+  /** Which way the list opens. `below` unless the trigger is near the bottom. */
+  placement?: 'below' | 'above';
+  /**
+   * A word after the value, for a value that is a fallback rather than a
+   * choice — the composer's "default". Inside the trigger rather than beside it,
+   * so the button's own name says what it is showing.
+   */
+  note?: string;
+  /**
+   * Offered only when the choice can be given up.
+   *
+   * A conversation's model is a *choice* with a default underneath it, and
+   * without this row the first use of the picker would pin it for good: the
+   * app-wide default would stop moving that conversation. Absent in Settings,
+   * where the field being edited *is* the default.
+   */
+  onUseDefault?: () => void;
   onChange: (model: string) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
@@ -126,13 +151,22 @@ export function ModelPicker({
         }}
       >
         <span className="model-picker-value">{value}</span>
+        {note !== undefined && (
+          <span className="model-picker-note">{note}</span>
+        )}
         <span className="model-picker-chevron" aria-hidden="true">
           ▾
         </span>
       </button>
 
       {open && (
-        <div className="model-picker-popover">
+        <div
+          className={
+            placement === 'above'
+              ? 'model-picker-popover is-above'
+              : 'model-picker-popover'
+          }
+        >
           <input
             ref={search}
             className="settings-input model-picker-search"
@@ -169,6 +203,25 @@ export function ModelPicker({
               }
             }}
           />
+
+          {/*
+            A button rather than one more option in the listbox: it is not a
+            model, `aria-selected` would have nothing true to say about it, and
+            folding it into the highlight arithmetic would move the keyboard off
+            the row the user is actually on.
+          */}
+          {onUseDefault !== undefined && (
+            <button
+              type="button"
+              className="model-picker-default"
+              onClick={() => {
+                close();
+                onUseDefault();
+              }}
+            >
+              Follow the app default
+            </button>
+          )}
 
           <ul
             id={listId}

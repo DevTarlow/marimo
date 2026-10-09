@@ -404,21 +404,27 @@ export class AgentHost {
   }
 
   /**
-   * Sets the model for one conversation, so the composer can switch models
-   * without touching the default used by every other chat. The next turn picks
-   * it up; a run in flight keeps the model it started with.
+   * Sets the model for one conversation, or clears it back to the app default.
+   *
+   * So the composer can switch models without touching the default used by every
+   * other chat. The next turn picks it up; a run in flight keeps the model it
+   * started with, because this touches nothing `updateConfig` watches.
+   *
+   * `undefined` is `null` on the wire — "no choice of its own" — and it is the
+   * only way back: a picker with no undo would pin every conversation it was
+   * ever opened on, and a changed default in Settings would stop moving them.
    */
   async setSessionModel(
     sessionId: string,
-    model: string,
+    model: string | undefined,
     profileId?: string,
-  ): Promise<string> {
+  ): Promise<string | undefined> {
     await this.assertOwned(sessionId, profileId);
     const entry = await this.sessionService.setSessionModel(sessionId, model);
     if (!entry) {
       throw new Error(`Unknown session: ${sessionId}`);
     }
-    return entry.model ?? model;
+    return entry.model;
   }
 
   /**

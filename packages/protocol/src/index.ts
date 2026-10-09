@@ -1892,6 +1892,23 @@ export const agentCallSchemas = {
     sessionId: z.string().min(1),
     title: z.string().trim().min(1),
   }),
+  /*
+   * Chooses the model for one conversation, or clears the choice with `null`.
+   *
+   * `null` rather than an empty string, because the two states are different
+   * facts: a conversation with no model of its own follows the app default, so
+   * changing the default in Settings moves it — and a picker that could only
+   * ever write a model would pin every conversation it was opened on, with no
+   * way back to following anything.
+   *
+   * Deliberately not a settings patch. Writing the settings default from here
+   * would move every other conversation and abort the turn that is running.
+   */
+  'sessions.setModel': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+    model: z.string().trim().min(1).nullable(),
+  }),
   /* Deletes a conversation and the file behind it. */
   'sessions.delete': z.object({
     profileId: z.string().min(1),
@@ -2052,6 +2069,7 @@ export interface AgentCallResults {
   };
   'sessions.move': {session: SessionSummary};
   'sessions.rename': {session: SessionSummary};
+  'sessions.setModel': {session: SessionSummary};
   'sessions.delete': {deleted: boolean};
   'workspaces.list': WorkspaceState;
   'workspaces.add': WorkspaceState & {added: boolean};

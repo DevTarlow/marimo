@@ -694,38 +694,121 @@ async function main() {
      * the message is typed on, and it is a circle. A Send that moved back to a
      * row of its own, or a labelled rectangle, would pass every other check.
      */
-    const shape = await send('Runtime.evaluate', {
-      expression: `JSON.stringify((() => {
-        const line = document.querySelector('.composer-line');
-        const input = line?.querySelector('textarea.composer-input');
-        const arrow = line?.querySelector('.composer-send');
-        if (!line || !input || !arrow) {
-          return {line: !!line, input: !!input, arrow: !!arrow};
-        }
-        const typed = input.getBoundingClientRect();
-        const button = arrow.getBoundingClientRect();
-        return {
-          line: true,
-          sameLine: button.top < typed.bottom && button.bottom > typed.top,
-          round: Math.abs(button.width - button.height) < 1,
-          label: arrow.getAttribute('aria-label'),
-          glyph: arrow.textContent.trim(),
-          foot: !!document.querySelector('.composer-foot'),
-        };
-      })())`,
-      returnByValue: true,
-    });
-    const composer = JSON.parse(shape.result.value);
+    const shape = await evaluate(`JSON.stringify((() => {
+      const line = document.querySelector('.composer-line');
+      const input = line?.querySelector('textarea.composer-input');
+      const arrow = line?.querySelector('.composer-send');
+      if (!line || !input || !arrow) {
+        return {line: !!line, input: !!input, arrow: !!arrow};
+      }
+      const typed = input.getBoundingClientRect();
+      const button = arrow.getBoundingClientRect();
+      return {
+        line: true,
+        sameLine: button.top < typed.bottom && button.bottom > typed.top,
+        round: Math.abs(button.width - button.height) < 1,
+        label: arrow.getAttribute('aria-label'),
+        glyph: arrow.textContent.trim(),
+        foot: !!document.querySelector('.composer-foot'),
+      };
+    })())`);
+    const composer = JSON.parse(shape);
     if (composer.line !== true || composer.foot !== true) {
-      fail(`the composer lost its structure: ${shape.result.value}`);
+      fail(`the composer lost its structure: ${shape}`);
     } else if (composer.sameLine !== true) {
       fail('the send button is not on the line the message is typed on');
     } else if (composer.round !== true) {
       fail('the send button is not a circle');
     } else if (composer.label !== 'Send message' || composer.glyph !== '↑') {
-      fail(`the send button is not the arrow it should be: ${shape.result.value}`);
+      fail(`the send button is not the arrow it should be: ${shape}`);
     } else {
       ok('the composer types and sends on one line, with a round arrow');
+    }
+
+    /*
+     * The composer's model picker, driven the way a person drives it.
+     *
+     * Choosing a model travels schema → IPC → the conversation index → the rail
+     * and back, and the list has to open *upwards* because the box it belongs to
+     * sits at the bottom of the window. Neither is visible from a unit test, and
+     * both are silent when wrong: a list that opened downwards would simply be
+     * off screen, and a picker whose write never landed would keep showing the
+     * old name.
+     */
+    await evaluate(
+      `document.querySelector('.composer-model .model-picker-trigger')?.click()`,
+    );
+    const opened = await until('the model list to open', async () => {
+      const state = await evaluate(`(() => {
+        const trigger = document.querySelector('.composer-model .model-picker-trigger');
+        const popover = document.querySelector('.composer-model .model-picker-popover');
+        if (trigger === null || popover === null) return undefined;
+        return JSON.stringify({
+          above:
+            popover.getBoundingClientRect().bottom <=
+            trigger.getBoundingClientRect().top + 1,
+          search: !!popover.querySelector('.model-picker-search'),
+          options: popover.querySelectorAll('.model-picker-option').length,
+          choice: !popover.querySelector('.model-picker-default'),
+        });
+      })()`);
+      return state === undefined ? undefined : JSON.parse(state);
+    });
+    if (opened.above !== true) {
+      fail('the model list opens downwards, off the bottom of the window');
+    } else if (opened.search !== true || opened.options < 1) {
+      fail(`the model list has nothing to choose from: ${JSON.stringify(opened)}`);
+    } else if (opened.choice !== true) {
+      /*
+       * A conversation that has never picked a model is following the default.
+       * Offering to "follow the app default" before there is a choice to give up
+       * is a row that does nothing.
+       */
+      fail('a conversation with no model of its own offers to give one up');
+    } else {
+      ok(`the model list opens upwards with ${opened.options} models`);
+    }
+
+    await evaluate(
+      `document.querySelector('.composer-model .model-picker-option')?.click()`,
+    );
+    const chosen = await until('the chosen model to be shown', async () => {
+      const state = await evaluate(`(() => {
+        const trigger = document.querySelector('.composer-model .model-picker-trigger');
+        if (trigger === null) return undefined;
+        // The popover closing *and* the note going are the two halves of the
+        // write landing: the second is what says the choice is no longer the
+        // app default's.
+        return document.querySelector('.composer-model .model-picker-popover') === null &&
+          trigger.querySelector('.model-picker-note') === null
+          ? trigger.textContent.trim()
+          : undefined;
+      })()`);
+      return state === undefined ? undefined : state;
+    });
+    ok(`the conversation now answers with ${chosen}`);
+
+    await evaluate(
+      `document.querySelector('.composer-model .model-picker-trigger')?.click()`,
+    );
+    await until('the list to open again', async () =>
+      await evaluate(
+        `document.querySelector('.composer-model .model-picker-default') !== null`,
+      ),
+    );
+    await evaluate(
+      `document.querySelector('.composer-model .model-picker-default')?.click()`,
+    );
+    const back = await until('the choice to be given up', async () => {
+      const note = await evaluate(
+        `document.querySelector('.composer-model .model-picker-note')?.textContent ?? null`,
+      );
+      return note === 'default' ? note : undefined;
+    });
+    if (back !== 'default') {
+      fail('giving up the model choice did not go back to the app default');
+    } else {
+      ok('the model choice can be given up, and the conversation follows the default');
     }
 
     /*

@@ -217,4 +217,45 @@ describe('the filing calls', () => {
       agentCallSchemas['sessions.delete'].safeParse({profileId: 'p'}).success,
     ).toBe(false);
   });
+
+  it('accepts a model, and null for no model of its own', () => {
+    const chosen = agentCallSchemas['sessions.setModel'].parse({
+      profileId: 'p',
+      sessionId: 's',
+      model: '  deepseek-v4-pro  ',
+    });
+    expect(chosen.model).toBe('deepseek-v4-pro');
+
+    /*
+     * `null` is not decoration: it is the only way back to following the app
+     * default, because a conversation's model is a choice with a default
+     * underneath it. Both facts have to cross the boundary, and each is a
+     * different state in the index.
+     */
+    expect(
+      agentCallSchemas['sessions.setModel'].parse({
+        profileId: 'p',
+        sessionId: 's',
+        model: null,
+      }).model,
+    ).toBeNull();
+  });
+
+  it('refuses a blank model rather than storing one that resolves to nothing', () => {
+    // An empty string would be a third state — neither a choice nor the default
+    // — and the agent would then resolve a turn against a model id of "".
+    expect(
+      agentCallSchemas['sessions.setModel'].safeParse({
+        profileId: 'p',
+        sessionId: 's',
+        model: '   ',
+      }).success,
+    ).toBe(false);
+    expect(
+      agentCallSchemas['sessions.setModel'].safeParse({
+        profileId: 'p',
+        sessionId: 's',
+      }).success,
+    ).toBe(false);
+  });
 });

@@ -263,6 +263,44 @@ describe('FileSessionService', () => {
     ).toBeUndefined();
   });
 
+  it('gives up a conversation\'s model, so it follows the default again', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'picky',
+      state: {model: 'deepseek-v4-pro'},
+    });
+
+    const cleared = await service.setSessionModel('picky', undefined);
+    /*
+     * Absent rather than empty. "No model of its own" is what a conversation
+     * that has never used the picker holds, and it is the state the app default
+     * follows — an empty string would be a second spelling of it that only
+     * `resolveModel`'s emptiness check turns into the first.
+     */
+    expect(cleared?.model).toBeUndefined();
+    expect(cleared).not.toHaveProperty('model');
+    expect(await service.getIndexEntry('picky')).not.toHaveProperty('model');
+  });
+
+  it('moves no conversation to the top of the rail for a model change', async () => {
+    await service.createSession({
+      appName: APP,
+      userId: USER,
+      sessionId: 'quiet',
+    });
+    const before = await service.getIndexEntry('quiet');
+
+    const after = await service.setSessionModel('quiet', 'deepseek-v4-pro');
+    /*
+     * `updatedAt` is what the rail sorts on and reads as "3h ago", and both mean
+     * when the conversation last had something happen *in* it. Choosing a model
+     * is not a turn: stamping it here reordered the list under the cursor of
+     * whoever had just used the picker.
+     */
+    expect(after?.updatedAt).toBe(before?.updatedAt);
+  });
+
   it('never resurrects a deleted session from a late event', async () => {
     await newSession('doomed');
     await service.deleteSession({

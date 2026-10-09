@@ -106,6 +106,32 @@ export function App(): React.JSX.Element {
   const busy = agent.busy;
   const disabled = agent.profile === undefined;
 
+  /*
+   * Which model will answer, and where that choice lives.
+   *
+   * `SessionSummary.model` is absent when the conversation has never chosen one
+   * — it follows whatever Settings says — so the picker needs both facts: the
+   * model to show, and whether there is a choice to give up.
+   */
+  const sessionModel = agent.sessions.find(
+    (entry) => entry.id === agent.sessionId,
+  )?.model;
+  const defaultModel =
+    settings?.providers.configs[settings.providers.active].model ?? '';
+  const currentModel = sessionModel ?? defaultModel;
+  /*
+   * The stored value is always offered, even once the provider's list stops
+   * carrying it, which is the rule the Settings picker follows too: a model that
+   * has been retired may still answer, and a trigger showing something other
+   * than what is stored is worse than one showing a name the endpoint no longer
+   * advertises.
+   */
+  const catalogue = settings?.availableModels ?? [];
+  const models =
+    currentModel.length === 0 || catalogue.includes(currentModel)
+      ? catalogue
+      : [currentModel, ...catalogue];
+
   if (showSettings) {
     return (
       <Settings
@@ -269,6 +295,21 @@ export function App(): React.JSX.Element {
         <Composer
           busy={busy}
           disabled={disabled || !agent.ready}
+          /*
+           * The model this conversation will use. Its own choice if it has one,
+           * and the app default otherwise — which is why the two are kept apart
+           * rather than collapsed into one string: the picker has to be able to
+           * show that it is following the default, and to offer the way back to
+           * it once a choice has been made.
+           */
+          model={currentModel}
+          models={models}
+          usingDefault={sessionModel === undefined}
+          onSelectModel={async (model) => {
+            if (agent.sessionId !== null) {
+              await agent.setSessionModel(agent.sessionId, model);
+            }
+          }}
           onSend={async (text) => await agent.send(text)}
           onStop={() => {
             void agent.stop();

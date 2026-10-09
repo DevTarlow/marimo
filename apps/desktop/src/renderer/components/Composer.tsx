@@ -14,6 +14,11 @@
  * sending is often more than one line and a box that scrolls after two lines
  * hides the question the user is still writing.
  *
+ * The model picker is here rather than in Settings because it is a fact about
+ * *this* conversation: which model answers the question being typed. It chooses
+ * for the conversation only, and the popover offers the way back to the app
+ * default, so using it once does not pin the chat for good.
+ *
  * While a turn is running the button becomes Stop rather than the box becoming
  * disabled. A disabled box is the wrong shape: people compose their next thought
  * while waiting, and taking the words away — or losing them on send — is how a
@@ -21,11 +26,17 @@
  */
 import {useEffect, useRef, useState} from 'react';
 
+import {ModelPicker} from './ModelPicker.js';
+
 export function Composer({
   onSend,
   onStop,
   busy,
   disabled,
+  models,
+  model,
+  usingDefault,
+  onSelectModel,
 }: {
   /**
    * Resolves `true` when the turn was accepted.
@@ -39,6 +50,14 @@ export function Composer({
   onStop: () => void;
   busy: boolean;
   disabled: boolean;
+  /** The active provider's catalogue. Must contain `model`. */
+  models: readonly string[];
+  /** The model this conversation will use: its own choice, else the default. */
+  model: string;
+  /** True when that model is the app default rather than this chat's choice. */
+  usingDefault: boolean;
+  /** `null` gives up the choice, so the conversation follows the default again. */
+  onSelectModel: (model: string | null) => Promise<void>;
 }): React.JSX.Element {
   const [text, setText] = useState('');
   const box = useRef<HTMLTextAreaElement>(null);
@@ -120,6 +139,26 @@ export function Composer({
           <span className="composer-hint">
             {busy ? 'Working…' : 'Enter to send, Shift+Enter for a new line'}
           </span>
+          <div className="composer-model">
+            <ModelPicker
+              models={models}
+              value={model}
+              disabled={disabled}
+              // Upwards: this box is at the bottom of the window.
+              placement="above"
+              {...(usingDefault ? {note: 'default'} : {})}
+              {...(usingDefault
+                ? {}
+                : {
+                    onUseDefault: () => {
+                      void onSelectModel(null);
+                    },
+                  })}
+              onChange={(next) => {
+                void onSelectModel(next);
+              }}
+            />
+          </div>
         </div>
       </div>
     </div>

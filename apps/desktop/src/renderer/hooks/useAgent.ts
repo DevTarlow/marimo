@@ -36,7 +36,10 @@ import type {
   SessionSummary,
   ToolCallRecord,
   TranscriptMessage,
+  Workspace,
 } from '@marimo/protocol';
+
+import {folderForSession} from '../workspace-groups.js';
 
 /*
  * A tool call in flight and a tool call read back from disk are the same shape,
@@ -111,8 +114,32 @@ export interface AgentController {
   openSettings: number;
   /** The stored theme preference, kept in step with the settings file. */
   themeMode: ThemeMode;
-  newSession: () => Promise<void>;
+  newSession: (workspaceId?: string) => Promise<void>;
   dismissError: () => void;
+  /** The folders every agent works in, and which one is current. */
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+  /**
+   * The folder the open conversation works in, for the header.
+   *
+   * Not the same thing as the active workspace: a conversation remembers the
+   * folder it was started in, and the two differ the moment the user selects
+   * another one.
+   */
+  activeFolder: string | null;
+  /** Loads a folder, or answers `false` when the picker was closed. */
+  loadWorkspace: () => Promise<boolean>;
+  selectWorkspace: (workspaceId: string) => Promise<void>;
+  renameWorkspace: (workspaceId: string, name: string) => Promise<void>;
+  removeWorkspace: (workspaceId: string) => Promise<void>;
+  openWorkspace: (workspaceId: string) => Promise<void>;
+  moveSession: (
+    sessionId: string,
+    workspaceId: string | null,
+  ) => Promise<void>;
+  renameSession: (sessionId: string, title: string) => Promise<void>;
+  /** Deletes a conversation, and lands somewhere sensible if it was open. */
+  removeSession: (sessionId: string) => Promise<void>;
 }
 
 /** Electron wraps a rejected `invoke` in its own prefix, which is noise here. */
@@ -133,6 +160,10 @@ export function useAgent(): AgentController {
   const [outbox, setOutbox] = useState<string | null>(null);
   const [openSettings, setOpenSettings] = useState(0);
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(
+    null,
+  );
 
   /*
    * Read by the event listener, which is registered once and would otherwise
@@ -183,6 +214,97 @@ export function useAgent(): AgentController {
     [profile, loadTranscript],
   );
 
+  /**
+   * Adopts a whole folder list.
+   *
+   * Whole rather than merged: every call that changes one answers with the list
+   * and the current folder together, and a window that merged a single entry
+   * into its own copy could disagree with the file about the order, or about
+   * which folder is current.
+   */
+  const applyWorkspaceState = useCallback(
+    (state: {workspaces: Workspace[]; activeWorkspaceId: string | null}): void => {
+      setWorkspaces(state.workspaces);
+      setActiveWorkspaceId(state.activeWorkspaceId);
+    },
+    [],
+  );
+
+  const loadWorkspace = useCallback(async (): Promise<boolean> => {
+    try {
+      const state = await window.marimo.call('workspaces.add', {});
+      applyWorkspaceState(state);
+      // Cancelling a dialog is an answer, not a failure: nothing is red.
+      return state.added;
+    } catch (failure) {
+      setError(describe(failure));
+      return false;
+    }
+  }, [applyWorkspaceState]);
+
+  const selectWorkspace = useCallback(
+    async (workspaceId: string): Promise<void> => {
+      try {
+        applyWorkspaceState(
+          await window.marimo.call('workspaces.select', {workspaceId}),
+        );
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [applyWorkspaceState],
+  );
+
+  const renameWorkspace = useCallback(
+    async (workspaceId: string, name: string): Promise<void> => {
+      try {
+        applyWorkspaceState(
+          await window.marimo.call('workspaces.rename', {workspaceId, name}),
+        );
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [applyWorkspaceState],
+  );
+
+  /**
+   * Forgets a folder.
+   *
+   * The conversations filed under it are not touched and do not need reloading:
+   * their `workspaceId` now names nothing, which is what the rail draws as
+   * "Other chats" — and the header follows, because the folder it was showing is
+   * gone.
+   */
+  const removeWorkspace = useCallback(
+    async (workspaceId: string): Promise<void> => {
+      try {
+        applyWorkspaceState(
+          await window.marimo.call('workspaces.remove', {workspaceId}),
+        );
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [applyWorkspaceState],
+  );
+
+  const openWorkspace = useCallback(
+    async (workspaceId: string): Promise<void> => {
+      try {
+        const {opened} = await window.marimo.call('workspaces.open', {
+          workspaceId,
+        });
+        if (!opened) {
+          setError('Could not open the folder in your file manager.');
+        }
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [],
+  );
+
   const boot = useCallback(async (): Promise<void> => {
     try {
       const listed = await window.marimo.call('profiles.list', {});
@@ -197,6 +319,13 @@ export function useAgent(): AgentController {
         setReady(true);
         return;
       }
+
+      /*
+       * The folders, before the conversations: the rail draws every conversation
+       * inside one, and a list that arrived a frame later would put them all
+       * under "Other chats" and then move them.
+       */
+      applyWorkspaceState(await window.marimo.call('workspaces.list', {}));
 
       const {sessions: existing} = await window.marimo.call('sessions.list', {
         profileId: active.id,
@@ -225,7 +354,7 @@ export function useAgent(): AgentController {
       setError(detail);
       setReady(true);
     }
-  }, [loadTranscript]);
+  }, [loadTranscript, applyWorkspaceState]);
 
   /* The stream. Registered once; everything it needs is read from refs. */
   useEffect(() => {
@@ -545,26 +674,139 @@ export function useAgent(): AgentController {
     }
   }, [profile, sessionId]);
 
-  const newSession = useCallback(async (): Promise<void> => {
-    if (profile === undefined) {
-      return;
-    }
-    try {
-      const {session} = await window.marimo.call('sessions.create', {
-        profileId: profile.id,
-      });
-      setSessions((current) => [session, ...current]);
-      setSessionId(session.id);
-      setMessages([]);
-      setStoredPending([]);
-      setLive(null);
-      setOutbox(null);
-    } catch (failure) {
-      setError(describe(failure));
-    }
-  }, [profile]);
+  /**
+   * Starts a conversation, in the folder named or in the current one.
+   *
+   * A named folder is selected first rather than passed along: the *current*
+   * folder is what the session is stamped with, and a chat created under a
+   * highlighted folder that is not the current one would be filed somewhere the
+   * user is not looking.
+   */
+  const newSession = useCallback(
+    async (workspaceId?: string): Promise<void> => {
+      if (profile === undefined) {
+        return;
+      }
+      try {
+        if (workspaceId !== undefined && workspaceId !== activeWorkspaceId) {
+          await selectWorkspace(workspaceId);
+        }
+        const {session} = await window.marimo.call('sessions.create', {
+          profileId: profile.id,
+        });
+        setSessions((current) => [session, ...current]);
+        setSessionId(session.id);
+        setMessages([]);
+        setStoredPending([]);
+        setLive(null);
+        setOutbox(null);
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [profile, activeWorkspaceId, selectWorkspace],
+  );
+
+  /*
+   * Filing and naming replace the one entry rather than reloading the list.
+   * Neither is activity, so the store leaves `updatedAt` alone — and a reload
+   * would only re-derive the order the rail already has.
+   */
+  const moveSession = useCallback(
+    async (sessionId: string, workspaceId: string | null): Promise<void> => {
+      if (profile === undefined) {
+        return;
+      }
+      try {
+        const {session} = await window.marimo.call('sessions.move', {
+          profileId: profile.id,
+          sessionId,
+          workspaceId,
+        });
+        setSessions((current) =>
+          current.map((entry) => (entry.id === session.id ? session : entry)),
+        );
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [profile],
+  );
+
+  const renameSession = useCallback(
+    async (sessionId: string, title: string): Promise<void> => {
+      if (profile === undefined) {
+        return;
+      }
+      try {
+        const {session} = await window.marimo.call('sessions.rename', {
+          profileId: profile.id,
+          sessionId,
+          title,
+        });
+        setSessions((current) =>
+          current.map((entry) => (entry.id === session.id ? session : entry)),
+        );
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [profile],
+  );
+
+  /**
+   * Deletes a conversation, and lands somewhere sensible.
+   *
+   * The list is re-read rather than filtered locally, because the question the
+   * fallback answers is "what is left, newest first" — and the copy this window
+   * holds is not the authority on that the moment anything else has written.
+   * Deleting the last conversation starts a fresh one, which is what the window
+   * opened with.
+   */
+  const removeSession = useCallback(
+    async (sessionId: string): Promise<void> => {
+      if (profile === undefined) {
+        return;
+      }
+      try {
+        await window.marimo.call('sessions.delete', {profileId: profile.id, sessionId});
+        const {sessions: remaining} = await window.marimo.call('sessions.list', {
+          profileId: profile.id,
+        });
+        setSessions(remaining);
+        if (sessionId !== openSession.current) {
+          return;
+        }
+        const next = remaining[0];
+        setMessages([]);
+        setStoredPending([]);
+        setLive(null);
+        setOutbox(null);
+        if (next === undefined) {
+          await newSession();
+          return;
+        }
+        setSessionId(next.id);
+        await loadTranscript(profile.id, next.id);
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [profile, loadTranscript, newSession],
+  );
 
   const pending = useMemo(() => storedPending, [storedPending]);
+
+  const activeFolder = useMemo(
+    () =>
+      folderForSession({
+        workspaces,
+        sessions,
+        sessionId,
+        activeWorkspaceId,
+      }),
+    [workspaces, sessions, sessionId, activeWorkspaceId],
+  );
 
   /*
    * Waiting, from the moment the message is sent. `live` alone would leave the
@@ -595,5 +837,16 @@ export function useAgent(): AgentController {
     dismissError: () => {
       setError(null);
     },
+    workspaces,
+    activeWorkspaceId,
+    activeFolder,
+    loadWorkspace,
+    selectWorkspace,
+    renameWorkspace,
+    removeWorkspace,
+    openWorkspace,
+    moveSession,
+    renameSession,
+    removeSession,
   };
 }

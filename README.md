@@ -18,7 +18,7 @@ whether or not the app is open.
 
 | | |
 |---|---|
-| ✅ | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a conversation rail, light and dark following the OS or chosen |
+| ✅ | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a workspace rail with the conversations filed under the folder they work in, light and dark following the OS or chosen |
 | ✅ | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming provider, 5 backends, ~30 tools, skills, `memory.md`, JSONL conversations |
 | ✅ | Approvals that survive a restart, because a pending call is derived from the stored conversation rather than held in memory |
 | ✅ | MCP connectors: add one by pasting a command, test it before saving, and choose whether to trust it — untrusted servers ask before every call |
@@ -113,6 +113,29 @@ strictly so it can exit non-zero, which is the only signal a timer gets. And the
 write path refuses a file from a newer build, or moves a corrupt one aside,
 rather than storing an empty document over it.
 
+### A conversation is filed under the folder it works in
+
+Workspaces are folders, they belong to the install rather than to an agent — two
+agents asked about the same project work in the same one — and the rail is where
+they are managed: load one, rename it, open it in your file manager, forget it.
+The folder is what an agent's file tools and shell are confined to, and
+`memory.md` travels with it in `<folder>/.marimo/<agent>/`, so a project carries
+its own remembered facts.
+
+The folder a turn runs in is resolved **from the conversation**, at the moment
+the turn starts, rather than from whichever folder the rail has current. That is
+not a detail: opening a chat is a read, and a read that moved the working folder
+would abort an answer that is still streaming — so a turn that began in one
+project finishes there even if the user has since clicked around. The current
+folder is only what a *new* chat is filed under, and the fallback for a
+conversation whose folder has been forgotten.
+
+Forgetting a folder only forgets it. The directory, everything in it and every
+conversation file are untouched, and the chats filed under it stay reachable
+under "Other chats" until they are moved somewhere else. Conversations the app
+started rather than the user — a Discord mention — are listed under "Social"
+instead of inside a folder that had nothing to do with them.
+
 ### The companion shares the conversation, not the manner
 
 The floating moss ball is not a second agent. It reads and writes the same
@@ -153,7 +176,8 @@ how development, the tests and the smoke check keep their state out of yours.
 ```
 secrets/                one file per secret, encrypted or plainly opted out
 sessions/               one JSONL file per conversation, plus an index
-profiles.json           the agents: identity, workspace, capabilities
+profiles.json           the agents: identity and capabilities
+workspaces.json         the folders every agent can work in, and the current one
 jobs.json               scheduled jobs and how their last run went
 settings.json           preferences, providers, connectors
 skills.json             skills you wrote

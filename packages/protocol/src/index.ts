@@ -803,17 +803,42 @@ export type StoredSettings = z.infer<typeof storedSettingsSchema>;
 /* -------------------------------------------------------------------------- */
 
 /**
- * A folder the agent may work in. `name` is the user's label for it; `path` is
+ * A folder an agent may work in. `name` is the user's label for it; `path` is
  * the real directory, and it is the confinement root for every file tool and for
  * shell commands.
+ *
+ * Belongs to the install rather than to one agent: two agents asked about the
+ * same project work in the same folder, and the folder is a place on the machine
+ * rather than a fact about who is talking.
  */
 export const workspaceSchema = z.object({
   id: z.string().min(1),
   // Trimmed: a blank label would be persisted, fail the schema on the next read,
-  // and take the whole profile down with it.
+  // and take the whole document down with it.
   name: z.string().trim().min(1),
   path: z.string().min(1),
 });
+
+/**
+ * The folders this install knows about, and which one is current.
+ *
+ * One document rather than a field on each profile, and it is deliberately its
+ * own file rather than a corner of `settings.json`: it is user data with a write
+ * path of its own, and a document the app rewrites when somebody loads a folder
+ * should not share a file with the one holding their API-key configuration.
+ *
+ * `activeWorkspaceId` is the folder a *new* conversation is filed under, and the
+ * fallback for a conversation whose folder has been forgotten. It is not what
+ * decides where a turn runs: a conversation remembers its own folder, which is
+ * what lets the rail be browsed while an answer is streaming.
+ */
+export const workspacesFileSchema = z.object({
+  version: z.literal(1),
+  workspaces: z.array(workspaceSchema),
+  activeWorkspaceId: z.string().nullable(),
+});
+
+export type WorkspacesFile = z.infer<typeof workspacesFileSchema>;
 
 /**
  * Who a brand-new agent is, until the user says otherwise.
@@ -828,18 +853,20 @@ export const DEFAULT_AGENT_IDENTITY =
   "You are Marimo, a helpful and useful AI assistant - the user's own personal assistant. You are talking to one person, on their own machine, about their own work.";
 
 /**
- * An agent: its identity (the system prompt), the folders it knows about, and
- * the tools and skills it is allowed to use. Switching profile is what makes the
- * app feel like a different agent, so each one also owns its conversations.
+ * An agent: its identity (the system prompt) and the tools and skills it is
+ * allowed to use. Switching profile is what makes the app feel like a different
+ * agent, so each one also owns its conversations.
+ *
+ * The folders it works in are **not** here. They used to be, one list per
+ * profile, and that made two agents unable to share a project and made the rail
+ * impossible to read while the active agent was changing. They live in
+ * `workspacesFileSchema` now, for the whole install.
  */
 export const agentProfileSchema = z.object({
   id: z.string().min(1),
   name: z.string().trim().min(1),
   /** The system prompt, presented to the user as the agent's identity. */
   identity: z.string(),
-  workspaces: z.array(workspaceSchema),
-  /** Folder this profile is currently working in; null until one is added. */
-  activeWorkspaceId: z.string().nullable(),
   /** Tool names this profile may use, from `profiles.catalog`. */
   enabledTools: z.array(z.string()),
   /** Skill names this profile carries, from `profiles.catalog`. */
@@ -862,6 +889,18 @@ export interface CatalogEntry {
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type AgentProfile = z.infer<typeof agentProfileSchema>;
 export type ProfilePatch = z.infer<typeof profilePatchSchema>;
+
+/**
+ * The folder list as every workspace-shaped call answers with it.
+ *
+ * The whole list rather than the one that changed: the rail draws all of them,
+ * and a caller that had to merge a single entry into its own copy is a caller
+ * that can get the order or the active folder wrong.
+ */
+export interface WorkspaceState {
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+}
 
 /**
  * A skill the user created, rather than one the app ships.
@@ -947,8 +986,6 @@ export type PublicSettings = Settings & {
   availableModels: string[];
   profiles: AgentProfile[];
   activeProfileId: string;
-  /** Where an agent with no folder of its own would work. */
-  defaultWorkspace: string;
 };
 
 /* -------------------------------------------------------------------------- */
@@ -959,8 +996,8 @@ export type PublicSettings = Settings & {
  * Where a conversation came from, when it was not started at the keyboard.
  *
  * There is one source today and it is the reason the field exists: a Discord
- * mention runs a turn the user did not type, and the sidebar files those under
- * their own heading instead of under a folder. Where the files are and where the
+ * mention runs a turn the user did not type, and the rail files those under a
+ * "Social" heading instead of under a folder. Where the files are and where the
  * conversation came from are different questions, and a conversation that
  * arrives on its own should not be buried inside a folder that had nothing to do
  * with it.
@@ -990,9 +1027,11 @@ export interface SessionSummary {
    * Folder this conversation was started in, recorded once when it is created.
    * The sidebar nests a conversation under the workspace it belongs to.
    *
-   * Absent for conversations that predate workspaces, and deliberately left
-   * dangling when a folder is removed: such a chat is still listed, under
-   * "Other chats", rather than vanishing with the folder.
+   * It names a workspace in the install-wide `workspaces.json`, and it is what
+   * decides where a turn runs. Absent for conversations that predate
+   * workspaces, and deliberately left dangling when a folder is removed: such a
+   * chat is still listed, under "Other chats", rather than vanishing with the
+   * folder — and its next turn falls back to the active workspace.
    */
   workspaceId?: string;
   /**
@@ -1722,10 +1761,69 @@ export const agentCallSchemas = {
   /* The agents this install has. */
   'profiles.list': z.object({}),
 
+  /*
+   * The folders this install works in.
+   *
+   * Separate from `profiles.*` because the folders are not an agent's: every
+   * agent sees the same list, and switching agent must not move the rail.
+   */
+  'workspaces.list': z.object({}),
+  /*
+   * Loads a folder.
+   *
+   * With no `path` the main process opens the OS folder picker — a window cannot
+   * ask for one itself, and a path typed by hand is a typo away from confining
+   * the agent to somewhere nobody meant. A caller that already knows the folder
+   * (the smoke check, which cannot drive a native dialog) may name one, and it is
+   * accepted only if it is a directory that exists.
+   */
+  'workspaces.add': z.object({path: z.string().min(1).optional()}),
+  'workspaces.select': z.object({workspaceId: z.string().min(1)}),
+  'workspaces.rename': z.object({
+    workspaceId: z.string().min(1),
+    name: z.string().trim().min(1),
+  }),
+  /*
+   * Forgets a folder. Nothing on disk is touched, and the conversations filed
+   * under it are left pointing at an id that is no longer in the list — which is
+   * exactly how the rail renders "Other chats".
+   */
+  'workspaces.remove': z.object({workspaceId: z.string().min(1)}),
+  /*
+   * Opens the folder in whatever file manager the OS has.
+   *
+   * Named by id rather than by path, so the window can only ever ask for a
+   * directory that is already in the document.
+   */
+  'workspaces.open': z.object({workspaceId: z.string().min(1)}),
+
   /* Conversations. */
   'sessions.list': z.object({profileId: z.string().min(1).optional()}),
   'sessions.create': z.object({profileId: z.string().min(1)}),
   'sessions.get': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+  }),
+  /*
+   * Re-files a conversation, or unfiles it with `null`.
+   *
+   * The sidebar's filing rather than the agent's confinement: a conversation
+   * keeps the folder it was filed under, and moving it does not move the turn
+   * already running.
+   */
+  'sessions.move': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+    workspaceId: z.string().min(1).nullable(),
+  }),
+  /* Gives a conversation a name of its own, replacing the derived one. */
+  'sessions.rename': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+    title: z.string().trim().min(1),
+  }),
+  /* Deletes a conversation and the file behind it. */
+  'sessions.delete': z.object({
     profileId: z.string().min(1),
     sessionId: z.string().min(1),
   }),
@@ -1882,6 +1980,15 @@ export interface AgentCallResults {
     messages: TranscriptMessage[];
     pending: PendingGate[];
   };
+  'sessions.move': {session: SessionSummary};
+  'sessions.rename': {session: SessionSummary};
+  'sessions.delete': {deleted: boolean};
+  'workspaces.list': WorkspaceState;
+  'workspaces.add': WorkspaceState & {added: boolean};
+  'workspaces.select': WorkspaceState;
+  'workspaces.rename': WorkspaceState;
+  'workspaces.remove': WorkspaceState & {removed: boolean};
+  'workspaces.open': {opened: boolean};
   /** Accepted, not finished: the turn itself arrives on the event channel. */
   'chat.send': {accepted: boolean};
   'chat.approve': {accepted: boolean};

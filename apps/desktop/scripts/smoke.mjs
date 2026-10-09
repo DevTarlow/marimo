@@ -35,7 +35,7 @@
  * where `chrome-sandbox` cannot be setuid-root. It is opt-in because it is a
  * real reduction in isolation and must not be what a normal run quietly gets.
  */
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -139,6 +139,40 @@ async function main() {
 
     const {send, console: pageConsole} = await attach(socket);
 
+    /**
+     * An expression in the window, answered as a value.
+     *
+     * Every DOM assertion below is this, so that the checks read as what they
+     * are asking rather than as DevTools protocol plumbing.
+     */
+    const evaluate = async (expression) => {
+      const {result} = await send('Runtime.evaluate', {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+      });
+      return result?.value;
+    };
+
+    /**
+     * Reloads the window and waits for the *new* document.
+     *
+     * A reload is not instant, and the document being replaced answers every
+     * question just as well — so a marker set before it is what says which
+     * window is on screen. Without one, a check can pass against the window it
+     * was about to replace, which is exactly the state a stale bundle looks
+     * healthy in.
+     */
+    const reload = async () => {
+      await evaluate(`window.__smokeReload = true`);
+      await send('Page.reload', {});
+      await until('the window to come back', async () =>
+        (await evaluate(`window.__smokeReload === true`)) === false
+          ? true
+          : undefined,
+      );
+    };
+
     const probe = await until('the renderer to mount', async () => {
       const {result} = await send('Runtime.evaluate', {
         expression: PROBE,
@@ -187,6 +221,267 @@ async function main() {
       );
     } else {
       ok('the conversation was listed and read back');
+    }
+
+    /*
+     * The rail, end to end.
+     *
+     * Folders are the part of the window no unit test can prove: the shape
+     * travels schema → IPC → store → renderer, and a break anywhere along it
+     * looks like a folder that simply never appears. The chat's own id in its
+     * `…` menu is the other half, because that is what a bug report quotes.
+     *
+     * State is changed over the bridge and then read back from the DOM after a
+     * reload. A window cannot be asked to re-read without one, and reloading is
+     * what a second launch does anyway — so this is also the check that the two
+     * lists survive a restart.
+     */
+    const secondFolder = join(userData, 'second-folder');
+    await mkdir(secondFolder, {recursive: true});
+
+    const activeRowId = async () =>
+      await evaluate(`(() => {
+        const row = document.querySelector('.rail-row[data-active="true"]');
+        return row === null ? null : row.getAttribute('data-session-id');
+      })()`);
+
+    const chatId = await activeRowId();
+    if (typeof chatId !== 'string' || chatId.length === 0) {
+      fail('the rail does not list the open conversation under a folder');
+    } else {
+      ok(`the rail lists the open conversation (${chatId})`);
+    }
+
+    /*
+     * The menu, opened the way a person opens it — a click on the row's `…`,
+     * not a call to a handler.
+     */
+    await evaluate(
+      `document.querySelector('.rail-row[data-active="true"] .rail-row-menu')?.click()`,
+    );
+    const menu = await until('the conversation menu to open', async () =>
+      await evaluate(`(() => {
+        const menu = document.querySelector('.rail-menu');
+        if (menu === null) return undefined;
+        const id = menu.querySelector('.rail-menu-id code');
+        return JSON.stringify({
+          id: id === null ? null : id.textContent,
+          copy: [...menu.querySelectorAll('button')].some((button) =>
+            /copy/i.test(button.textContent ?? ''),
+          ),
+          actions: [...menu.querySelectorAll('.rail-menu-item')].map(
+            (item) => item.textContent ?? '',
+          ),
+        });
+      })()`),
+    );
+    const shown = JSON.parse(menu);
+    if (shown.id !== chatId) {
+      fail(`the menu shows id ${shown.id} for a row filed as ${chatId}`);
+    } else if (
+      shown.copy !== true ||
+      !shown.actions.includes('Rename…') ||
+      !shown.actions.includes('Delete chat…')
+    ) {
+      fail(`the conversation menu is missing actions: ${menu}`);
+    } else {
+      ok('the conversation menu shows its id, a copy button, rename and delete');
+    }
+    // Escape closes it, and the check is that the listener is real rather than
+    // that React re-rendered.
+    await evaluate(
+      `document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
+    );
+    if ((await evaluate(`document.querySelector('.rail-menu') === null`)) !== true) {
+      fail('Escape did not close the conversation menu');
+    } else {
+      ok('Escape closes the conversation menu');
+    }
+
+    /*
+     * Settle the window before moving anything.
+     *
+     * A conversation with no messages is listed only while it is the one on
+     * screen, and the chat the window opened with is not necessarily the newest —
+     * the probe created one too. Reloading makes boot land on the newest, so the
+     * chat this check files is one that will still be visible afterwards.
+     */
+    await reload();
+    const openId = await until('the rail to settle on the newest chat', async () => {
+      const id = await activeRowId();
+      return typeof id === 'string' && id.length > 0 ? id : undefined;
+    });
+
+    /*
+     * Load a folder, rename it, file the open chat under it and rename the chat
+     * — every one of those over the same bridge the window uses.
+     */
+    const changed = JSON.parse(
+      await evaluate(`(async () => {
+        const added = await window.marimo.call('workspaces.add', {
+          path: ${JSON.stringify(secondFolder)},
+        });
+        const folder = added.workspaces.find(
+          (entry) => entry.path === ${JSON.stringify(secondFolder)},
+        );
+        const renamed = await window.marimo.call('workspaces.rename', {
+          workspaceId: folder.id,
+          name: 'Smoke folder',
+        });
+        const {profiles, activeProfileId} = await window.marimo.call('profiles.list', {});
+        const moved = await window.marimo.call('sessions.move', {
+          profileId: activeProfileId,
+          sessionId: ${JSON.stringify(openId)},
+          workspaceId: folder.id,
+        });
+        const {session: retitled} = await window.marimo.call('sessions.rename', {
+          profileId: activeProfileId,
+          sessionId: ${JSON.stringify(openId)},
+          title: 'Smoke chat',
+        });
+        return JSON.stringify({
+          added: added.added,
+          folderId: folder.id,
+          named: renamed.workspaces.find((entry) => entry.id === folder.id)?.name,
+          filed: moved.session.workspaceId,
+          title: retitled.title,
+          profileCount: profiles.length,
+        });
+      })()`),
+    );
+    if (
+      changed.added !== true ||
+      changed.named !== 'Smoke folder' ||
+      changed.filed !== changed.folderId ||
+      changed.title !== 'Smoke chat'
+    ) {
+      fail(`filing over the bridge did not take: ${JSON.stringify(changed)}`);
+    } else {
+      ok('a folder was loaded, renamed, and the chat filed under it');
+    }
+
+    // The reload is the restart: both lists are read again from disk. The wait
+    // is for the *chat*, not for the folders: boot reads the folders first, so a
+    // poll can see two of them a moment before the conversations arrive under
+    // them — which is a window, not a failure.
+    await reload();
+    const rail = JSON.parse(
+      await until('the rail to show the filed chat', async () => {
+        const state = await evaluate(`(() => {
+          const read = (row) => ({
+            id: row.getAttribute('data-session-id'),
+            title: row.querySelector('.rail-row-title')?.textContent ?? '',
+          });
+          const folders = [...document.querySelectorAll('.rail-workspace')];
+          if (folders.length < 2) return undefined;
+          const group = (label) => {
+            const found = [...document.querySelectorAll('.rail-group')].find(
+              (entry) => entry.querySelector('.rail-group-head')?.textContent === label,
+            );
+            return found === undefined
+              ? []
+              : [...found.querySelectorAll('.rail-row')].map(read);
+          };
+          return JSON.stringify({
+            folders: folders.map((folder) => ({
+              id: folder.getAttribute('data-workspace-id'),
+              name: folder.querySelector('.rail-workspace-label')?.textContent ?? '',
+              path: folder.querySelector('.rail-workspace-path')?.textContent ?? '',
+              chats: [...folder.querySelectorAll('.rail-row')].map(read),
+            })),
+            social: group('Social'),
+            otherChats: group('Other chats'),
+          });
+        })()`);
+        if (state === undefined) {
+          return undefined;
+        }
+        const parsed = JSON.parse(state);
+        const filed = parsed.folders.some((folder) =>
+          folder.chats.some((row) => row.id === openId),
+        );
+        return filed ? state : undefined;
+      }),
+    );
+    const loaded = rail.folders.find((folder) => folder.id === changed.folderId);
+    if (loaded === undefined) {
+      fail('the folder that was loaded is not in the rail after a reload');
+    } else if (
+      loaded.name !== 'Smoke folder' ||
+      !loaded.chats.some((row) => row.id === openId)
+    ) {
+      fail(`the chat was not filed under the loaded folder: ${JSON.stringify(loaded)}`);
+    } else if (
+      loaded.chats.find((row) => row.id === openId)?.title !== 'Smoke chat'
+    ) {
+      fail('the renamed chat did not keep its name in the rail');
+    } else {
+      ok('the loaded folder and the filed chat survive a reload');
+    }
+
+    /*
+     * Forgetting a folder. The chat has to move to "Other chats" rather than
+     * vanish with it, and the directory has to be exactly where it was: "remove
+     * from list" is what the menu promised.
+     */
+    const removed = JSON.parse(
+      await evaluate(`(async () => {
+        const state = await window.marimo.call('workspaces.remove', {
+          workspaceId: ${JSON.stringify(changed.folderId)},
+        });
+        return JSON.stringify({
+          removed: state.removed,
+          stillListed: state.workspaces.some(
+            (entry) => entry.id === ${JSON.stringify(changed.folderId)},
+          ),
+        });
+      })()`),
+    );
+    if (removed.removed !== true || removed.stillListed !== false) {
+      fail(`removing the folder did not take: ${JSON.stringify(removed)}`);
+    }
+
+    await reload();
+    const after = JSON.parse(
+      await until('the chat to move to Other chats', async () => {
+        const state = await evaluate(`(() => {
+          const folders = [...document.querySelectorAll('.rail-workspace')];
+          if (folders.some((folder) =>
+            folder.getAttribute('data-workspace-id') === ${JSON.stringify(changed.folderId)})) {
+            return undefined;
+          }
+          return JSON.stringify({
+            folderIds: folders.map((folder) => folder.getAttribute('data-workspace-id')),
+            otherChats: [...document.querySelectorAll('.rail-group')].flatMap((group) =>
+              group.querySelector('.rail-group-head')?.textContent === 'Other chats'
+                ? [...group.querySelectorAll('.rail-row')].map((row) =>
+                    row.getAttribute('data-session-id'),
+                  )
+                : [],
+            ),
+          });
+        })()`);
+        if (state === undefined) {
+          return undefined;
+        }
+        // Both halves of the end state: the folder is gone *and* the chat that
+        // was filed under it is reachable elsewhere. Waiting only for the first
+        // would pass during the window before boot has read the conversations.
+        return JSON.parse(state).otherChats.includes(openId) ? state : undefined;
+      }),
+    );
+    if (after.folderIds.includes(changed.folderId)) {
+      fail('the removed folder is still in the rail');
+    } else if (!after.otherChats.includes(openId)) {
+      fail('the chat filed under the removed folder did not move to Other chats');
+    } else {
+      ok('a forgotten folder takes its chats to Other chats');
+    }
+
+    if ((await stat(secondFolder).catch(() => undefined)) === undefined) {
+      fail('removing a folder from the list deleted the directory');
+    } else {
+      ok('the folder itself was left exactly where it was');
     }
 
     if (probe.theme !== 'dark' && probe.theme !== 'light') {

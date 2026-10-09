@@ -74,7 +74,6 @@ describe('a settings payload', () => {
       availableModels: ['deepseek-chat'],
       profiles: [],
       activeProfileId: 'p1',
-      defaultWorkspace: '/home/somebody',
     };
   }
 

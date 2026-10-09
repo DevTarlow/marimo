@@ -46,7 +46,15 @@ export interface ResolveAgentOptions {
   readSecret: (providerId: ProviderId) => Promise<SecretRead>;
   /** The skills this profile carries, already filtered to the ones it enabled. */
   skills?: readonly StoredSkillForPrompt[];
-  /** Overrides the profile's active workspace, for a caller that knows better. */
+  /**
+   * The folder this turn runs in.
+   *
+   * Supplied by the caller rather than read off the profile, because the answer
+   * is a fact about the *conversation*: a chat is filed under a folder in the
+   * install's workspace document, and the caller is the only one that knows
+   * which conversation this turn belongs to. Absent means there is no folder to
+   * work in at all, which is a refusal rather than a default.
+   */
   workspaceRoot?: string;
 }
 
@@ -55,13 +63,13 @@ export async function resolveAgentConfig(
 ): Promise<ResolvedAgent> {
   const {settings, profile} = options;
 
-  const workspaceRoot = options.workspaceRoot ?? activeWorkspaceRoot(profile);
+  const workspaceRoot = options.workspaceRoot;
   if (workspaceRoot === undefined) {
     return {
       ok: false,
       problem:
-        `"${profile.name}" has no folder yet. Add one in Settings so its file ` +
-        'tools have somewhere to work.',
+        `"${profile.name}" has no folder to work in. Use “Load folder…” in the ` +
+        'sidebar so its file tools have somewhere to work.',
     };
   }
 
@@ -113,22 +121,6 @@ export async function resolveAgentConfig(
         : {}),
     },
   };
-}
-
-/**
- * The folder a profile works in, or undefined when it has none.
- *
- * A profile with no workspace is legitimate — it is what a fresh install has
- * before anybody picks a folder — so this answers rather than throws, and the
- * caller turns it into that sentence above.
- */
-export function activeWorkspaceRoot(profile: AgentProfile): string | undefined {
-  if (profile.activeWorkspaceId === null) {
-    return undefined;
-  }
-  return profile.workspaces.find(
-    (workspace) => workspace.id === profile.activeWorkspaceId,
-  )?.path;
 }
 
 function toAgentSkill(skill: StoredSkillForPrompt): Skill {

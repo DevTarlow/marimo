@@ -10,8 +10,8 @@
  * The successful path needs a provider, so it lives with the agent package's
  * tests — this file is about the wiring around it.
  */
-import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {dirname, join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
@@ -23,10 +23,26 @@ import {
 
 import {resolveAppPaths} from '../paths.js';
 import type {AppPaths} from '../paths.js';
+import {MemoryProposalStore} from '../memory-proposals.js';
 import {ProfileStore} from '../profiles.js';
+import {WorkspaceStore} from '../workspaces.js';
 import {AgentRuntime} from './runtime.js';
 import type {AgentRuntimeOptions} from './runtime.js';
 import type {SecretRead} from '../secrets.js';
+
+/**
+ * Gives the install a folder to work in.
+ *
+ * Seeded at the test's own directory rather than the real one: `resolveAppPaths`
+ * derives `defaultWorkspace` from `homedir()`, and a test that let a turn loose
+ * in the tester's home would be doing something nobody asked for.
+ */
+async function seedWorkspaces(paths: AppPaths, root: string): Promise<void> {
+  await new WorkspaceStore({
+    file: paths.workspaces,
+    defaultWorkspaceRoot: root,
+  }).load();
+}
 
 describe('AgentRuntime', () => {
   let dir: string;
@@ -36,20 +52,18 @@ describe('AgentRuntime', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(process.cwd(), '.marimo-runtime-'));
     paths = resolveAppPaths(dir);
+    await seedWorkspaces(paths, dir);
 
-    // Set the install up the way the app would: a default profile, with a
-    // folder chosen, and nothing else turned on.
+    // Set the install up the way the app would: a default profile, with no
+    // capabilities and no folders of its own.
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultWorkspaceRoot: dir,
       defaultIdentity: '',
       defaultTools: [],
       defaultSkills: [],
     });
     await profiles.load();
-    const active = await profiles.activeProfile();
-    await profiles.addWorkspace(dir);
-    profileId = active.id;
+    profileId = (await profiles.activeProfile()).id;
   });
 
   afterEach(async () => {
@@ -308,9 +322,9 @@ describe('the catalogue', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(process.cwd(), '.marimo-catalog-'));
     paths = resolveAppPaths(dir);
+    await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultWorkspaceRoot: dir,
       defaultIdentity: '',
       defaultTools: [],
       defaultSkills: [],
@@ -331,7 +345,7 @@ describe('the catalogue', () => {
   }
 
   it('lists the tools by the name and wording the model is given', async () => {
-    const catalog = await runtime().catalog(profileId);
+    const catalog = await runtime().catalog();
     const names = catalog.tools.map((tool) => tool.name);
 
     expect(names).toContain('read_file');
@@ -349,14 +363,24 @@ describe('the catalogue', () => {
    * in the catalogue that no tool answers to.
    */
   it('lists tools the profile has not been granted', async () => {
-    const catalog = await runtime().catalog(profileId);
+    const catalog = await runtime().catalog();
     expect(catalog.tools.map((tool) => tool.name)).toContain('run_shell');
   });
 
-  it('answers for whichever agent is active', async () => {
-    const result = await runtime().catalogForActive();
-    expect(result.profileId).toBe(profileId);
-    expect(result.catalog.tools.length).toBeGreaterThan(0);
+  /*
+   * The catalogue is not per profile: the tools are the install's, and what
+   * differs between agents is the grant. A catalogue that took a profile id was
+   * one that varied only by the folder the agent happened to name.
+   */
+  it('is the same catalogue for every agent', async () => {
+    const instance = runtime();
+    const created = await instance.createProfile('Researcher');
+    const forResearcher = await instance.catalog();
+    await instance.selectProfile(profileId);
+    expect((await instance.catalog()).tools.map((tool) => tool.name)).toEqual(
+      forResearcher.tools.map((tool) => tool.name),
+    );
+    expect(created.id).not.toBe(profileId);
   });
 });
 
@@ -368,9 +392,9 @@ describe('changing an agent', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(process.cwd(), '.marimo-grant-'));
     paths = resolveAppPaths(dir);
+    await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultWorkspaceRoot: dir,
       defaultIdentity: '',
       defaultTools: ['read_file'],
       defaultSkills: [],
@@ -475,7 +499,6 @@ describe('the identity a new agent gets', () => {
   it('leaves an identity the user already saved alone', async () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultWorkspaceRoot: dir,
       defaultIdentity: '',
       defaultTools: [],
       defaultSkills: [],
@@ -531,9 +554,9 @@ describe('reading a conversation without a working provider', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(process.cwd(), '.marimo-read-'));
     paths = resolveAppPaths(dir);
+    await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultWorkspaceRoot: dir,
       defaultIdentity: '',
       defaultTools: [],
       defaultSkills: [],
@@ -604,5 +627,245 @@ describe('reading a conversation without a working provider', () => {
     );
     expect(messages).toEqual([]);
     expect(pending).toEqual([]);
+  });
+});
+
+/*
+ * The folders, and the rule the whole feature rests on: a turn runs in the
+ * folder its conversation is filed under.
+ *
+ * This is the seam that makes browsing the rail safe. The folder is resolved
+ * from the conversation at the moment a turn starts, so opening another chat
+ * cannot move the one that is streaming — and the profile's current folder is
+ * only the fallback, for a conversation with none or one whose folder has since
+ * been forgotten.
+ */
+describe('folders and filing', () => {
+  let dir: string;
+  let paths: AppPaths;
+  let profileId: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-filing-'));
+    paths = resolveAppPaths(dir);
+    const profiles = new ProfileStore({
+      file: paths.profiles,
+      defaultIdentity: '',
+      defaultTools: [],
+      defaultSkills: [],
+    });
+    await profiles.load();
+    profileId = (await profiles.activeProfile()).id;
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function runtime(
+    readSecret: AgentRuntimeOptions['readSecret'] = async () => ({
+      state: 'absent',
+    }),
+  ): AgentRuntime {
+    return new AgentRuntime({paths, readSecret});
+  }
+
+  /** A key that works, so a host can be built and its memory read. */
+  const withKey = async (): Promise<SecretRead> => ({
+    state: 'present',
+    value: 'sk-test',
+  });
+
+  /** Writes what an agent would have remembered in one folder. */
+  async function remember(folder: string, line: string): Promise<void> {
+    const memory = resolveMemoryFile(join(dir, folder), profileId);
+    await mkdir(dirname(memory), {recursive: true});
+    await writeFile(memory, `${line}\n`, 'utf8');
+  }
+
+  const folderId = (
+    state: {workspaces: Array<{id: string; path: string}>},
+    folder: string,
+  ): string =>
+    state.workspaces.find((entry) => entry.path === join(dir, folder))?.id ??
+    '';
+
+  it('seeds one folder at the default root', async () => {
+    const state = await runtime().workspaces();
+    expect(state.workspaces).toHaveLength(1);
+    expect(state.workspaces[0]?.path).toBe(paths.defaultWorkspace);
+    expect(state.activeWorkspaceId).toBe(state.workspaces[0]?.id);
+  });
+
+  it('adds, selects, renames and removes, answering with the whole list', async () => {
+    const agent = runtime();
+    const first = await agent.addWorkspace(join(dir, 'alpha'));
+    const alpha = folderId(first, 'alpha');
+    expect(first.workspaces.map((entry) => entry.name)).toContain('alpha');
+    // Loading a folder makes it the one a new conversation is filed under.
+    expect(first.activeWorkspaceId).toBe(alpha);
+
+    const renamed = await agent.renameWorkspace(alpha, 'Client work');
+    expect(renamed.workspaces.find((entry) => entry.id === alpha)?.name).toBe(
+      'Client work',
+    );
+
+    const second = await agent.addWorkspace(join(dir, 'beta'));
+    expect(second.activeWorkspaceId).not.toBe(alpha);
+    expect((await agent.selectWorkspace(alpha)).activeWorkspaceId).toBe(alpha);
+
+    const removed = await agent.removeWorkspace(alpha);
+    expect(removed.workspaces.map((entry) => entry.id)).not.toContain(alpha);
+    expect(await agent.workspaceById(alpha)).toBeUndefined();
+  });
+
+  /*
+   * The upgrade. A file written before folders were install-wide holds the only
+   * copy of them, and the runtime is what hands it over — then drops the fields
+   * from the file they came from.
+   */
+  it('adopts the folders a profiles file carried', async () => {
+    await writeFile(
+      paths.profiles,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: 'legacy-agent',
+        profiles: [
+          {
+            id: 'legacy-agent',
+            name: 'Agent',
+            identity: 'You are an agent.',
+            workspaces: [
+              {id: 'legacy-ws', name: 'legacy', path: join(dir, 'legacy')},
+            ],
+            activeWorkspaceId: 'legacy-ws',
+            enabledTools: [],
+            enabledSkills: [],
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const state = await runtime().workspaces();
+    expect(state.workspaces).toEqual([
+      {id: 'legacy-ws', name: 'legacy', path: join(dir, 'legacy')},
+    ]);
+    expect(state.activeWorkspaceId).toBe('legacy-ws');
+
+    const raw = JSON.parse(await readFile(paths.profiles, 'utf8')) as {
+      profiles: Array<{workspaces?: unknown; activeWorkspaceId?: unknown}>;
+    };
+    expect(raw.profiles[0]?.workspaces).toBeUndefined();
+    expect(raw.profiles[0]?.activeWorkspaceId).toBeUndefined();
+  });
+
+  it('runs a turn in the folder its conversation is filed under', async () => {
+    await remember('alpha', '- the parser lives in alpha');
+    await remember('beta', '- the renderer lives in beta');
+
+    const agent = runtime(withKey);
+    const alpha = folderId(
+      await agent.addWorkspace(join(dir, 'alpha')),
+      'alpha',
+    );
+    const session = await agent.createSession(profileId);
+    // Another folder becomes current; the conversation keeps its own.
+    await agent.addWorkspace(join(dir, 'beta'));
+
+    const filed = await agent.host(profileId, session?.id);
+    expect(filed.ok).toBe(true);
+    if (filed.ok) {
+      expect(await filed.host.memoryText()).toContain('alpha');
+    }
+
+    // Asked about no conversation in particular, the agent is on the current
+    // folder — which is what the memory readout in Settings reports.
+    const current = await agent.host(profileId);
+    if (current.ok) {
+      expect(await current.host.memoryText()).toContain('beta');
+    }
+
+    // Unfiled, it falls back to the current folder rather than to nothing.
+    await agent.setSessionWorkspace(profileId, session?.id ?? '', null);
+    const loose = await agent.host(profileId, session?.id);
+    if (loose.ok) {
+      expect(await loose.host.memoryText()).toContain('beta');
+    }
+
+    // And a folder that has been forgotten falls back the same way.
+    await agent.setSessionWorkspace(profileId, session?.id ?? '', alpha);
+    await agent.removeWorkspace(alpha);
+    const forgotten = await agent.host(profileId, session?.id);
+    if (forgotten.ok) {
+      expect(await forgotten.host.memoryText()).toContain('beta');
+    }
+  });
+
+  it('files, renames and deletes one conversation, refusing another agent', async () => {
+    const agent = runtime();
+    const session = await agent.createSession(profileId);
+    const id = session?.id ?? '';
+
+    const alpha = folderId(
+      await agent.addWorkspace(join(dir, 'alpha')),
+      'alpha',
+    );
+    expect(
+      (await agent.setSessionWorkspace(profileId, id, alpha)).workspaceId,
+    ).toBe(alpha);
+    expect(
+      (await agent.setSessionWorkspace(profileId, id, null)).workspaceId,
+    ).toBeUndefined();
+
+    // A stale window cannot touch another agent's conversation by naming it.
+    await expect(
+      agent.setSessionWorkspace('someone-else', id, alpha),
+    ).rejects.toThrow(/Unknown session/u);
+
+    expect(
+      (await agent.renameSession(profileId, id, 'Release prep')).title,
+    ).toBe('Release prep');
+
+    await agent.deleteSession(profileId, id);
+    expect(
+      (await agent.listSessions(profileId)).map((entry) => entry.id),
+    ).not.toContain(id);
+  });
+
+  /*
+   * An accepted fact has to land in the project it came from, not in whichever
+   * folder happens to be current when the user presses Accept — which can be a
+   * day later, after opening something else entirely.
+   */
+  it('writes an accepted fact into the folder it came from', async () => {
+    const agent = runtime(withKey);
+    await mkdir(join(dir, 'alpha'), {recursive: true});
+    await agent.addWorkspace(join(dir, 'alpha'));
+    const session = await agent.createSession(profileId);
+    // The current folder moves on before the user answers.
+    await agent.addWorkspace(join(dir, 'beta'));
+
+    const proposals = new MemoryProposalStore({file: paths.memoryProposals});
+    const recorded = await proposals.record(session?.id ?? '', 1, [
+      {
+        sessionId: session?.id ?? null,
+        profileId,
+        section: 'Project',
+        text: 'The parser lives in alpha.',
+        reason: 'Said so in that conversation.',
+      },
+    ]);
+    const proposal = recorded.proposals[0];
+
+    const result = await agent.resolveMemoryProposal(proposal?.id ?? '', true);
+    expect(result.ok).toBe(true);
+    expect(
+      await readFile(resolveMemoryFile(join(dir, 'alpha'), profileId), 'utf8'),
+    ).toContain('The parser lives in alpha.');
+    // And nothing was written into the folder that merely happens to be current.
+    await expect(
+      readFile(resolveMemoryFile(join(dir, 'beta'), profileId), 'utf8'),
+    ).rejects.toThrow();
   });
 });

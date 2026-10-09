@@ -325,6 +325,19 @@ export class AgentHost {
   }
 
   /**
+   * The folder a conversation is filed under, or `undefined` when it is unfiled
+   * — either because it predates folders, or because the folder it named has
+   * since been forgotten.
+   *
+   * A read of the index and nothing more: it is what decides which folder a turn
+   * runs in, and the caller resolves the id to a path, because the folders are
+   * the whole install's business rather than one host's.
+   */
+  async sessionWorkspaceId(sessionId: string): Promise<string | undefined> {
+    return (await this.sessionService.getIndexEntry(sessionId))?.workspaceId;
+  }
+
+  /**
    * Claims conversations that predate profiles, so an upgrade does not strand a
    * user's history outside every profile.
    */

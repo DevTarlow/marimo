@@ -1,15 +1,19 @@
 /**
  * Agent profiles.
  *
- * A profile is one agent: an identity (its system prompt), the folders it knows
- * about, and the tools and skills it may use. Switching profile is the app's
- * "use a different agent" action, so the profile also owns which conversations
- * are visible — sessions are tagged with the profile that created them.
+ * A profile is one agent: an identity (its system prompt) and the tools and
+ * skills it may use. Switching profile is the app's "use a different agent"
+ * action, so the profile also owns which conversations are visible — sessions
+ * are tagged with the profile that created them.
+ *
+ * The folders are deliberately *not* here. They used to be, one list per agent,
+ * and that made two agents unable to share a project; they live in
+ * `workspaces.ts` now, once for the install.
  *
  * Stored as one small JSON file next to `settings.json`, written atomically and
  * serialized through a queue. It is deliberately *not* stored inside a
- * workspace: a profile owns many folders, and its identity has to survive those
- * folders being added, renamed, or removed.
+ * workspace: an agent's identity has to survive its folders being added,
+ * renamed, or removed.
  *
  * Memory is the exception and stays where the user asked for it:
  * `<workspaceRoot>/.marimo/<profileId>/memory.md`. Deleting a profile therefore
@@ -17,7 +21,7 @@
  */
 import {randomUUID} from 'node:crypto';
 import {mkdir, rename, writeFile} from 'node:fs/promises';
-import {basename, dirname, resolve} from 'node:path';
+import {dirname} from 'node:path';
 
 import {
   assertWritable,
@@ -25,7 +29,11 @@ import {
   readVersionedDocument,
 } from '@marimo/agent';
 
-import {agentProfileSchema, profilePatchSchema} from '@marimo/protocol';
+import {
+  agentProfileSchema,
+  profilePatchSchema,
+  workspaceSchema,
+} from '@marimo/protocol';
 import type {AgentProfile, ProfilePatch, Workspace} from '@marimo/protocol';
 
 /** Legacy values from `settings.json`, from before profiles existed. */
@@ -36,8 +44,6 @@ export interface ProfileSeed {
 
 export interface ProfileStoreOptions {
   file: string;
-  /** Used when the app has no workspace to point at yet. */
-  defaultWorkspaceRoot: string;
   /** Identity a brand-new profile starts with. */
   defaultIdentity: string;
   /** Tool names a brand-new profile starts with. */
@@ -51,9 +57,26 @@ export interface ProfileSnapshot {
   activeProfileId: string;
 }
 
+/**
+ * The folders one profile carried, from before they were an install-wide
+ * document.
+ *
+ * Kept beside the snapshot rather than on `AgentProfile` because it is another
+ * document's data: it is handed to the workspaces store, and it stays on disk
+ * until that store has written it. A profile edit in between therefore cannot
+ * drop it.
+ */
+export interface LegacyWorkspaces {
+  profileId: string;
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+}
+
 /** The on-disk shape: a snapshot plus a format version. */
 export interface ProfileFile extends ProfileSnapshot {
   version: 1;
+  /** Absent once there is nothing left to migrate. Never written as such. */
+  legacy?: LegacyWorkspaces[];
 }
 
 export class LastProfileError extends Error {
@@ -207,14 +230,6 @@ export class ProfileStore {
     return activeProfileOf(await this.load());
   }
 
-  /** The folder the active profile is working in, if it has one. */
-  async activeWorkspace(): Promise<Workspace | undefined> {
-    const profile = await this.activeProfile();
-    return profile.workspaces.find(
-      (entry) => entry.id === profile.activeWorkspaceId,
-    );
-  }
-
   /** Creates a profile and switches to it, so "New agent" is one click. */
   async create(name?: string): Promise<AgentProfile> {
     return await this.withLock(async () => {
@@ -225,8 +240,6 @@ export class ProfileStore {
         // a new one always gets a distinct label.
         name: uniqueName(file.profiles, name?.trim() || 'Agent'),
         identity: this.options.defaultIdentity,
-        workspaces: [],
-        activeWorkspaceId: null,
         enabledTools: [...this.options.defaultTools],
         enabledSkills: [...this.options.defaultSkills],
       };
@@ -297,125 +310,41 @@ export class ProfileStore {
   }
 
   /**
-   * Adds a folder to the active profile and makes it active. A path that is
-   * already listed is selected rather than duplicated, so adding the same folder
-   * twice is harmless.
+   * The folders a pre-workspaces file held, waiting to be adopted.
+   *
+   * Answers nothing once there is nothing to migrate, which is the answer on
+   * every install that has already been through it.
    */
-  async addWorkspace(path: string, name?: string): Promise<Workspace> {
-    return await this.withLock(async () => {
-      const file = await this.load();
-      const profile = activeProfileOf(file);
-      const absolute = resolve(path);
-      const existing = profile.workspaces.find(
-        (entry) => entry.path === absolute,
-      );
-      const workspace: Workspace = existing ?? {
-        id: randomUUID(),
-        name: name?.trim() || workspaceLabel(absolute),
-        path: absolute,
-      };
-      await this.activateWorkspace(file, profile, workspace);
-      return workspace;
-    });
+  async legacyWorkspaces(): Promise<LegacyWorkspaces[] | undefined> {
+    const file = await this.load();
+    return file.legacy === undefined || file.legacy.length === 0
+      ? undefined
+      : file.legacy;
   }
 
-  async renameWorkspace(workspaceId: string, name: string): Promise<Workspace> {
-    const trimmed = name.trim();
-    if (trimmed.length === 0) {
-      // Writing a blank label would persist a file its own schema rejects, and
-      // the next read would drop the whole profile with it.
-      throw new Error('A workspace name cannot be empty.');
-    }
-    return await this.withLock(async () => {
+  /**
+   * Drops the legacy fields from the file.
+   *
+   * Called only after the workspaces store has written them into its own
+   * document. Until then they are preserved on every write, which is what stops
+   * a profile edit during the upgrade from destroying the only copy.
+   */
+  async clearLegacy(): Promise<void> {
+    await this.withLock(async () => {
       const file = await this.load();
-      const profile = activeProfileOf(file);
-      const workspace = requireWorkspace(profile, workspaceId);
-      const renamed: Workspace = {...workspace, name: trimmed};
-      await this.writeFile(
-        replaceProfile(
-          {
-            ...profile,
-            workspaces: profile.workspaces.map((entry) =>
-              entry.id === workspaceId ? renamed : entry,
-            ),
-          },
-          file,
-        ),
-      );
-      return renamed;
+      if (file.legacy === undefined) {
+        return;
+      }
+      const {legacy: _dropped, ...rest} = file;
+      await this.writeFile({...rest, version: 1});
     });
-  }
-
-  /** Forgets a folder. Nothing on disk is touched. */
-  async removeWorkspace(workspaceId: string): Promise<void> {
-    return await this.withLock(async () => {
-      const file = await this.load();
-      const profile = activeProfileOf(file);
-      requireWorkspace(profile, workspaceId);
-      const remaining = profile.workspaces.filter(
-        (entry) => entry.id !== workspaceId,
-      );
-      await this.writeFile(
-        replaceProfile(
-          {
-            ...profile,
-            workspaces: remaining,
-            activeWorkspaceId:
-              profile.activeWorkspaceId === workspaceId
-                ? (remaining[0]?.id ?? null)
-                : profile.activeWorkspaceId,
-          },
-          file,
-        ),
-      );
-    });
-  }
-
-  async selectWorkspace(workspaceId: string): Promise<Workspace> {
-    return await this.withLock(async () => {
-      const file = await this.load();
-      const profile = activeProfileOf(file);
-      const workspace = requireWorkspace(profile, workspaceId);
-      await this.activateWorkspace(file, profile, workspace);
-      return workspace;
-    });
-  }
-
-  private async activateWorkspace(
-    file: ProfileFile,
-    profile: AgentProfile,
-    workspace: Workspace,
-  ): Promise<void> {
-    const known = profile.workspaces.some((entry) => entry.id === workspace.id);
-    await this.writeFile(
-      replaceProfile(
-        {
-          ...profile,
-          workspaces: known
-            ? profile.workspaces
-            : [...profile.workspaces, workspace],
-          activeWorkspaceId: workspace.id,
-        },
-        file,
-      ),
-    );
   }
 
   private freshFile(seed?: ProfileSeed): ProfileFile {
-    const path = resolve(
-      seed?.workspaceRoot ?? this.options.defaultWorkspaceRoot,
-    );
-    const workspace: Workspace = {
-      id: randomUUID(),
-      name: workspaceLabel(path),
-      path,
-    };
     const profile: AgentProfile = {
       id: randomUUID(),
       name: 'Marimo',
       identity: seed?.systemPrompt?.trim() || this.options.defaultIdentity,
-      workspaces: [workspace],
-      activeWorkspaceId: workspace.id,
       enabledTools: [...this.options.defaultTools],
       enabledSkills: [...this.options.defaultSkills],
     };
@@ -430,9 +359,13 @@ export class ProfileStore {
      */
     await assertWritable(this.options.file, {label: 'The agents file'});
     await mkdir(dirname(this.options.file), {recursive: true});
-    const temporary = `${this.options.file}.${randomUUID()}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(file, null, 2)}\n`, 'utf8');
-    await rename(temporary, this.options.file);
+    const target = `${this.options.file}.${randomUUID()}.tmp`;
+    await writeFile(
+      target,
+      `${JSON.stringify(toDocument(file), null, 2)}\n`,
+      'utf8',
+    );
+    await rename(target, this.options.file);
     this.cache = file;
   }
 
@@ -446,6 +379,44 @@ export class ProfileStore {
   }
 }
 
+/**
+ * The folders one profile used to carry, read off the raw entry.
+ *
+ * Read by hand rather than by widening the profile schema: this shape is not one
+ * this build writes, and a malformed entry has to be *dropped* rather than be
+ * allowed to fail the profile it sits on — the folders are recoverable, the
+ * agent's identity is not.
+ */
+function legacyFrom(
+  raw: unknown,
+  profileId: string,
+): LegacyWorkspaces | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const entry = raw as {workspaces?: unknown; activeWorkspaceId?: unknown};
+  if (entry.workspaces === undefined && entry.activeWorkspaceId === undefined) {
+    return undefined;
+  }
+  const workspaces: Workspace[] = [];
+  if (Array.isArray(entry.workspaces)) {
+    for (const candidate of entry.workspaces) {
+      const parsed = workspaceSchema.safeParse(candidate);
+      if (parsed.success) {
+        workspaces.push(parsed.data);
+      }
+    }
+  }
+  return {
+    profileId,
+    workspaces,
+    activeWorkspaceId:
+      typeof entry.activeWorkspaceId === 'string'
+        ? entry.activeWorkspaceId
+        : null,
+  };
+}
+
 function parseFile(raw: unknown): ProfileFile | undefined {
   if (!raw || typeof raw !== 'object') {
     return undefined;
@@ -456,10 +427,16 @@ function parseFile(raw: unknown): ProfileFile | undefined {
   }
 
   const profiles: AgentProfile[] = [];
+  const legacy: LegacyWorkspaces[] = [];
   for (const entry of candidate.profiles) {
     const parsed = agentProfileSchema.safeParse(entry);
-    if (parsed.success) {
-      profiles.push(parsed.data);
+    if (!parsed.success) {
+      continue;
+    }
+    profiles.push(parsed.data);
+    const carried = legacyFrom(entry, parsed.data.id);
+    if (carried !== undefined) {
+      legacy.push(carried);
     }
   }
   if (profiles.length === 0) {
@@ -472,7 +449,39 @@ function parseFile(raw: unknown): ProfileFile | undefined {
       ? candidate.activeProfileId
       : (profiles[0] as AgentProfile).id;
 
-  return {version: 1, profiles, activeProfileId};
+  return {
+    version: 1,
+    profiles,
+    activeProfileId,
+    ...(legacy.length > 0 ? {legacy} : {}),
+  };
+}
+
+/**
+ * The document as it goes to disk.
+ *
+ * Built explicitly rather than by spreading the snapshot, so `legacy` can never
+ * leak into the file as a field of its own — it is the same folders the profiles
+ * carry, and this is where they are put back where the next build's parser looks
+ * for them.
+ */
+function toDocument(file: ProfileFile): Record<string, unknown> {
+  return {
+    version: 1,
+    activeProfileId: file.activeProfileId,
+    profiles: file.profiles.map((profile) => {
+      const legacy = file.legacy?.find(
+        (entry) => entry.profileId === profile.id,
+      );
+      return legacy === undefined
+        ? profile
+        : {
+            ...profile,
+            workspaces: legacy.workspaces,
+            activeWorkspaceId: legacy.activeWorkspaceId,
+          };
+    }),
+  };
 }
 
 function activeProfileOf(file: ProfileSnapshot): AgentProfile {
@@ -493,19 +502,6 @@ function requireProfile(
   return profile;
 }
 
-function requireWorkspace(
-  profile: AgentProfile,
-  workspaceId: string,
-): Workspace {
-  const workspace = profile.workspaces.find(
-    (entry) => entry.id === workspaceId,
-  );
-  if (!workspace) {
-    throw new Error(`Unknown workspace: ${workspaceId}`);
-  }
-  return workspace;
-}
-
 /** Writes one changed profile back into the file it came from. */
 function replaceProfile(profile: AgentProfile, file: ProfileFile): ProfileFile {
   return {
@@ -514,13 +510,11 @@ function replaceProfile(profile: AgentProfile, file: ProfileFile): ProfileFile {
     profiles: file.profiles.map((entry) =>
       entry.id === profile.id ? profile : entry,
     ),
+    // Carried through untouched: it is another document's data until the
+    // workspaces store has adopted it, and dropping it here would be the one
+    // write that loses a user's folders.
+    ...(file.legacy === undefined ? {} : {legacy: file.legacy}),
   };
-}
-
-/** `project` for a path, or the path itself when it has no last segment. */
-export function workspaceLabel(path: string): string {
-  const label = basename(resolve(path));
-  return label.length > 0 ? label : resolve(path);
 }
 
 function uniqueName(profiles: AgentProfile[], base: string): string {

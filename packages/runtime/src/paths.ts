@@ -34,8 +34,15 @@ export interface AppPaths {
   secretsDir: string;
   /** The provider API keys, by provider id. */
   providerSecrets: Record<ProviderId, string>;
-  /** Agent profiles: identities, workspaces, and the capabilities they carry. */
+  /** Agent profiles: identities and the capabilities they carry. */
   profiles: string;
+  /**
+   * The folders every agent can work in, and which one is current.
+   *
+   * Its own document rather than a field on each profile: a folder is a place on
+   * the machine, not a fact about which agent is talking.
+   */
+  workspaces: string;
   /** Scheduled jobs: what to do, when, and which conversation they report into. */
   jobs: string;
   /**
@@ -91,6 +98,7 @@ export function resolveAppPaths(userData: string): AppPaths {
     secretsDir,
     providerSecrets,
     profiles: join(userData, 'profiles.json'),
+    workspaces: join(userData, 'workspaces.json'),
     jobs: join(userData, 'jobs.json'),
     memoryProposals: join(userData, 'memory-proposals.json'),
     appLock: join(userData, 'app.lock'),

@@ -873,6 +873,31 @@ describe('AgentHost', () => {
     expect(unfiled.workspaceId).toBeUndefined();
   });
 
+  /*
+   * The read that decides where a turn runs. It is the index and nothing else —
+   * the caller resolves the id to a path, because the folders belong to the
+   * install rather than to one host — and an unknown conversation answers the
+   * same way an unfiled one does, which is the fallback the turn then takes.
+   */
+  it('reports the folder a conversation is filed under', async () => {
+    const {host, session} = await startHost(() => textChunks('ok'));
+    await collect(host.run(session, 'alpha work'));
+    await host.adoptUnownedSessions('profile-alpha');
+
+    expect(await host.sessionWorkspaceId(session)).toBeUndefined();
+
+    await host.setSessionWorkspace(
+      session,
+      'workspace-scratch',
+      'profile-alpha',
+    );
+    expect(await host.sessionWorkspaceId(session)).toBe('workspace-scratch');
+
+    await host.setSessionWorkspace(session, undefined, 'profile-alpha');
+    expect(await host.sessionWorkspaceId(session)).toBeUndefined();
+    expect(await host.sessionWorkspaceId('no-such-session')).toBeUndefined();
+  });
+
   /**
    * The title is what the sidebar shows and what the chat's top bar names, so
    * renaming has to reach the index and come back as the stored summary — and

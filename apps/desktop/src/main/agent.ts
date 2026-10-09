@@ -36,9 +36,12 @@ import type {
   AgentUiEvent,
   McpStatus,
   PendingGate,
+  ProfileCatalog,
   ProviderId,
   SessionSummary,
   TranscriptMessage,
+  Workspace,
+  WorkspaceState,
 } from '@marimo/protocol';
 import {fetchProviderModels} from '@marimo/agent';
 import type {JobService} from '@marimo/agent';
@@ -568,14 +571,76 @@ export class AgentService {
     return {profiles, activeProfileId: active.id};
   }
 
-  async catalog(profileId?: string) {
-    return profileId === undefined
-      ? await this.runtime.catalogForActive()
-      : {profileId, catalog: await this.runtime.catalog(profileId)};
+  /** The tools and skills a pick-list can offer, as this install builds them. */
+  async catalog(): Promise<ProfileCatalog> {
+    return await this.runtime.catalog();
   }
 
   async selectProfile(profileId: string): Promise<void> {
     await this.runtime.selectProfile(profileId);
+  }
+
+  /**
+   * The folders this install works in.
+   *
+   * Every mutation answers with the whole list, so the window never merges a
+   * single entry into a copy of its own.
+   */
+  async workspaces(): Promise<WorkspaceState> {
+    return await this.runtime.workspaces();
+  }
+
+  async addWorkspace(path: string): Promise<WorkspaceState> {
+    return await this.runtime.addWorkspace(path);
+  }
+
+  async selectWorkspace(workspaceId: string): Promise<WorkspaceState> {
+    return await this.runtime.selectWorkspace(workspaceId);
+  }
+
+  async renameWorkspace(
+    workspaceId: string,
+    name: string,
+  ): Promise<WorkspaceState> {
+    return await this.runtime.renameWorkspace(workspaceId, name);
+  }
+
+  async removeWorkspace(workspaceId: string): Promise<WorkspaceState> {
+    return await this.runtime.removeWorkspace(workspaceId);
+  }
+
+  /** One folder, for the caller that opens it in the file manager. */
+  async workspace(workspaceId: string): Promise<Workspace> {
+    const workspace = await this.runtime.workspaceById(workspaceId);
+    if (workspace === undefined) {
+      throw new Error(`Unknown workspace: ${workspaceId}`);
+    }
+    return workspace;
+  }
+
+  /** Re-files a conversation, or unfiles it with `null`. */
+  async moveSession(
+    profileId: string,
+    sessionId: string,
+    workspaceId: string | null,
+  ): Promise<SessionSummary> {
+    return await this.runtime.setSessionWorkspace(
+      profileId,
+      sessionId,
+      workspaceId,
+    );
+  }
+
+  async renameSession(
+    profileId: string,
+    sessionId: string,
+    title: string,
+  ): Promise<SessionSummary> {
+    return await this.runtime.renameSession(profileId, sessionId, title);
+  }
+
+  async deleteSession(profileId: string, sessionId: string): Promise<void> {
+    await this.runtime.deleteSession(profileId, sessionId);
   }
 
   async updateProfile(

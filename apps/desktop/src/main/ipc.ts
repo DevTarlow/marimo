@@ -12,7 +12,17 @@
  * to keep in step with the first. The one exception is a turn's *own* refusal,
  * which is not an error in this sense — see `AgentService.send`.
  */
-import {app, ipcMain, nativeTheme} from 'electron';
+import {stat} from 'node:fs/promises';
+
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  shell,
+} from 'electron';
+import type {OpenDialogOptions} from 'electron';
 
 import {
   agentCallSchemas,
@@ -138,11 +148,6 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       availableModels: settings.availableModels[settings.providers.active],
       profiles: profiles.profiles,
       activeProfileId: profiles.activeProfileId,
-      // The folder an agent with none of its own would work in. Shown rather
-      // than hidden: the agent is confined to *something*, and a window that
-      // implied it had no file access at all would be lying in the other
-      // direction.
-      defaultWorkspace: dependencies.paths.defaultWorkspace,
     };
   }
 
@@ -150,6 +155,54 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
   async function profileState(service: AgentService) {
     const {profiles, activeProfileId} = await service.profiles();
     return {profiles, activeProfileId};
+  }
+
+  /**
+   * Asks the user for a folder, with the OS's own picker.
+   *
+   * `undefined` means they closed it. The parented form is used when there is a
+   * window to parent to, because a modal dialog attached to nothing can end up
+   * behind the window it was opened from.
+   */
+  async function pickFolder(): Promise<string | undefined> {
+    const options: OpenDialogOptions = {
+      title: 'Choose a folder to work in',
+      buttonLabel: 'Use this folder',
+      properties: ['openDirectory'],
+      defaultPath: await startFolder(),
+    };
+    const parent = BrowserWindow.getFocusedWindow();
+    const result =
+      parent === null
+        ? await dialog.showOpenDialog(options)
+        : await dialog.showOpenDialog(parent, options);
+    return result.canceled ? undefined : result.filePaths[0];
+  }
+
+  /**
+   * Where the picker opens: the folder already in use, else the OS default.
+   *
+   * The folder in use rather than the home directory, because the common case is
+   * adding a second project beside the first.
+   */
+  async function startFolder(): Promise<string> {
+    const service = dependencies.agent();
+    if (service !== undefined) {
+      const {workspaces, activeWorkspaceId} = await service.workspaces();
+      const active = workspaces.find((entry) => entry.id === activeWorkspaceId);
+      if (active !== undefined) {
+        return active.path;
+      }
+    }
+    return dependencies.paths.defaultWorkspace;
+  }
+
+  /** A folder the window named directly has to exist and be a directory. */
+  async function requireDirectory(path: string): Promise<void> {
+    const stats = await stat(path).catch(() => undefined);
+    if (stats === undefined || !stats.isDirectory()) {
+      throw new Error(`Not a folder: ${path}`);
+    }
   }
 
   const handlers: Handlers = {
@@ -301,7 +354,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'profiles.list': async () => await agent().profiles(),
 
-    'profiles.catalog': async () => (await agent().catalog()).catalog,
+    'profiles.catalog': async () => await agent().catalog(),
 
     'profiles.update': async (params) => {
       await agent().updateProfile(params.profileId, params.patch);
@@ -325,6 +378,46 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'settings.get': async () => ({settings: await publicSettings()}),
 
+    /* The folders every agent works in. */
+    'workspaces.list': async () => await agent().workspaces(),
+
+    /*
+     * Loads a folder. With no path the picker is the only thing that can answer,
+     * and a cancelled picker is not a failure: it answers the unchanged list and
+     * says so, so the window does not draw an error for a closed dialog.
+     */
+    'workspaces.add': async (params) => {
+      const path = params.path ?? (await pickFolder());
+      if (path === undefined) {
+        return {...(await agent().workspaces()), added: false};
+      }
+      await requireDirectory(path);
+      return {...(await agent().addWorkspace(path)), added: true};
+    },
+
+    'workspaces.select': async (params) =>
+      await agent().selectWorkspace(params.workspaceId),
+
+    'workspaces.rename': async (params) =>
+      await agent().renameWorkspace(params.workspaceId, params.name),
+
+    'workspaces.remove': async (params) => ({
+      ...(await agent().removeWorkspace(params.workspaceId)),
+      removed: true,
+    }),
+
+    /*
+     * Opens the folder in whatever the OS uses for directories.
+     *
+     * Looked up by id here rather than taken from the window: the only paths this
+     * can open are the ones already in the document, so a renderer cannot use it
+     * to reveal an arbitrary corner of the disk.
+     */
+    'workspaces.open': async (params) => {
+      const workspace = await agent().workspace(params.workspaceId);
+      return {opened: (await shell.openPath(workspace.path)) === ''};
+    },
+
     'sessions.list': async (params) => ({
       sessions: await agent().listSessions(params.profileId),
     }),
@@ -335,6 +428,27 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'sessions.get': async (params) =>
       await agent().transcript(params.profileId, params.sessionId),
+
+    'sessions.move': async (params) => ({
+      session: await agent().moveSession(
+        params.profileId,
+        params.sessionId,
+        params.workspaceId,
+      ),
+    }),
+
+    'sessions.rename': async (params) => ({
+      session: await agent().renameSession(
+        params.profileId,
+        params.sessionId,
+        params.title,
+      ),
+    }),
+
+    'sessions.delete': async (params) => {
+      await agent().deleteSession(params.profileId, params.sessionId);
+      return {deleted: true};
+    },
 
     'chat.send': async (params) =>
       await agent().send(

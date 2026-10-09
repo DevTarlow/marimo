@@ -111,11 +111,7 @@ export type {
   HostResult,
   RuntimeServices,
 } from './agent/runtime.js';
-export {
-  activeWorkspaceRoot,
-  parseProfile,
-  resolveAgentConfig,
-} from './agent/resolve.js';
+export {parseProfile, resolveAgentConfig} from './agent/resolve.js';
 export {createJobRunner} from './agent/job-runner.js';
 export type {JobRunnerOptions} from './agent/job-runner.js';
 /*
@@ -172,7 +168,6 @@ export {
   LastProfileError,
   ProfileStore,
   UnknownProfileError,
-  workspaceLabel,
 } from './profiles.js';
 export type {
   ProfileFile,
@@ -180,6 +175,13 @@ export type {
   ProfileSnapshot,
   ProfileStoreOptions,
 } from './profiles.js';
+
+/* The folders every agent works in. */
+export {WorkspaceStore, workspaceLabel, workspaceRootFor} from './workspaces.js';
+export type {
+  LegacyWorkspaces,
+  WorkspaceStoreOptions,
+} from './workspaces.js';
 
 /* Preferences. */
 export {

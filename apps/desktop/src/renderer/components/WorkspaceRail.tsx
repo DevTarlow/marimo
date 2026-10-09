@@ -1,0 +1,429 @@
+/**
+ * The folders, down the side, with their conversations under them.
+ *
+ * A workspace is a folder the agent works in, and every agent shares the list —
+ * so this is navigation over places, not over agents. The conversation on screen
+ * is always under the folder it belongs to, because a rail that hid it would
+ * look like the app had lost it.
+ *
+ * Two groups are not folders. **Social** holds what the app itself started — a
+ * Discord mention arrives in whatever folder happened to be current and has
+ * nothing to do with it — and **Other chats** holds conversations from before
+ * folders existed, or ones whose folder has since been forgotten. Both are
+ * rendered flat, with no "new chat" button, because neither is a place.
+ */
+import {useEffect, useMemo, useRef, useState} from 'react';
+
+import type {SessionSummary, Workspace} from '@marimo/protocol';
+
+import {groupSessions} from '../workspace-groups.js';
+import {KeepRunning} from './KeepRunning.js';
+import {SessionMenu} from './SessionMenu.js';
+import {WorkspaceMenu} from './WorkspaceMenu.js';
+import type {PopoverAnchor} from './RailPopover.js';
+
+/** Which row's menu is open, and where its trigger was when it opened. */
+type OpenMenu =
+  | {kind: 'session'; sessionId: string; anchor: PopoverAnchor}
+  | {kind: 'workspace'; workspaceId: string; anchor: PopoverAnchor};
+
+/** Which name is being edited in place. */
+type Editing = {kind: 'session' | 'workspace'; id: string; value: string};
+
+export function WorkspaceRail({
+  workspaces,
+  sessions,
+  activeSessionId,
+  activeWorkspaceId,
+  disabled,
+  onOpenSession,
+  onNewSession,
+  onSelectWorkspace,
+  onLoadWorkspace,
+  onRenameWorkspace,
+  onRemoveWorkspace,
+  onOpenWorkspace,
+  onMoveSession,
+  onRenameSession,
+  onDeleteSession,
+}: {
+  workspaces: Workspace[];
+  sessions: SessionSummary[];
+  activeSessionId: string | null;
+  activeWorkspaceId: string | null;
+  disabled: boolean;
+  onOpenSession: (sessionId: string) => void;
+  onNewSession: (workspaceId: string) => void;
+  onSelectWorkspace: (workspaceId: string) => void;
+  onLoadWorkspace: () => void;
+  onRenameWorkspace: (workspaceId: string, name: string) => void;
+  onRemoveWorkspace: (workspaceId: string) => void;
+  onOpenWorkspace: (workspaceId: string) => void;
+  onMoveSession: (sessionId: string, workspaceId: string | null) => void;
+  onRenameSession: (sessionId: string, title: string) => void;
+  onDeleteSession: (sessionId: string) => void;
+}): React.JSX.Element {
+  const groups = useMemo(
+    () => groupSessions({workspaces, sessions, activeSessionId}),
+    [workspaces, sessions, activeSessionId],
+  );
+
+  /** Collapsed by id; expanded is the default, which is the quieter state. */
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [menu, setMenu] = useState<OpenMenu | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
+  /*
+   * Escape has to beat the blur that follows it. Unmounting the input fires a
+   * blur whose handler still closes over the old draft, so a cancelled edit
+   * would otherwise be committed on the way out. Set before the state change,
+   * consumed by whichever handler runs first, and cleared when the next edit
+   * begins.
+   */
+  const cancelled = useRef(false);
+
+  /*
+   * The folder of the conversation on screen is never collapsed. Selecting
+   * another folder does not move it, so this only matters after the user
+   * collapsed the folder and then opened one of its chats from elsewhere.
+   */
+  const openWorkspaceId =
+    sessions.find((session) => session.id === activeSessionId)?.workspaceId ??
+    activeWorkspaceId;
+  useEffect(() => {
+    const workspaceId = openWorkspaceId;
+    if (workspaceId === undefined || workspaceId === null) {
+      return;
+    }
+    setCollapsed((current) => {
+      if (!current.has(workspaceId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(workspaceId);
+      return next;
+    });
+  }, [openWorkspaceId]);
+
+  const toggle = (workspaceId: string): void => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(workspaceId)) {
+        next.delete(workspaceId);
+      } else {
+        next.add(workspaceId);
+      }
+      return next;
+    });
+  };
+
+  /** Where a menu is drawn from: the trigger's place right now. */
+  const anchorOf = (element: HTMLElement): PopoverAnchor => {
+    const rect = element.getBoundingClientRect();
+    return {top: rect.top, bottom: rect.bottom, left: rect.left};
+  };
+
+  const beginEdit = (next: Editing): void => {
+    cancelled.current = false;
+    setEditing(next);
+  };
+
+  const commitEdit = (): void => {
+    const draft = editing;
+    if (draft === null || cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
+    setEditing(null);
+    const value = draft.value.trim();
+    if (value.length === 0) {
+      return;
+    }
+    if (draft.kind === 'workspace') {
+      const workspace = workspaces.find((entry) => entry.id === draft.id);
+      if (workspace !== undefined && value !== workspace.name) {
+        onRenameWorkspace(draft.id, value);
+      }
+      return;
+    }
+    const session = sessions.find((entry) => entry.id === draft.id);
+    if (session !== undefined && value !== session.title) {
+      onRenameSession(draft.id, value);
+    }
+  };
+
+  const editInput = (draft: Editing, what: string): React.JSX.Element => (
+    <input
+      className="rail-row-input"
+      value={draft.value}
+      aria-label={what}
+      autoFocus
+      spellCheck={false}
+      onChange={(event) => {
+        setEditing({...draft, value: event.target.value});
+      }}
+      onBlur={commitEdit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          commitEdit();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          cancelled.current = true;
+          setEditing(null);
+        }
+      }}
+    />
+  );
+
+  const menuSession =
+    menu?.kind === 'session'
+      ? sessions.find((entry) => entry.id === menu.sessionId)
+      : undefined;
+  const menuWorkspace =
+    menu?.kind === 'workspace'
+      ? workspaces.find((entry) => entry.id === menu.workspaceId)
+      : undefined;
+
+  const sessionRows = (list: readonly SessionSummary[]): React.JSX.Element[] =>
+    list.map((session) => {
+      const isOpen = session.id === activeSessionId;
+      if (editing?.kind === 'session' && editing.id === session.id) {
+        return (
+          <div
+            className="rail-row"
+            key={session.id}
+            data-session-id={session.id}
+          >
+            {editInput(editing, 'Conversation name')}
+          </div>
+        );
+      }
+      return (
+        <div
+          className="rail-row"
+          key={session.id}
+          data-session-id={session.id}
+          data-active={isOpen ? 'true' : undefined}
+        >
+          <button
+            type="button"
+            className="rail-row-title"
+            aria-current={isOpen ? 'true' : undefined}
+            title={session.title}
+            onClick={() => {
+              onOpenSession(session.id);
+            }}
+          >
+            {session.title}
+          </button>
+          <span className="rail-row-when">{shortDate(session.updatedAt)}</span>
+          <button
+            type="button"
+            className="rail-row-menu"
+            aria-haspopup="menu"
+            aria-expanded={
+              menu?.kind === 'session' && menu.sessionId === session.id
+            }
+            aria-label={`Actions for ${session.title}`}
+            onClick={(event) => {
+              setMenu({
+                kind: 'session',
+                sessionId: session.id,
+                anchor: anchorOf(event.currentTarget),
+              });
+            }}
+          >
+            ⋯
+          </button>
+        </div>
+      );
+    });
+
+  return (
+    <aside className="rail" aria-label="Workspaces">
+      <div className="rail-head">
+        <span className="rail-title">Workspaces</span>
+        <button
+          type="button"
+          className="button button-quiet button-small"
+          disabled={disabled}
+          onClick={onLoadWorkspace}
+        >
+          Load folder…
+        </button>
+      </div>
+
+      <nav
+        className="rail-list"
+        // The menu is anchored to a rectangle that scrolls away beneath it.
+        onScroll={() => {
+          setMenu(null);
+        }}
+      >
+        {groups.length === 0 && <p className="rail-empty">Nothing yet.</p>}
+
+        {groups.map((group) => {
+          if (group.kind !== 'workspace') {
+            return (
+              <section className="rail-group" key={group.kind}>
+                <h2 className="rail-group-head">
+                  {group.kind === 'social' ? 'Social' : 'Other chats'}
+                </h2>
+                {sessionRows(group.sessions)}
+              </section>
+            );
+          }
+
+          const workspace = group.workspace;
+          const isOpen = !collapsed.has(workspace.id);
+          const isActive = workspace.id === activeWorkspaceId;
+          return (
+            <section
+              className="rail-workspace"
+              key={workspace.id}
+              data-workspace-id={workspace.id}
+              data-active={isActive ? 'true' : undefined}
+            >
+              <div className="rail-workspace-head">
+                {editing?.kind === 'workspace' &&
+                editing.id === workspace.id ? (
+                  editInput(editing, 'Folder name')
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="rail-workspace-name"
+                      aria-expanded={isOpen}
+                      aria-current={isActive ? 'true' : undefined}
+                      title={workspace.name}
+                      onClick={() => {
+                        onSelectWorkspace(workspace.id);
+                        toggle(workspace.id);
+                      }}
+                    >
+                      <span
+                        className="rail-workspace-chevron"
+                        aria-hidden="true"
+                      >
+                        {isOpen ? '▾' : '▸'}
+                      </span>
+                      <span className="rail-workspace-label">
+                        {workspace.name}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="rail-workspace-action"
+                      aria-label={`New chat in ${workspace.name}`}
+                      disabled={disabled}
+                      onClick={() => {
+                        onNewSession(workspace.id);
+                      }}
+                    >
+                      +
+                    </button>
+                    <button
+                      type="button"
+                      className="rail-workspace-action rail-workspace-menu"
+                      aria-haspopup="menu"
+                      aria-expanded={
+                        menu?.kind === 'workspace' &&
+                        menu.workspaceId === workspace.id
+                      }
+                      aria-label={`Actions for ${workspace.name}`}
+                      onClick={(event) => {
+                        setMenu({
+                          kind: 'workspace',
+                          workspaceId: workspace.id,
+                          anchor: anchorOf(event.currentTarget),
+                        });
+                      }}
+                    >
+                      ⋯
+                    </button>
+                  </>
+                )}
+              </div>
+              <span className="rail-workspace-path" title={workspace.path}>
+                {workspace.path}
+              </span>
+              {isOpen && sessionRows(group.sessions)}
+            </section>
+          );
+        })}
+      </nav>
+
+      <KeepRunning />
+
+      {menuSession !== undefined && menu !== null && (
+        <SessionMenu
+          session={menuSession}
+          workspaces={workspaces}
+          anchor={menu.anchor}
+          onClose={() => {
+            setMenu(null);
+          }}
+          onRename={() => {
+            setMenu(null);
+            beginEdit({
+              kind: 'session',
+              id: menuSession.id,
+              value: menuSession.title,
+            });
+          }}
+          onMove={(workspaceId) => {
+            setMenu(null);
+            onMoveSession(menuSession.id, workspaceId);
+          }}
+          onDelete={() => {
+            setMenu(null);
+            onDeleteSession(menuSession.id);
+          }}
+        />
+      )}
+
+      {menuWorkspace !== undefined && menu !== null && (
+        <WorkspaceMenu
+          workspace={menuWorkspace}
+          anchor={menu.anchor}
+          onClose={() => {
+            setMenu(null);
+          }}
+          onRename={() => {
+            setMenu(null);
+            beginEdit({
+              kind: 'workspace',
+              id: menuWorkspace.id,
+              value: menuWorkspace.name,
+            });
+          }}
+          onOpen={() => {
+            setMenu(null);
+            onOpenWorkspace(menuWorkspace.id);
+          }}
+          onRemove={() => {
+            setMenu(null);
+            onRemoveWorkspace(menuWorkspace.id);
+          }}
+        />
+      )}
+    </aside>
+  );
+}
+
+/** Time for today, a date before that. */
+function shortDate(at: string): string {
+  const when = new Date(at);
+  if (Number.isNaN(when.getTime())) {
+    return '';
+  }
+  const now = new Date();
+  const sameDay =
+    when.getFullYear() === now.getFullYear() &&
+    when.getMonth() === now.getMonth() &&
+    when.getDate() === now.getDate();
+
+  return sameDay
+    ? when.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'})
+    : when.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+}

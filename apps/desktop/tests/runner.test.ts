@@ -17,7 +17,7 @@ import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
-import {ProfileStore, resolveAppPaths} from '@marimo/runtime';
+import {ProfileStore, WorkspaceStore, resolveAppPaths} from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
 
 import {describeReport, main, resolveRunnerPaths, runDue} from '../src/runner/run-due.js';
@@ -51,9 +51,17 @@ describe('runDue', () => {
 
   /** A profile and a job that came due five minutes ago. */
   async function seedDueJob(): Promise<void> {
+    /*
+     * A folder for the install, seeded at the test's own directory rather than
+     * the real home `resolveAppPaths` would otherwise point at.
+     */
+    await new WorkspaceStore({
+      file: paths.workspaces,
+      defaultWorkspaceRoot: dir,
+    }).load();
+
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultWorkspaceRoot: dir,
       defaultIdentity: '',
       defaultTools: [],
       defaultSkills: [],

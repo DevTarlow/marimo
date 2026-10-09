@@ -2,8 +2,9 @@
  * Agent profiles on disk.
  *
  * The interesting parts are the invariants: there is always an active profile,
- * the active workspace always exists, a folder added twice is not listed twice,
- * and deleting a profile never claims the last one or touches a user's files.
+ * deleting a profile never claims the last one or touches a user's files, and
+ * the folders a pre-workspaces file carried are preserved until the store that
+ * now owns them has taken them.
  */
 import {mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -14,7 +15,6 @@ import {
   LastProfileError,
   ProfileStore,
   UnknownProfileError,
-  workspaceLabel,
 } from './profiles.js';
 
 const TOOLS = ['read_file', 'write_file', 'run_shell'];
@@ -36,14 +36,13 @@ describe('ProfileStore', () => {
   function store(): ProfileStore {
     return new ProfileStore({
       file,
-      defaultWorkspaceRoot: join(dir, 'home'),
       defaultIdentity: 'You are an agent.',
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     });
   }
 
-  it('seeds one profile with the app default folder on first run', async () => {
+  it('seeds one profile with the app defaults on first run', async () => {
     const snapshot = await store().load();
     expect(snapshot.profiles).toHaveLength(1);
     const profile = snapshot.profiles[0];
@@ -51,19 +50,13 @@ describe('ProfileStore', () => {
     expect(profile?.identity).toBe('You are an agent.');
     expect(profile?.enabledTools).toEqual(TOOLS);
     expect(profile?.enabledSkills).toEqual(SKILLS);
-    expect(profile?.workspaces).toHaveLength(1);
-    expect(profile?.activeWorkspaceId).toBe(profile?.workspaces[0]?.id);
   });
 
-  it('keeps the workspace and prompt a pre-profile install had', async () => {
+  it('keeps the prompt a pre-profile install had', async () => {
     const snapshot = await store().load({
-      workspaceRoot: join(dir, 'legacy-project'),
       systemPrompt: 'You are the old prompt.',
     });
-    const profile = snapshot.profiles[0];
-    expect(profile?.identity).toBe('You are the old prompt.');
-    expect(profile?.workspaces[0]?.path).toBe(join(dir, 'legacy-project'));
-    expect(profile?.workspaces[0]?.name).toBe('legacy-project');
+    expect(snapshot.profiles[0]?.identity).toBe('You are the old prompt.');
   });
 
   it('persists across stores', async () => {
@@ -94,19 +87,6 @@ describe('ProfileStore', () => {
     );
   });
 
-  it('refuses a blank workspace name instead of persisting it', async () => {
-    const profiles = store();
-    const workspace = await profiles.addWorkspace(join(dir, 'project'));
-    await expect(profiles.renameWorkspace(workspace.id, '   ')).rejects.toThrow(
-      /cannot be empty/,
-    );
-    // The stored profile still satisfies its own schema, so nothing is lost.
-    const stored = (await profiles.activeProfile()).workspaces.find(
-      (entry) => entry.id === workspace.id,
-    );
-    expect(stored?.name).toBe('project');
-  });
-
   it('falls back when the stored active profile no longer exists', async () => {
     await writeFile(
       file,
@@ -118,8 +98,6 @@ describe('ProfileStore', () => {
             id: 'real',
             name: 'Real',
             identity: '',
-            workspaces: [],
-            activeWorkspaceId: null,
             enabledTools: [],
             enabledSkills: [],
           },
@@ -170,53 +148,6 @@ describe('ProfileStore', () => {
     );
   });
 
-  it('adds a folder once and selects it', async () => {
-    const profiles = store();
-    const first = await profiles.addWorkspace(join(dir, 'project-a'));
-    const second = await profiles.addWorkspace(join(dir, 'project-b'));
-    const again = await profiles.addWorkspace(join(dir, 'project-a'));
-    expect(again.id).toBe(first.id);
-    expect(await profiles.activeWorkspace()).toMatchObject({
-      id: first.id,
-      path: join(dir, 'project-a'),
-    });
-    expect((await profiles.activeProfile()).workspaces).toHaveLength(3);
-    expect(second.id).not.toBe(first.id);
-  });
-
-  it('labels a folder by its last segment', async () => {
-    const profiles = store();
-    const workspace = await profiles.addWorkspace(join(dir, 'my-app'));
-    expect(workspace.name).toBe('my-app');
-    expect(workspaceLabel('/')).toBe('/');
-  });
-
-  it('renames a folder without touching its path', async () => {
-    const profiles = store();
-    const workspace = await profiles.addWorkspace(join(dir, 'project'));
-    const renamed = await profiles.renameWorkspace(
-      workspace.id,
-      '  Client work ',
-    );
-    expect(renamed.name).toBe('Client work');
-    expect(renamed.path).toBe(workspace.path);
-  });
-
-  it('forgets a folder and falls back to another one', async () => {
-    const profiles = store();
-    const a = await profiles.addWorkspace(join(dir, 'a'));
-    const b = await profiles.addWorkspace(join(dir, 'b'));
-    await profiles.removeWorkspace(b.id);
-    const profile = await profiles.activeProfile();
-    const remaining = profile.workspaces.map((entry) => entry.id);
-    expect(remaining).toContain(a.id);
-    // The seeded default folder is still there alongside the added one.
-    expect(remaining).toHaveLength(2);
-    expect(remaining).not.toContain(b.id);
-    // The active pointer moves rather than dangling at a folder that is gone.
-    expect(remaining).toContain(profile.activeWorkspaceId);
-  });
-
   it('refuses to delete the last profile', async () => {
     const profiles = store();
     const profile = await profiles.activeProfile();
@@ -255,8 +186,6 @@ describe('ProfileStore', () => {
             id: 'good',
             name: 'Good',
             identity: '',
-            workspaces: [],
-            activeWorkspaceId: null,
             enabledTools: [],
             enabledSkills: [],
           },
@@ -332,7 +261,6 @@ describe('an agents file from a newer build', () => {
   function store(): ProfileStore {
     return new ProfileStore({
       file,
-      defaultWorkspaceRoot: join(dir, 'home'),
       defaultIdentity: 'You are an agent.',
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
@@ -417,8 +345,6 @@ describe('an agents file with no version', () => {
           id: 'someone-elses-agent',
           name: 'Theirs',
           identity: 'You are an agent.',
-          workspaces: [],
-          activeWorkspaceId: null,
           enabledTools: [],
           enabledSkills: [],
         },
@@ -429,7 +355,6 @@ describe('an agents file with no version', () => {
 
     const snapshot = await new ProfileStore({
       file,
-      defaultWorkspaceRoot: join(dir, 'home'),
       defaultIdentity: '',
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
@@ -446,5 +371,104 @@ describe('an agents file with no version', () => {
     const kept = entries.find((entry) => entry.includes('unreadable'));
     expect(kept).toBeDefined();
     expect(await readFile(join(dir, kept ?? ''), 'utf8')).toBe(original);
+  });
+});
+
+/*
+ * The folders a pre-workspaces file carried.
+ *
+ * They are another document's data now, and this is the half that matters: a
+ * profile edited during the upgrade — a rename, a new tool — must not be the
+ * write that drops them, because until the workspaces store has written its own
+ * document they are the only copy.
+ */
+describe('the folders a pre-workspaces file carried', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-legacy-ws-'));
+    file = join(dir, 'profiles.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): ProfileStore {
+    return new ProfileStore({
+      file,
+      defaultIdentity: 'You are an agent.',
+      defaultTools: TOOLS,
+      defaultSkills: SKILLS,
+    });
+  }
+
+  async function writeLegacy(): Promise<void> {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: 'agent',
+        profiles: [
+          {
+            id: 'agent',
+            name: 'Agent',
+            identity: 'You are an agent.',
+            workspaces: [
+              {id: 'ws-a', name: 'alpha', path: join(dir, 'alpha')},
+              {id: 'ws-b', name: 'beta', path: join(dir, 'beta')},
+            ],
+            activeWorkspaceId: 'ws-b',
+            enabledTools: [],
+            enabledSkills: [],
+          },
+        ],
+      }),
+      'utf8',
+    );
+  }
+
+  it('reads them off the file without putting them on the profile', async () => {
+    await writeLegacy();
+    const profiles = store();
+    const legacy = await profiles.legacyWorkspaces();
+    expect(legacy).toEqual([
+      {
+        profileId: 'agent',
+        workspaces: [
+          {id: 'ws-a', name: 'alpha', path: join(dir, 'alpha')},
+          {id: 'ws-b', name: 'beta', path: join(dir, 'beta')},
+        ],
+        activeWorkspaceId: 'ws-b',
+      },
+    ]);
+    expect((await profiles.activeProfile()).id).toBe('agent');
+  });
+
+  it('keeps them on disk through an unrelated profile edit', async () => {
+    await writeLegacy();
+    const profiles = store();
+    await profiles.update('agent', {name: 'Renamed'});
+
+    const raw = JSON.parse(await readFile(file, 'utf8')) as {
+      profiles: Array<{name: string; workspaces?: unknown[]}>;
+    };
+    expect(raw.profiles[0]?.name).toBe('Renamed');
+    expect(raw.profiles[0]?.workspaces).toHaveLength(2);
+  });
+
+  it('drops them only when told the adoption is done', async () => {
+    await writeLegacy();
+    const profiles = store();
+    await profiles.clearLegacy();
+
+    const raw = JSON.parse(await readFile(file, 'utf8')) as {
+      profiles: Array<{workspaces?: unknown[]; activeWorkspaceId?: unknown}>;
+    };
+    expect(raw.profiles[0]?.workspaces).toBeUndefined();
+    expect(raw.profiles[0]?.activeWorkspaceId).toBeUndefined();
+    // And nothing is left to adopt, so a second call is a no-op.
+    expect(await profiles.legacyWorkspaces()).toBeUndefined();
   });
 });

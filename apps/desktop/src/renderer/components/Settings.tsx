@@ -523,13 +523,6 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
             void load();
           }}
         />
-
-        <section className="settings-section">
-          <h3>Where it works</h3>
-          <p className="settings-muted">
-            <code>{loaded.settings.defaultWorkspace}</code>
-          </p>
-        </section>
       </div>
     </div>
   );

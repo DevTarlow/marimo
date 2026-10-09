@@ -18,8 +18,8 @@ import type {AppInfo, PublicSettings, Theme, ThemeMode} from '@marimo/protocol';
 import {Composer} from './components/Composer.js';
 import {Onboarding} from './components/Onboarding.js';
 import {Settings} from './components/Settings.js';
-import {SessionRail} from './components/SessionRail.js';
 import {Transcript} from './components/Transcript.js';
+import {WorkspaceRail} from './components/WorkspaceRail.js';
 import {useAgent} from './hooks/useAgent.js';
 
 import './styles/chat.css';
@@ -126,16 +126,42 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="app">
-      <SessionRail
+      <WorkspaceRail
+        workspaces={agent.workspaces}
         sessions={agent.sessions}
-        activeId={agent.sessionId}
-        onOpen={(id) => {
+        activeSessionId={agent.sessionId}
+        activeWorkspaceId={agent.activeWorkspaceId}
+        disabled={disabled}
+        onOpenSession={(id) => {
           void agent.open(id);
         }}
-        onNew={() => {
-          void agent.newSession();
+        onNewSession={(workspaceId) => {
+          void agent.newSession(workspaceId);
         }}
-        disabled={disabled}
+        onSelectWorkspace={(workspaceId) => {
+          void agent.selectWorkspace(workspaceId);
+        }}
+        onLoadWorkspace={() => {
+          void agent.loadWorkspace();
+        }}
+        onRenameWorkspace={(workspaceId, name) => {
+          void agent.renameWorkspace(workspaceId, name);
+        }}
+        onRemoveWorkspace={(workspaceId) => {
+          void agent.removeWorkspace(workspaceId);
+        }}
+        onOpenWorkspace={(workspaceId) => {
+          void agent.openWorkspace(workspaceId);
+        }}
+        onMoveSession={(sessionId, workspaceId) => {
+          void agent.moveSession(sessionId, workspaceId);
+        }}
+        onRenameSession={(sessionId, title) => {
+          void agent.renameSession(sessionId, title);
+        }}
+        onDeleteSession={(sessionId) => {
+          void agent.removeSession(sessionId);
+        }}
       />
 
       <main className="main">
@@ -146,6 +172,17 @@ export function App(): React.JSX.Element {
             {info !== null && (
               <p className="head-sub">
                 {info.name} v{info.version}
+              </p>
+            )}
+            {/*
+              Where this conversation works, moved out of Settings and onto the
+              surface it is about. It is the open chat's folder rather than the
+              current one: a conversation remembers the folder it was started in,
+              and the two differ the moment another folder is picked.
+            */}
+            {agent.activeFolder !== null && (
+              <p className="head-sub head-workspace" title={agent.activeFolder}>
+                {agent.activeFolder}
               </p>
             )}
           </div>

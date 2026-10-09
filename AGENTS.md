@@ -22,8 +22,9 @@ packages/agent      Everything ADK: the OpenAI-compatible provider, tool set,
                     document-version machinery. No Electron.
 packages/runtime    The Electron-free half of the app proper: where files live,
                     secrets with the cipher injected, and the jobs/profiles/
-                    settings/skills/proposals stores. Re-exports the version
-                    machinery it uses, so a caller still finds it beside them.
+                    workspaces/settings/skills/proposals stores. Re-exports the
+                    version machinery it uses, so a caller still finds it beside
+                    them.
 apps/desktop        The Electron app: src/main (window, IPC, tray, adapters),
                     src/preload (the sandboxed bridge), src/runner (the headless
                     job runner), src/renderer (React), src/shared.
@@ -103,6 +104,14 @@ session index was the last one missing the guard, and its lenient read plus an
 unguarded write meant a corrupt index became an empty one on the very next
 message — every conversation gone from the sidebar. When you add a store, add it
 to that list.
+
+**One document's data sometimes has to move to another's.** The folders used to
+be a field on each profile; they are `workspaces.json` now, adopted on the first
+read of that file and *preserved* on every profiles write until the adoption has
+landed. That second half is the point: a migration in `migrations.ts` is a pure
+function of one document and cannot write another, so the only thing standing
+between a user's folders and a profile edit during the upgrade is the write path
+carrying them forward until the new store has taken them.
 
 ## The loop
 

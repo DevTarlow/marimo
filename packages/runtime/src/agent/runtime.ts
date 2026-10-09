@@ -53,6 +53,8 @@ import type {
   SettingsPatch,
   StoredSettings,
   StoredSkill,
+  Workspace,
+  WorkspaceState,
 } from '@marimo/protocol';
 
 import type {AppPaths} from '../paths.js';
@@ -61,6 +63,7 @@ import type {SecretRead} from '../secrets.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
 import {SettingsStore} from '../settings.js';
 import {SkillStore} from '../skills.js';
+import {WorkspaceStore, workspaceRootFor} from '../workspaces.js';
 import {resolveAgentConfig} from './resolve.js';
 import {turnInstruction} from './pet-turn.js';
 
@@ -114,6 +117,15 @@ export type HostResult =
 export class AgentRuntime {
   private readonly settingsStore: SettingsStore;
   private readonly profileStore: ProfileStore;
+  /**
+   * The folders every agent works in.
+   *
+   * Built from the profiles store's legacy fields when the document does not
+   * exist yet: a `profiles.json` written before folders were install-wide holds
+   * the only copy, and it is handed over here so the two stores never disagree
+   * about which folders exist.
+   */
+  private readonly workspaceStore: WorkspaceStore;
   private readonly skillStore: SkillStore;
   /** The agent's suggestions, waiting for an answer. */
   private readonly proposals: MemoryProposalStore;
@@ -125,7 +137,6 @@ export class AgentRuntime {
     this.settingsStore = new SettingsStore(options.paths.settings);
     this.profileStore = new ProfileStore({
       file: options.paths.profiles,
-      defaultWorkspaceRoot: options.paths.defaultWorkspace,
       // A brand-new profile starts with the app's identity and no capabilities:
       // every one of those is something the user turns on, which is the whole
       // shape of this app. The empty lists are the point, not an oversight.
@@ -147,6 +158,31 @@ export class AgentRuntime {
       defaultTools: [...SAFE_DEFAULT_TOOLS],
       defaultSkills: [],
     });
+    this.workspaceStore = new WorkspaceStore({
+      file: options.paths.workspaces,
+      defaultWorkspaceRoot: options.paths.defaultWorkspace,
+      /*
+       * The folders a pre-workspaces profiles file holds, read through the
+       * profile store rather than by parsing that file a second time: it is the
+       * same document, and two parsers for it is two chances to disagree.
+       */
+      adoptLegacy: async () => {
+        const legacy = await this.profileStore.legacyWorkspaces();
+        if (legacy === undefined) {
+          return undefined;
+        }
+        const workspaces = legacy.flatMap((entry) => entry.workspaces);
+        const active =
+          legacy.find((entry) => entry.activeWorkspaceId !== null)
+            ?.activeWorkspaceId ?? null;
+        return {workspaces, activeWorkspaceId: active};
+      },
+      // Only after the document holding them exists, so a crash in between
+      // leaves the folders where they were.
+      onAdopted: async () => {
+        await this.profileStore.clearLegacy();
+      },
+    });
     this.skillStore = new SkillStore({file: options.paths.skills});
     this.proposals = new MemoryProposalStore({
       file: options.paths.memoryProposals,
@@ -162,21 +198,25 @@ export class AgentRuntime {
    * What this install can offer, so the settings screen builds its pick-lists
    * from what exists rather than from a list typed out a second time.
    *
+   * Not per profile: the tools are the install's, the folder they are described
+   * against is the current one, and which of them an agent may use is a grant on
+   * the profile rather than a difference in the catalogue. It used to take a
+   * profile id, back when each profile named its own folder.
+   *
    * The tools are described by *constructing* them, which is the only way the
    * wording is guaranteed to be the wording the model is given — and the only
    * way a renamed tool cannot go on being offered under its old name, which
    * would grant nothing when ticked.
    */
-  async catalog(profileId: string): Promise<ProfileCatalog> {
-    const profile = await this.profileFor(profileId);
-    const workspace = profile?.workspaces.find(
-      (entry) => entry.id === profile.activeWorkspaceId,
-    );
+  async catalog(): Promise<ProfileCatalog> {
     const settings = await this.settingsStore.load();
+    const workspaceRoot =
+      workspaceRootFor(await this.workspaceStore.load()) ??
+      this.options.paths.defaultWorkspace;
 
     return {
       tools: describeTools({
-        workspaceRoot: workspace?.path ?? this.options.paths.defaultWorkspace,
+        workspaceRoot,
         model: activeProvider(settings.providers).model,
         ...(this.options.webSearch ? {webSearch: this.options.webSearch} : {}),
         /*
@@ -299,23 +339,20 @@ export class AgentRuntime {
     profileId: string,
     sessionId: string,
   ): Promise<MemoryProposal[]> {
-    const settings = await this.settingsStore.load();
     const profile = await this.profileFor(profileId);
     if (profile === undefined) {
       return [];
     }
-    const resolved = await resolveAgentConfig({
-      settings,
-      profile,
-      readSecret: this.options.readSecret,
-      skills: await this.skillsFor(profile),
-    });
+    /*
+     * The same host a turn would get: the review reads the memory of the folder
+     * this conversation works in, so what it proposes belongs to the project the
+     * conversation is about.
+     */
+    const resolved = await this.host(profileId, sessionId);
     if (!resolved.ok) {
       return [];
     }
-
-    const host = await this.ensureHost(profileId);
-    host.updateConfig(resolved.config);
+    const host = resolved.host;
 
     const events = await host.eventsFor(sessionId);
     const reviewed = events.filter((event) => event.partial !== true).length;
@@ -388,10 +425,14 @@ export class AgentRuntime {
     }
 
     const profile = await this.profileFor(id);
+    /*
+     * The current folder, not the open conversation's: this answers a question
+     * about the *agent* — how full its memory is — and Settings has no idea
+     * which chat the window happens to be showing.
+     */
     const workspace =
-      profile?.workspaces.find(
-        (entry) => entry.id === profile.activeWorkspaceId,
-      )?.path ?? this.options.paths.defaultWorkspace;
+      workspaceRootFor(await this.workspaceStore.load()) ??
+      this.options.paths.defaultWorkspace;
     const store = new MemoryStore({
       workspaceRoot: workspace,
       softLimitBytes: settings.memorySoftLimitBytes,
@@ -422,7 +463,15 @@ export class AgentRuntime {
     }
 
     if (accept) {
-      const result = await this.host(proposal.profileId);
+      /*
+       * Built for the conversation that proposed it rather than for whichever
+       * one is current: the fact was learned in a project, and that is the
+       * folder whose memory has to hold it.
+       */
+      const result = await this.host(
+        proposal.profileId,
+        proposal.sessionId ?? undefined,
+      );
       if (!result.ok) {
         /*
          * Kept in the queue rather than dropped. The agent cannot be built right
@@ -438,21 +487,100 @@ export class AgentRuntime {
     return {ok: true};
   }
 
-  /** The catalogue for whichever agent is active, for a window that just opened. */
-  async catalogForActive(): Promise<{
-    profileId: string;
-    catalog: ProfileCatalog;
-  }> {
-    const profile = await this.profileStore.activeProfile();
-    return {profileId: profile.id, catalog: await this.catalog(profile.id)};
-  }
-
   async profiles(): Promise<AgentProfile[]> {
     return await this.profileStore.profiles();
   }
 
   async activeProfile(): Promise<AgentProfile> {
     return await this.profileStore.activeProfile();
+  }
+
+  /**
+   * The folders this install works in, for the rail.
+   *
+   * Every call that changes one answers with the whole list, so a window never
+   * has to merge a single entry into a copy of its own — the order and the
+   * current folder are decided in one place.
+   */
+  async workspaces(): Promise<WorkspaceState> {
+    const file = await this.workspaceStore.load();
+    return {
+      workspaces: file.workspaces,
+      activeWorkspaceId: file.activeWorkspaceId,
+    };
+  }
+
+  /** Loads a folder and makes it current. */
+  async addWorkspace(path: string, name?: string): Promise<WorkspaceState> {
+    await this.workspaceStore.add(path, name);
+    return await this.workspaces();
+  }
+
+  /** Makes a folder the one a new conversation is filed under. */
+  async selectWorkspace(workspaceId: string): Promise<WorkspaceState> {
+    await this.workspaceStore.select(workspaceId);
+    return await this.workspaces();
+  }
+
+  async renameWorkspace(
+    workspaceId: string,
+    name: string,
+  ): Promise<WorkspaceState> {
+    await this.workspaceStore.rename(workspaceId, name);
+    return await this.workspaces();
+  }
+
+  /**
+   * Forgets a folder.
+   *
+   * Documents are *not* dropped for it: a host holds the session service and the
+   * conversation state, and disposing one would kill a turn that is running in
+   * entirely another folder. Nothing about a folder removal changes where an
+   * in-flight turn is writing; the next turn resolves its own folder anyway.
+   */
+  async removeWorkspace(workspaceId: string): Promise<WorkspaceState> {
+    await this.workspaceStore.remove(workspaceId);
+    return await this.workspaces();
+  }
+
+  /** One folder by id, for the caller that opens it in the file manager. */
+  async workspaceById(workspaceId: string): Promise<Workspace | undefined> {
+    return await this.workspaceStore.byId(workspaceId);
+  }
+
+  /**
+   * Re-files a conversation, or unfiles it with `null`.
+   *
+   * The placeholder-config host, for the same reason `transcript` uses one:
+   * filing a conversation has nothing to do with a model, and a missing key must
+   * not be able to stop it.
+   */
+  async setSessionWorkspace(
+    profileId: string,
+    sessionId: string,
+    workspaceId: string | null,
+  ): Promise<SessionSummary> {
+    const host = await this.ensureHost(profileId);
+    return await host.setSessionWorkspace(
+      sessionId,
+      workspaceId ?? undefined,
+      profileId,
+    );
+  }
+
+  async renameSession(
+    profileId: string,
+    sessionId: string,
+    title: string,
+  ): Promise<SessionSummary> {
+    const host = await this.ensureHost(profileId);
+    return await host.renameSession(sessionId, title, profileId);
+  }
+
+  /** Deletes a conversation, aborting a run in it if there is one. */
+  async deleteSession(profileId: string, sessionId: string): Promise<void> {
+    const host = await this.ensureHost(profileId);
+    await host.deleteSession(sessionId, profileId);
   }
 
   /** Every conversation, or one agent's. */
@@ -470,8 +598,11 @@ export class AgentRuntime {
    * not set up yet — gating this on a resolvable config would mean a fresh
    * install could not open the chat it is supposed to explain itself in.
    *
-   * The profile and its folder are stamped on at creation, which is what files
-   * the conversation under the right agent and the right folder in the sidebar.
+   * The profile and the *current* folder are stamped on at creation, which is
+   * what files the conversation under the right agent and the right group in the
+   * rail. It is recorded once rather than followed: a conversation that keeps
+   * running after another folder is selected is what lets the rail be browsed
+   * while an answer streams.
    */
   async createSession(
     profileId: string,
@@ -486,17 +617,10 @@ export class AgentRuntime {
       title,
       undefined,
       profileId,
-      profile.activeWorkspaceId ?? undefined,
+      (await this.workspaceStore.activeWorkspaceId()) ?? undefined,
     );
   }
 
-  /**
-   * The host for a profile, brought up to date with the settings on disk.
-   *
-   * Bringing it up to date on the way in — rather than requiring a caller to
-   * remember to — is what makes "a capability the user turned off is absent"
-   * true on the *next* turn rather than after a restart.
-   */
   /**
    * Reads a conversation, which needs no provider at all.
    *
@@ -526,24 +650,54 @@ export class AgentRuntime {
     return {messages, pending};
   }
 
-  async host(profileId: string): Promise<HostResult> {
+  /**
+   * The host for a profile, working in the folder a conversation is filed under,
+   * and brought up to date with the settings on disk.
+   *
+   * The session id is optional because not every caller has a conversation: the
+   * catalogue and the memory readout are about the agent, and answer against the
+   * current folder. A turn always has one, and that is what decides where its
+   * file tools are confined — the conversation remembers its own folder, so
+   * browsing the rail cannot move a turn that is already running.
+   *
+   * Bringing it up to date on the way in — rather than requiring a caller to
+   * remember to — is what makes "a capability the user turned off is absent"
+   * true on the *next* turn rather than after a restart.
+   */
+  async host(profileId: string, sessionId?: string): Promise<HostResult> {
     const settings = await this.settingsStore.load();
     const profile = await this.profileFor(profileId);
     if (!profile) {
       return {ok: false, problem: `There is no agent called "${profileId}".`};
     }
 
+    /*
+     * The host first, because it is what reads the conversation index — and a
+     * placeholder-config host is exactly what `transcript` and `approve`
+     * already build. Resolving the configuration first would mean reading the
+     * folder before knowing which conversation is asking.
+     */
+    const host = await this.ensureHost(profileId);
+    const filed =
+      sessionId === undefined
+        ? undefined
+        : await host.sessionWorkspaceId(sessionId);
+    const workspaceRoot = workspaceRootFor(
+      await this.workspaceStore.load(),
+      filed,
+    );
+
     const resolved = await resolveAgentConfig({
       settings,
       profile,
       readSecret: this.options.readSecret,
       skills: await this.skillsFor(profile),
+      ...(workspaceRoot === undefined ? {} : {workspaceRoot}),
     });
     if (!resolved.ok) {
       return resolved;
     }
 
-    const host = await this.ensureHost(profileId);
     host.updateConfig(resolved.config);
     this.applyMcpServers(host, profileId);
 
@@ -571,7 +725,7 @@ export class AgentRuntime {
     text: string,
     origin?: 'window' | 'pet',
   ): AsyncGenerator<AgentUiEvent> {
-    const result = await this.host(profileId);
+    const result = await this.host(profileId, sessionId);
     if (!result.ok) {
       yield refusal(sessionId, result.problem);
       return;

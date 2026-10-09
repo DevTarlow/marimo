@@ -604,7 +604,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
  * Which provider answers, how it is reached, and which of its models.
  *
  * One section because none of these stands alone: a model id is only meaningful
- * at one endpoint, the address is what makes a llama.cpp server on the network
+ * at one endpoint, the address is what makes a local server on the network
  * reachable rather than only the one beside this app, and both are unusable
  * without the key that endpoint wants. They were two sections for a while — a
  * Provider card and a detached API key card — and the split was arbitrary: the
@@ -622,7 +622,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
  * "Fetch Models" is what replaces those placeholder names with what the endpoint
  * actually serves, and it is offered only once a key is on file: asking a
  * service that will answer 401 is a button whose only outcome is an error. A
- * provider that needs no key — a llama.cpp server beside the app — is asked
+ * provider that needs no key — a local server beside the app — is asked
  * directly.
  *
  * Saving is immediate, like every other control here. The base URL is the one

@@ -104,9 +104,10 @@ export interface ProviderDescriptor {
    */
   fallbackModels: readonly string[];
   /**
-   * False for a llama.cpp server on the LAN, which usually takes no key at all.
-   * The app still stores one if the user pastes it — `llama-server --api-key`
-   * exists — but nothing is blocked on it.
+   * False for a server on the LAN — llama.cpp, LM Studio, Unsloth — because
+   * those usually take no key at all. The app still stores one if the user
+   * pastes it, since `llama-server --api-key` and LM Studio's own authentication
+   * both exist, but nothing is blocked on it.
    */
   requiresApiKey: boolean;
   keyPlaceholder: string;
@@ -151,20 +152,33 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
   },
   llamacpp: {
     id: 'llamacpp',
-    label: 'Local llama.cpp',
+    label: 'Local',
+    /*
+     * The id is `llamacpp` for the same reason it is not the label: it is what
+     * settings files and the key store already name, and renaming it would mean
+     * a migration to reach an entry the user reads as "Local" either way. What
+     * the picker and every error message draw is the label above, which says the
+     * one thing all of these servers have in common — they run on the user's own
+     * hardware and speak the OpenAI shape — rather than naming the first one
+     * this app happened to be tested against.
+     */
     blurb:
-      'A llama-server on this machine or your network. Nothing leaves your LAN.',
+      'Any OpenAI-compatible server you run yourself — llama.cpp, LM Studio, ' +
+      'Unsloth. Give it the address below and requests go nowhere else.',
     /*
      * Loopback is the one address that is right for anybody running the server
      * beside the app; a server on the network is a host the user has to type, and
-     * the field below is where they type it.
+     * the field below is where they type it. 8080 is llama.cpp's own default and
+     * the address a user is most likely to have to correct, which is why the
+     * field, not this value, is what the blurb points them at.
      */
     defaultBaseUrl: 'http://127.0.0.1:8080/v1',
     fallbackModels: ['local-model'],
     requiresApiKey: false,
     keyPlaceholder: 'not needed',
     keyHelp:
-      'Only if you started llama-server with --api-key. Leave it empty otherwise.',
+      'Only if your server wants one — llama.cpp with --api-key, or LM Studio ' +
+      'with authentication on. Most take no key; leave it empty otherwise.',
     reasoningChannel: true,
     usageInStream: true,
   },

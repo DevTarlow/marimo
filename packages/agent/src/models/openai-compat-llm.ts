@@ -6,9 +6,10 @@
  * Everything here is transport: message translation lives in
  * `openai-mapping.ts`, SSE framing in `sse.ts`.
  *
- * One client serves every backend the app offers — DeepSeek, a local llama.cpp
- * server, and Gemini through Google's OpenAI-compatibility layer — because all
- * three expose the same `/chat/completions` shape. What differs between them is
+ * One client serves every backend the app offers — DeepSeek, a local server
+ * (llama.cpp, LM Studio, Unsloth), and Gemini through Google's
+ * OpenAI-compatibility layer — because all three expose the same
+ * `/chat/completions` shape. What differs between them is
  * a property of the endpoint rather than of a request, so it arrives as the
  * `provider` option and is looked up in the protocol's catalogue instead of
  * being branched on here. The one real difference today is
@@ -80,7 +81,7 @@ export class OpenAiCompatLlm extends BaseLlm {
    * Only documentation, today: `AgentHost` constructs this class directly and
    * never consults `LLMRegistry`, so nothing here decides which client runs.
    *
-   * Deliberately not a wildcard. A llama.cpp model id is whatever file the
+   * Deliberately not a wildcard. A locally served model id is whatever file the
    * server loaded — `Qwen3-30B-A3B-Q4_K_M`, say — so no pattern can claim it
    * honestly, and a match-everything entry would let this class answer a
    * registry lookup meant for ADK's native Gemini client.
@@ -203,9 +204,10 @@ export class OpenAiCompatLlm extends BaseLlm {
   ): Promise<Response> {
     const signal = this.combineSignals(abortSignal);
     /*
-     * A llama.cpp server usually runs without a key and does not care what is in
-     * the header, but an empty `Bearer ` is still a lie about there being a
-     * credential; the header is simply left off when there is nothing to send.
+     * A local server — llama.cpp, LM Studio, Unsloth — usually runs without a
+     * key and does not care what is in the header, but an empty `Bearer ` is
+     * still a lie about there being a credential; the header is simply left off
+     * when there is nothing to send.
      */
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

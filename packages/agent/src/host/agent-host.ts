@@ -948,9 +948,9 @@ export class AgentHost {
       return;
     }
     /*
-     * Only the providers that need a key can be missing one: a llama.cpp server
-     * on the LAN normally runs without any credential, so an empty key there is
-     * a working configuration rather than a setup step the user skipped.
+     * Only the providers that need a key can be missing one: a local server on
+     * the LAN normally runs without any credential, so an empty key there is a
+     * working configuration rather than a setup step the user skipped.
      */
     if (!this.config.apiKey && this.requiresApiKey()) {
       yield {

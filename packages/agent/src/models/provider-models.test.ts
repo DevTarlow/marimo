@@ -155,7 +155,7 @@ describe('fetchProviderModels', () => {
         fetchImpl,
       }),
     ).rejects.toThrow(
-      /Could not reach Local llama\.cpp at http:\/\/127\.0\.0\.1:9999\/v1/u,
+      /Could not reach Local at http:\/\/127\.0\.0\.1:9999\/v1/u,
     );
   });
 });

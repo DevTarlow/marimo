@@ -20,9 +20,9 @@ import type {ProviderId} from '@marimo/protocol';
 export interface ProviderModelsOptions {
   provider: ProviderId;
   /**
-   * Sent as `Authorization: Bearer …` when it is not empty. llama.cpp usually
-   * takes no key, and an empty `Bearer ` would be a claim about a credential
-   * that is not there.
+   * Sent as `Authorization: Bearer …` when it is not empty. A local server
+   * usually takes no key, and an empty `Bearer ` would be a claim about a
+   * credential that is not there.
    */
   apiKey: string;
   /** Defaults to the provider's catalogue address. */

@@ -30,7 +30,8 @@ export const CANONICAL_SECTIONS: readonly CanonicalSection[] = [
   {
     name: 'About the user',
     description:
-      'Durable facts about the person, not the work: name, timezone, role.',
+      'Durable facts about the person, not the work: who they are, the people ' +
+      'and animals in their life, and what they care about.',
   },
   {
     name: 'Preferences and tone',

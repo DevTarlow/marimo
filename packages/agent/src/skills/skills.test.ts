@@ -1,5 +1,7 @@
 import {describe, expect, it} from 'vitest';
 
+import {DEFAULT_AGENT_IDENTITY} from '@marimo/protocol';
+
 import {SKILLS, composeInstruction, renderSkills} from './index.js';
 
 /** Every tool the memory skill is about, which is what carries it. */
@@ -138,6 +140,34 @@ describe('composeInstruction', () => {
       const protocol = text.slice(text.indexOf('# Operating protocol'));
       expect(protocol).toContain('GitHub-flavoured Markdown');
       expect(protocol).toContain('truncated');
+    });
+
+    /*
+     * What the user grants and what a paused gate means used to be the last
+     * paragraph of the shipped identity, which is the one piece of the prompt a
+     * user is invited to rewrite. They are facts about the app, so they ride here
+     * where Reset cannot reach them — and where a profile that grants nothing
+     * still learns that a refusal is an answer.
+     */
+    it("carries the app's rules about how a turn runs", () => {
+      const text = composeInstruction({
+        base: 'Answer however you like.',
+        memory: '',
+        tools: [],
+      });
+      const protocol = text.slice(text.indexOf('# Operating protocol'));
+      expect(protocol).toContain('A gated call pauses the turn');
+      expect(protocol).toContain('A refusal is an answer.');
+    });
+
+    /*
+     * And the other direction, which is what keeps this from creeping back: the
+     * editable identity says who the agent is, and none of the app's method.
+     */
+    it("leaves the app's own rules out of the editable identity", () => {
+      expect(DEFAULT_AGENT_IDENTITY).not.toContain('gated call');
+      expect(DEFAULT_AGENT_IDENTITY).not.toContain('GitHub-flavoured');
+      expect(DEFAULT_AGENT_IDENTITY).not.toContain('# Operating protocol');
     });
   });
 

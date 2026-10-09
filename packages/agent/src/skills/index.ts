@@ -51,8 +51,8 @@ export interface ComposeInstructionOptions {
    *
    * Its position is the reason it is a field rather than more text in `base`. The
    * conflicts that actually happen are with the identity's own manner lines —
-   * "warmth is directness, not preamble" against "call me Tarlow and loosen up" —
-   * so the user's words have to come *after* the identity to win them. They come
+   * "funny when it is funny" against "skip the jokes, I have had a day" — so the
+   * user's words have to come *after* the identity to win them. They come
    * before the protocol because the protocol is the app's method rules and is
    * meant to be unbeatable: a preference can ask for a different voice, not for a
    * claim that a tool ran when it did not. Absent or blank means they wrote none.

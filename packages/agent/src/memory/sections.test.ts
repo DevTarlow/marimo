@@ -112,4 +112,33 @@ describe('where the vocabulary reaches the model', () => {
     expect(memorySkill.instructions).toContain('Do not invent a handoff file');
     expect(renderSectionGuide()).toContain('one line per project');
   });
+
+  /*
+   * The failure this pins down, from a real conversation: told that the user's
+   * dog was called Sunshine, the agent offered to search the workspace for a
+   * dog's name and recorded nothing. The enumeration of what memory is *for* had
+   * no room in it for a fact about the user's life that is not about their work,
+   * and the layer meant to hold it read like a CRM record.
+   */
+  it("gives a fact about the user's life somewhere to go", () => {
+    expect(renderSectionGuide()).toContain(
+      'the people and animals in their life',
+    );
+    expect(memorySkill.instructions).toContain(
+      'the people and animals in their life',
+    );
+    expect(memorySkill.instructions).toContain(
+      'store it, and respond to the thing',
+    );
+  });
+
+  /*
+   * The same conversation wrote the agent's own purpose and tool list into
+   * `Project pointers`, where it sits in every future prompt going stale.
+   */
+  it("keeps the agent's own description out of memory", () => {
+    expect(memorySkill.instructions).toContain(
+      'Never store facts about yourself',
+    );
+  });
 });

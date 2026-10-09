@@ -814,6 +814,12 @@ export class AgentHost {
       instruction: async () =>
         composeInstruction({
           base: this.config.systemPrompt,
+          // Read per request for the same reason as the tools below it: someone
+          // editing how they want to be talked to while a turn is running should
+          // reach that turn's next request rather than the next turn.
+          ...(this.config.preferences !== undefined
+            ? {preferences: this.config.preferences}
+            : {}),
           // Read per request rather than per turn: the model may have just
           // written to memory, and the next request should already see it.
           memory: await this.memory.readForPrompt(),

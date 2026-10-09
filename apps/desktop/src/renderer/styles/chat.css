@@ -1199,6 +1199,14 @@
   line-height: 1.5;
 }
 
+/* Shorter than the identity above it: this is a few sentences the user wrote,
+   not a document they are reading. */
+.settings-preferences {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
 /* -------------------------------------------------------------- connectors */
 
 .connector {

@@ -772,6 +772,67 @@ async function main() {
     }
 
     /*
+     * The two prompt boxes, asserted in the bundle the window actually loaded.
+     * The identity is the app's text and the preferences box is the user's, kept
+     * apart so that Reset can restore one without touching the other — a build
+     * that rendered one of them, or merged them back together, would pass every
+     * unit test above and still be the wrong screen.
+     */
+    const prompts = await until(
+      'the identity and preferences boxes to appear',
+      async () => {
+        const {result} = await send('Runtime.evaluate', {
+          expression: `(() => {
+            const section = [...document.querySelectorAll('.settings-section')]
+              .find((entry) => entry.querySelector('h3')?.textContent === 'What it is');
+            if (section === undefined) return undefined;
+            const name = section.querySelector('input.settings-input');
+            const identity = section.querySelector('textarea[aria-label="Identity"]');
+            const preferences = section.querySelector(
+              'textarea[aria-label="How to talk to me"]',
+            );
+            if (name === null || identity === null || preferences === null) {
+              return JSON.stringify({incomplete: true});
+            }
+            return JSON.stringify({
+              name: name.value,
+              identityLength: identity.value.length,
+              preferences: preferences.value,
+              placeholder: preferences.placeholder,
+              reset: [...section.querySelectorAll('button')].some(
+                (entry) => entry.textContent.trim() === 'Reset to default',
+              ),
+            });
+          })()`,
+          returnByValue: true,
+        });
+        return typeof result?.value === 'string'
+          ? JSON.parse(result.value)
+          : undefined;
+      },
+    );
+
+    if (prompts.incomplete === true) {
+      fail('the "What it is" section is missing one of its boxes');
+    } else if ((prompts.name ?? '').length === 0) {
+      fail('the agent has no name in Settings');
+    } else if (prompts.identityLength === 0) {
+      fail('the identity box is empty on a fresh install');
+    } else if (prompts.reset !== true) {
+      fail('the identity box has no Reset to default button');
+    } else if (prompts.preferences !== '') {
+      fail(`a fresh install starts with preferences: "${prompts.preferences}"`);
+    } else if ((prompts.placeholder ?? '').length === 0) {
+      // The example is how somebody works out what the box is for.
+      fail('the preferences box has no example in it');
+    } else {
+      ok(
+        'Settings carries the app identity, a Reset, and an empty box for your ' +
+          'own words',
+      );
+    }
+
+    /*
      * Back to the chat before anything else is measured. The dialog covers the
      * window, and every check after this one — and the screenshot — is about the
      * window.

@@ -37,6 +37,48 @@ describe('the profile schema', () => {
       enabledSkills: [],
     });
   });
+
+  /*
+   * `preferences` is optional on purpose, and this is the test that keeps it so:
+   * `ProfileStore.parseFile` skips a profile that fails this schema, and a file
+   * whose every profile was skipped is quarantined and replaced with a fresh one.
+   * A required field here would lose every existing agent on upgrade.
+   */
+  it('reads a profile written before preferences existed', () => {
+    const parsed = agentProfileSchema.safeParse({
+      id: 'agent',
+      name: 'Agent',
+      identity: 'You are an agent.',
+      enabledTools: [],
+      enabledSkills: [],
+    });
+    expect(parsed.success).toBe(true);
+    expect(
+      parsed.success ? parsed.data.preferences : 'unparsed',
+    ).toBeUndefined();
+  });
+
+  it('carries the preferences the user wrote', () => {
+    const parsed = agentProfileSchema.parse({
+      id: 'agent',
+      name: 'Agent',
+      identity: 'You are an agent.',
+      preferences: 'Call me Tarlow. Skip the emoji.',
+      enabledTools: [],
+      enabledSkills: [],
+    });
+    expect(parsed.preferences).toBe('Call me Tarlow. Skip the emoji.');
+  });
+
+  it('lets a patch clear preferences with an empty string', () => {
+    const parsed = agentCallSchemas['profiles.update'].parse({
+      profileId: 'agent',
+      patch: {preferences: ''},
+    });
+    // Not `undefined`: "clear it" and "say nothing about it" are different
+    // requests, and the store tells them apart by exactly this.
+    expect(parsed.patch.preferences).toBe('');
+  });
 });
 
 describe('the workspaces document', () => {

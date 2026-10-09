@@ -135,7 +135,6 @@ export {
   resolveInsideWorkspace,
   PathOutsideWorkspaceError,
 } from './tools/paths.js';
-export {DEFAULT_SYSTEM_PROMPT} from './config.js';
 export type {AgentConfig} from './config.js';
 export {iterateSseData} from './models/sse.js';
 export {

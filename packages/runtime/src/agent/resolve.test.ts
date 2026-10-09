@@ -116,6 +116,36 @@ describe('resolveAgentConfig', () => {
     expect(result.config.enabledTools).toEqual(['read_file', 'current_time']);
   });
 
+  /*
+   * Carried beside the system prompt rather than folded into it, because the two
+   * have different owners. The prompt builder is the only thing that knows how to
+   * order them, so this test is about the field surviving the join at all.
+   */
+  it("carries the user's preferences beside the identity", async () => {
+    const result = await resolve({
+      settings: settingsWith(),
+      profile: profile({preferences: 'Call me Tarlow. Skip the emoji.'}),
+      readSecret: async () => present('sk-test'),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.config.systemPrompt).toBe('You are Marimo.');
+    expect(result.config.preferences).toBe('Call me Tarlow. Skip the emoji.');
+  });
+
+  it('leaves preferences absent when the user wrote none', async () => {
+    const result = await resolve({
+      settings: settingsWith(),
+      profile: profile(),
+      readSecret: async () => present('sk-test'),
+    });
+
+    expect(result.ok && result.config.preferences).toBeUndefined();
+  });
+
   it('refuses a turn with no folder, and says which agent', async () => {
     const result = await resolve({
       settings: settingsWith(),

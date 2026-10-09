@@ -60,6 +60,51 @@ describe('composeInstruction', () => {
   });
 
   /*
+   * The user's own words, and the position of them is the whole design: they come
+   * after the identity so they win the manner conflicts that actually happen, and
+   * before the protocol so they cannot license a claim that a tool ran.
+   */
+  describe("the user's preferences", () => {
+    it('ride between the identity and the app protocol', () => {
+      const text = composeInstruction({
+        base: 'You are Marimo.',
+        preferences: 'Call me Tarlow, and skip the emoji.',
+        memory: '',
+      });
+      const identity = text.indexOf('You are Marimo.');
+      const preferences = text.indexOf("# The user's preferences");
+      const protocol = text.indexOf('# Operating protocol');
+      expect(identity).toBeGreaterThanOrEqual(0);
+      expect(text).toContain('Call me Tarlow, and skip the emoji.');
+      expect(preferences).toBeGreaterThan(identity);
+      expect(protocol).toBeGreaterThan(preferences);
+    });
+
+    it('are carried by an agent that can do nothing at all', () => {
+      // Not a capability, so unlike a skill it does not follow the tool list: the
+      // profile that grants nothing is still speaking to this person.
+      const text = composeInstruction({
+        base: 'base',
+        preferences: 'Be blunt.',
+        memory: '',
+        tools: [],
+      });
+      expect(text).toContain('Be blunt.');
+    });
+
+    it('leave no heading behind when there are none', () => {
+      for (const preferences of [undefined, '', '   \n  ']) {
+        const text = composeInstruction({
+          base: 'base',
+          ...(preferences === undefined ? {} : {preferences}),
+          memory: '',
+        });
+        expect(text).not.toContain("The user's preferences");
+      }
+    });
+  });
+
+  /*
    * The protocol is the app's own rules rather than a capability, so no profile
    * can be without it — not the one that grants nothing, and not one whose tool
    * list has never been heard of. It used to be selected by skill name, which
@@ -76,6 +121,23 @@ describe('composeInstruction', () => {
     it('is carried by a caller with no profile concept', () => {
       const text = composeInstruction({base: 'base', memory: ''});
       expect(text).toContain('# Operating protocol');
+    });
+
+    /*
+     * Markdown, tight prose and "pass the truncation on" used to live in a second
+     * shipped default that nothing in the app ever sent. They are the app's own
+     * writing rules rather than any one agent's voice, so they belong in the block
+     * that cannot be reset away — a user rewriting their identity must not be able
+     * to lose them by accident.
+     */
+    it("carries the app's writing rules, whatever the identity says", () => {
+      const text = composeInstruction({
+        base: 'Answer however you like.',
+        memory: '',
+      });
+      const protocol = text.slice(text.indexOf('# Operating protocol'));
+      expect(protocol).toContain('GitHub-flavoured Markdown');
+      expect(protocol).toContain('truncated');
     });
   });
 

@@ -142,6 +142,37 @@ describe('ProfileStore', () => {
     expect(updated.enabledSkills).toEqual([]);
   });
 
+  it("keeps the user's preferences beside the app's identity", async () => {
+    const profiles = store();
+    const profile = await profiles.activeProfile();
+    const updated = await profiles.update(profile.id, {
+      preferences: 'Call me Tarlow. Skip the emoji.',
+    });
+    expect(updated.preferences).toBe('Call me Tarlow. Skip the emoji.');
+    // The identity is the app's text and writing preferences does not touch it:
+    // Reset has to be able to restore one without touching the other.
+    expect(updated.identity).toBe(profile.identity);
+  });
+
+  it('tells a cleared preference apart from one never mentioned', async () => {
+    const profiles = store();
+    const profile = await profiles.activeProfile();
+    await profiles.update(profile.id, {preferences: 'Be blunt.'});
+    // A patch that says nothing about them leaves them alone.
+    const renamed = await profiles.update(profile.id, {name: 'Other'});
+    expect(renamed.preferences).toBe('Be blunt.');
+    // An empty string is the user clearing the box, and it lands as empty rather
+    // than as a no-op on the way to the store.
+    const cleared = await profiles.update(profile.id, {preferences: ''});
+    expect(cleared.preferences).toBe('');
+  });
+
+  it('starts a new profile with no preferences of its own', async () => {
+    const profiles = store();
+    const created = await profiles.create('Researcher');
+    expect(created.preferences).toBeUndefined();
+  });
+
   it('refuses an unknown profile', async () => {
     await expect(store().update('nope', {name: 'x'})).rejects.toBeInstanceOf(
       UnknownProfileError,

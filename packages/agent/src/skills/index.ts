@@ -6,6 +6,10 @@
  * the agent layer rather than stored in settings, so a prompt saved by an older
  * build still gets both.
  *
+ * The one piece of the prompt the app does not own is `preferences`: text the
+ * user wrote about how they want to be talked to. It rides here, beside the
+ * identity, because that is what it disagrees with.
+ *
  * What is *in* the prompt is a property of the profile's tools, not of a second
  * list of switches. The operating protocol is unconditional, because the app's
  * own rules ship with the app; a capability skill rides along with the tools it
@@ -42,6 +46,18 @@ const BUILT_IN_NAMES: ReadonlySet<string> = new Set(
 export interface ComposeInstructionOptions {
   /** The profile's identity: persona and formatting. */
   base: string;
+  /**
+   * Standing instructions the user wrote about how they want to be talked to.
+   *
+   * Its position is the reason it is a field rather than more text in `base`. The
+   * conflicts that actually happen are with the identity's own manner lines —
+   * "warmth is directness, not preamble" against "call me Tarlow and loosen up" —
+   * so the user's words have to come *after* the identity to win them. They come
+   * before the protocol because the protocol is the app's method rules and is
+   * meant to be unbeatable: a preference can ask for a different voice, not for a
+   * claim that a tool ran when it did not. Absent or blank means they wrote none.
+   */
+  preferences?: string;
   /** Current memory.md contents, or `''` when there is none. */
   memory: string;
   /**
@@ -96,6 +112,7 @@ export function renderSkills(skills: readonly Skill[]): string {
 
 export function composeInstruction({
   base,
+  preferences,
   memory: memoryText,
   instruction,
   tools,
@@ -113,9 +130,13 @@ export function composeInstruction({
   ];
   const memoryBody =
     memoryText.trim().length > 0 ? memoryText.trim() : EMPTY_MEMORY;
+  const preferencesBody = preferences?.trim() ?? '';
 
   const sections = [
     base.trim(),
+    preferencesBody.length > 0
+      ? `# The user's preferences\n\n${preferencesBody}`
+      : '',
     reasoning ? `# Operating protocol\n\n${reasoning.instructions}` : '',
     capabilitySkills.length > 0
       ? `# Skills\n\n${renderSkills(capabilitySkills)}`

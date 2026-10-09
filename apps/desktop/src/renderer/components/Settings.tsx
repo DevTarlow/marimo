@@ -77,10 +77,17 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  /** The name and identity being edited. Committed on blur, not on every letter. */
-  const [draft, setDraft] = useState<{name: string; identity: string} | null>(
-    null,
-  );
+  /**
+   * The fields being edited. Committed on blur, not on every letter.
+   *
+   * `preferences` is a string here and optional on the profile, because a text
+   * box has no way to show "absent" and `''` is what an empty one means.
+   */
+  const [draft, setDraft] = useState<{
+    name: string;
+    identity: string;
+    preferences: string;
+  } | null>(null);
 
   const load = async (): Promise<void> => {
     try {
@@ -102,7 +109,11 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
       setDraft(
         profile === undefined
           ? null
-          : {name: profile.name, identity: profile.identity},
+          : {
+              name: profile.name,
+              identity: profile.identity,
+              preferences: profile.preferences ?? '',
+            },
       );
     } catch (failure) {
       setProblem(describe(failure));
@@ -327,6 +338,67 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
                   Reset to default
                 </button>
               </div>
+            </div>
+            {/*
+             * The user's own words, in their own field. Kept out of the identity
+             * above deliberately: Reset restores the app's text, and it must not
+             * be able to restore over something the app never wrote.
+             */}
+            <div className="settings-field">
+              <span>How to talk to me</span>
+              <em className="settings-why">
+                Your own standing instructions. Sent after the identity, so it
+                wins wherever the two disagree about how you want to be spoken to.
+              </em>
+              <textarea
+                className="settings-input settings-preferences"
+                rows={3}
+                aria-label="How to talk to me"
+                placeholder="Call me Tarlow. Tell me when you are unsure rather than guessing."
+                value={draft.preferences}
+                disabled={saving}
+                onChange={(event) => {
+                  setDraft({...draft, preferences: event.target.value});
+                }}
+                onBlur={() => {
+                  const stored = loaded.profile?.preferences ?? '';
+                  if (draft.preferences === stored) {
+                    return;
+                  }
+                  const preferences = draft.preferences;
+                  void change(async () => {
+                    await window.marimo.call('profiles.update', {
+                      profileId: loaded.profile?.id ?? '',
+                      patch: {preferences},
+                    });
+                  });
+                }}
+              />
+              {draft.preferences.trim().length > 0 && (
+                <div className="settings-row">
+                  {/*
+                   * Clear, not "Reset to default": the default here is nothing,
+                   * and a button that offered to restore the app's wording into a
+                   * box the app did not write would be offering to invent it.
+                   */}
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    disabled={saving}
+                    onClick={() => {
+                      setDraft({...draft, preferences: ''});
+                      void change(async () => {
+                        await window.marimo.call('profiles.update', {
+                          profileId: loaded.profile?.id ?? '',
+                          patch: {preferences: ''},
+                        });
+                      });
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
             </div>
           </section>
         )}

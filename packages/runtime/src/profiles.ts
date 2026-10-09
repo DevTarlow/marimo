@@ -1,10 +1,11 @@
 /**
  * Agent profiles.
  *
- * A profile is one agent: an identity (its system prompt) and the tools and
- * skills it may use. Switching profile is the app's "use a different agent"
- * action, so the profile also owns which conversations are visible — sessions
- * are tagged with the profile that created them.
+ * A profile is one agent: an identity (its system prompt), the preferences its
+ * user wrote about how they want to be talked to, and the tools and skills it may
+ * use. Switching profile is the app's "use a different agent" action, so the
+ * profile also owns which conversations are visible — sessions are tagged with
+ * the profile that created them.
  *
  * The folders are deliberately *not* here. They used to be, one list per agent,
  * and that made two agents unable to share a project; they live in
@@ -262,6 +263,14 @@ export class ProfileStore {
         ...current,
         ...(clean.name !== undefined ? {name: clean.name} : {}),
         ...(clean.identity !== undefined ? {identity: clean.identity} : {}),
+        /*
+         * An empty string is kept rather than dropped: "clear it" and "leave it
+         * alone" are different requests, and only one of them arrives as
+         * `undefined`. The composer treats a blank preference as absent.
+         */
+        ...(clean.preferences !== undefined
+          ? {preferences: clean.preferences}
+          : {}),
         ...(clean.enabledTools !== undefined
           ? {enabledTools: [...new Set(clean.enabledTools)]}
           : {}),

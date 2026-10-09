@@ -4,8 +4,8 @@
  * renderer can read.
  *
  * Everything else here comes from the active agent profile: its identity (the
- * system prompt), the folder it works in, and the tools and skills it is allowed
- * to use.
+ * system prompt), the preferences the user wrote for themselves, the folder it
+ * works in, and the tools and skills it is allowed to use.
  */
 import type {ProviderId} from '@marimo/protocol';
 
@@ -28,6 +28,16 @@ export interface AgentConfig {
   maxOutputTokens?: number;
   /** The profile's identity: who this agent is. */
   systemPrompt: string;
+  /**
+   * Standing instructions the user wrote about how they want to be talked to.
+   *
+   * Here rather than in `systemPrompt` because the two have different owners: the
+   * identity is the app's text and Settings can restore it, so the user's own
+   * words must not live inside it. Read per request like `enabledSkills` below,
+   * and for the same reason — it is prompt text, so editing it does not abort a
+   * turn that is already running. Absent or blank means they wrote none.
+   */
+  preferences?: string;
   /**
    * Prompt text for this turn only, appended to the instruction.
    *
@@ -85,22 +95,3 @@ export interface AgentConfig {
    */
   userSkills?: readonly Skill[];
 }
-
-export const DEFAULT_SYSTEM_PROMPT = [
-  "You are Marimo, a focused desktop assistant running locally on the user's machine.",
-  '',
-  'Working style:',
-  '- Answer the question that was asked. Prefer a short, direct answer over a survey.',
-  '- Use your tools when they give a better answer than recall: read files before',
-  '  describing them, and fetch a URL before summarizing it.',
-  '- Never claim to have run a command or read a file you did not actually run or read.',
-  '- When a task needs several steps, say what you are about to do in one line, then do it.',
-  '',
-  'Formatting:',
-  '- Reply in GitHub-flavoured Markdown. Use fenced code blocks with a language tag.',
-  '- Keep prose tight. No filler preamble, no restating the question.',
-  '',
-  'Limits:',
-  '- Tool output is truncated when large; say so instead of guessing at the rest.',
-  '- If a task needs a capability you do not have, say which one is missing.',
-].join('\n');

@@ -110,6 +110,14 @@ export async function resolveAgentConfig(
         ? {maxOutputTokens: settings.maxOutputTokens}
         : {}),
       systemPrompt: profile.identity,
+      /*
+       * Carried beside the identity rather than folded into it: the two have
+       * different owners, and the agent's prompt is composed so the user's words
+       * outrank the app's on manner without outranking the app's method rules.
+       */
+      ...(profile.preferences !== undefined
+        ? {preferences: profile.preferences}
+        : {}),
       profileId: profile.id,
       workspaceRoot,
       memorySoftLimitBytes: settings.memorySoftLimitBytes,

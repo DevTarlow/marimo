@@ -20,7 +20,6 @@ import type {Job} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 
-import {DEFAULT_SYSTEM_PROMPT} from '../config.js';
 import {resolveMemoryFile} from '../memory/index.js';
 import type {JobService} from '../tools/job-tools.js';
 import type {WebSearchProvider} from '../tools/web-search-tool.js';
@@ -194,6 +193,15 @@ function typesOf(events: AgentUiEvent[]): string[] {
   return events.map((event) => event.type);
 }
 
+/**
+ * The identity these fixtures send.
+ *
+ * A local literal rather than the app's shipped default: what these tests are
+ * about is that whatever identity a profile holds reaches the request, and an
+ * assertion against the shipped text would fail every time somebody edits it.
+ */
+const TEST_IDENTITY = 'You are Marimo, a test agent.';
+
 describe('AgentHost', () => {
   let workDir: string;
   let fake: FakeDeepSeek | undefined;
@@ -218,7 +226,7 @@ describe('AgentHost', () => {
       baseUrl,
       model: 'deepseek-chat',
       temperature: 0,
-      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+      systemPrompt: TEST_IDENTITY,
       workspaceRoot: workDir,
       allowPrivateNetworkFetch: false,
     };
@@ -290,7 +298,7 @@ describe('AgentHost', () => {
     const system = request?.messages[0];
     expect(system).toMatchObject({role: 'system'});
     const systemText = String(system?.['content']);
-    expect(systemText).toContain('You are Marimo');
+    expect(systemText).toContain(TEST_IDENTITY);
     // The operating protocol and the memory block ride in the instruction, not
     // in the stored prompt, so even an old saved prompt carries both.
     expect(systemText).toContain('# Operating protocol');
@@ -1081,7 +1089,7 @@ describe('AgentHost', () => {
       );
 
     expect(system(first)).toContain('ANSWER BRIEFLY, PET.');
-    expect(system(first)).toContain(DEFAULT_SYSTEM_PROMPT.slice(0, 40));
+    expect(system(first)).toContain(TEST_IDENTITY);
     expect(system(second)).not.toContain('ANSWER BRIEFLY, PET.');
   });
 

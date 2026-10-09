@@ -848,9 +848,39 @@ export type WorkspacesFile = z.infer<typeof workspacesFileSchema>;
  * new profile is seeded with *and* the text the Reset button puts back. A
  * renderer holding its own copy would reset an agent to something the app never
  * shipped, which looks like the button working.
+ *
+ * It says who the agent is and where its context comes from, and stops there.
+ * Method belongs to the operating protocol, which is appended after this and is
+ * written against a tool list this text cannot see; and the user's own manner
+ * belongs in `preferences`, so that editing one's voice never means editing the
+ * app's text — nor Reset meaning "throw my words away".
+ *
+ * It is also read where no user is present: a scheduled job and a Discord
+ * mention front the same identity, so it states a stance rather than a
+ * conversation.
  */
-export const DEFAULT_AGENT_IDENTITY =
-  "You are Marimo, a helpful and useful AI assistant - the user's own personal assistant. You are talking to one person, on their own machine, about their own work.";
+export const DEFAULT_AGENT_IDENTITY = [
+  'You are Marimo, running locally on this machine for one person: the user. You',
+  'work on their projects, in a folder they loaded, at their direction.',
+  '',
+  'Your ground is that folder and your long-term memory of it. Read before you',
+  'speak about their code or setup, and when you are missing context, say so and go',
+  'and find it — a confident guess about their project is worse than a question.',
+  '',
+  'You are a collaborator, not a search box. Answering is the default; on a',
+  'decision, a plan, or a claim about to be acted on, do the harder thing: name the',
+  'assumption you would otherwise share, the failure mode, and the cheaper',
+  'alternative, then let them choose. Warmth here is directness and remembering',
+  'what matters to them, not preamble.',
+  '',
+  'Two facts about how you run are not obstacles:',
+  '- Writing files, running commands and reaching the network are things the user',
+  '  grants, and some calls they approve one at a time. If a capability is switched',
+  '  off, say which one and where to turn it on. A refusal is an answer.',
+  '- A gated call pauses and waits for the user; that wait can outlast the turn, and',
+  '  on a scheduled run nobody may be there at all. Leave it waiting — never look',
+  '  for another route to the same effect.',
+].join('\n');
 
 /**
  * An agent: its identity (the system prompt) and the tools and skills it is
@@ -867,6 +897,22 @@ export const agentProfileSchema = z.object({
   name: z.string().trim().min(1),
   /** The system prompt, presented to the user as the agent's identity. */
   identity: z.string(),
+  /**
+   * The user's own standing instructions about manner, when they wrote any.
+   *
+   * Separate from `identity` because the two have different owners. The identity
+   * is the app's text: a new profile is seeded with it and Settings can restore
+   * it. This is the user's, and neither the app nor the agent ever writes it — so
+   * resetting the identity cannot cost them their own words, and their own words
+   * do not freeze the app's text at whichever release they first edited it.
+   *
+   * Optional, and that is load-bearing rather than tidy. `ProfileStore.parseFile`
+   * skips a profile that fails this schema, and a file whose every profile was
+   * skipped is treated as unreadable: renamed aside and replaced with a fresh
+   * agent. A *required* field here would quarantine every existing agent on
+   * upgrade, which is why this one can never become required.
+   */
+  preferences: z.string().optional(),
   /** Tool names this profile may use, from `profiles.catalog`. */
   enabledTools: z.array(z.string()),
   /** Skill names this profile carries, from `profiles.catalog`. */
@@ -876,6 +922,8 @@ export const agentProfileSchema = z.object({
 export const profilePatchSchema = z.object({
   name: z.string().trim().min(1).optional(),
   identity: z.string().optional(),
+  /** An empty string clears it; absent leaves whatever is stored alone. */
+  preferences: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
   enabledSkills: z.array(z.string()).optional(),
 });

@@ -1205,19 +1205,60 @@
   font-size: var(--text-xl);
 }
 
+/*
+ * A card that folds.
+ *
+ * The card is a plain block and the spacing lives in the body, rather than the
+ * card being the flex column it used to be: `<details>` lays its summary out
+ * itself, and making the element a flex container puts a control the browser
+ * positions in the flow of a layout it did not ask for.
+ */
 .settings-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
   padding: var(--space-4);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
 
-.settings-section h3 {
+/*
+ * The heading *is* the switch. A summary is what the keyboard stops on, so the
+ * words naming the panel have to be inside it — a chevron on its own is a
+ * control with nothing to announce.
+ */
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  /* The browser's own triangle, dropped for the chevron the rail and the model
+     picker already use. */
+  list-style: none;
+}
+
+.settings-section-head::-webkit-details-marker {
+  display: none;
+}
+
+.settings-section-head h3 {
+  flex: 1;
   margin: 0;
   font-size: var(--text-base);
+}
+
+/* One em wide whatever the glyph, so opening a panel does not shift its title
+   sideways. The mark itself is drawn in the component, as the two characters
+   the rest of the app uses for the same pair of states. */
+.settings-section-chevron {
+  flex: none;
+  width: 1em;
+  color: var(--text-muted);
+}
+
+.settings-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .settings-group {
@@ -1852,7 +1893,8 @@
 }
 
 .memory-proposals-heading {
-  margin-top: var(--space-5);
+  margin: var(--space-5) 0 0;
+  font-size: var(--text-base);
 }
 
 .memory-item {

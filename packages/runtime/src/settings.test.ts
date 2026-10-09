@@ -542,11 +542,11 @@ describe('SettingsStore memorySoftLimitBytes', () => {
   });
 });
 
-describe('SettingsStore collapsedSections', () => {
+describe('SettingsStore expandedSections', () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(process.cwd(), '.marimo-collapsed-'));
+    dir = await mkdtemp(join(process.cwd(), '.marimo-expanded-'));
   });
 
   afterEach(async () => {
@@ -565,52 +565,58 @@ describe('SettingsStore collapsedSections', () => {
     );
   }
 
-  it('starts with nothing folded, so the dialog looks as it always did', async () => {
+  it('starts with every section folded', async () => {
     const settings = await store().load();
-    expect(settings.collapsedSections).toEqual([]);
+    expect(settings.expandedSections).toEqual([]);
   });
 
-  it('keeps the folded sections through another settings write', async () => {
+  it('keeps the opened sections through another settings write', async () => {
     const settings = store();
-    await settings.patch({collapsedSections: ['Limits', 'Discord']});
+    await settings.patch({expandedSections: ['Limits', 'Discord']});
     const after = await settings.patch({temperature: 0.2});
 
-    expect(after.collapsedSections).toEqual(['Limits', 'Discord']);
+    expect(after.expandedSections).toEqual(['Limits', 'Discord']);
     expect(after.temperature).toBe(0.2);
   });
 
   it('gives a file written before the field existed an empty list', async () => {
+    /*
+     * Empty is "every section folded", which is where the dialog starts anyway:
+     * an older file opens on the same page a fresh install does, rather than on
+     * the eight cards the field replaced.
+     */
     await write({sidebarWidth: 300});
     const settings = await store().load();
 
-    expect(settings.collapsedSections).toEqual([]);
+    expect(settings.expandedSections).toEqual([]);
     expect(settings.sidebarWidth).toBe(300);
   });
 
-  it('folds a value that is not a list instead of losing the rest', async () => {
+  it('discards a value that is not a list instead of losing the rest', async () => {
     /*
      * This is why the field carries a `.catch`. It is a flat setting, and a flat
      * setting that fails the schema takes the *whole file* down with it — the
      * user would lose their model, their folders and their Discord setup over a
-     * hand-edited list of section names. Falling back to "nothing folded" is the
-     * only sane reading of a value that is not a list of names anyway.
+     * hand-edited list of section names. Falling back to "nothing opened" is the
+     * only sane reading of a value that is not a list of names anyway, and it
+     * folds the dialog rather than opening all of it.
      */
-    await write({collapsedSections: 42, sidebarWidth: 300});
+    await write({expandedSections: 42, sidebarWidth: 300});
     const settings = await store().load();
 
-    expect(settings.collapsedSections).toEqual([]);
+    expect(settings.expandedSections).toEqual([]);
     expect(settings.sidebarWidth).toBe(300);
   });
 
   it('drops names it does not recognise rather than refusing the file', async () => {
     // A section that was renamed leaves a stale name behind, which has to be
-    // harmless: the renderer folds by title and simply never matches it.
+    // harmless: the renderer opens by title and simply never matches it.
     await write({
-      collapsedSections: ['Limits', 'A section from an older build'],
+      expandedSections: ['Limits', 'A section from an older build'],
     });
     const settings = await store().load();
 
-    expect(settings.collapsedSections).toEqual([
+    expect(settings.expandedSections).toEqual([
       'Limits',
       'A section from an older build',
     ]);

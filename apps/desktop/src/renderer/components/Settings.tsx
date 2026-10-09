@@ -40,6 +40,7 @@ import {describe} from '../describe.js';
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
 import {ModelPicker} from './ModelPicker.js';
+import {SettingsSection} from './SettingsSection.js';
 
 /**
  * Above this many models the field becomes a searchable picker.
@@ -91,6 +92,15 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
     identity: string;
     preferences: string;
   } | null>(null);
+  /**
+   * The sections the user has opened, by title.
+   *
+   * Here rather than inside each panel because the file stores the list whole:
+   * one write carries every open section, and a panel writing only its own name
+   * would fold all the others. `null` until the file has been read, so an empty
+   * list — every section folded — is never confused with not having looked yet.
+   */
+  const [openSections, setOpenSections] = useState<string[] | null>(null);
 
   const load = async (): Promise<void> => {
     try {
@@ -118,6 +128,13 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               preferences: profile.preferences ?? '',
             },
       );
+      /*
+       * Seeded once. Every later read is the reload that follows a write, and
+       * that write came from the list already on screen — taking the file's copy
+       * instead would be taking the same list back, or throwing away the fold
+       * somebody just made if the write was slower than the read.
+       */
+      setOpenSections((current) => current ?? settings.expandedSections);
     } catch (failure) {
       setProblem(describe(failure));
     }
@@ -139,6 +156,37 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
     } finally {
       setSaving(false);
     }
+  };
+
+  /**
+   * Opens or folds one section, and stores the fact.
+   *
+   * The only control on this screen drawn before it is written. Every other
+   * switch here is a fact about how the agent behaves; this is a fact about
+   * where somebody is looking, and a panel that spent a round trip deciding
+   * whether to close would feel like it had missed the click. A refused write
+   * puts the list back where it was, so the dialog never disagrees with the
+   * file about what is open.
+   *
+   * Deliberately not the `saving` flag the other writes set: that flag disables
+   * every switch on the screen, and a fold changes none of them. Raising it here
+   * greyed out the whole dialog — including the section being opened — for the
+   * duration of a write about where a panel sits.
+   */
+  const fold = (title: string, expanded: boolean): void => {
+    const before = openSections ?? [];
+    const after = expanded
+      ? [...new Set([...before, title])]
+      : before.filter((name) => name !== title);
+    setOpenSections(after);
+    setProblem(null);
+    void window.marimo
+      .call('settings.set', {patch: {expandedSections: after}})
+      .then(() => load())
+      .catch((failure) => {
+        setOpenSections(before);
+        setProblem(describe(failure));
+      });
   };
 
   const toggle = (tool: CatalogTool, on: boolean): void => {
@@ -176,6 +224,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
   }
 
   const granted = new Set(loaded.profile?.enabledTools ?? []);
+  const opened = new Set(openSections ?? []);
   /*
    * Reset would be a no-op only when the box already shows the default *and*
    * that is what is stored. A box showing the default it has not saved yet is a
@@ -209,8 +258,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           </div>
         )}
 
-        <section className="settings-section">
-          <h3>Your agents</h3>
+        <SettingsSection title="Your agents" opened={opened} onToggle={fold}>
           <p className="settings-muted">
             Each agent has its own identity, its own abilities and its own
             conversations. Making a second one is how you keep two jobs from
@@ -250,11 +298,10 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               + New agent
             </button>
           </div>
-        </section>
+        </SettingsSection>
 
         {draft !== null && loaded.profile !== undefined && (
-          <section className="settings-section">
-            <h3>What it is</h3>
+          <SettingsSection title="What it is" opened={opened} onToggle={fold}>
             <label className="settings-field">
               <span>Name</span>
               <input
@@ -403,11 +450,14 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
                 </div>
               )}
             </div>
-          </section>
+          </SettingsSection>
         )}
 
-        <section className="settings-section">
-          <h3>What {loaded.profile?.name ?? 'this agent'} can do</h3>
+        <SettingsSection
+          title={`What ${loaded.profile?.name ?? 'this agent'} can do`}
+          opened={opened}
+          onToggle={fold}
+        >
           <p className="settings-muted">
             A tool that is switched off is not offered to the model at all — it is
             not a suggestion it might ignore.
@@ -434,10 +484,13 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               onChange={toggle}
             />
           ))}
-        </section>
+        </SettingsSection>
 
-        <section className="settings-section">
-          <h3>Desktop companion</h3>
+        <SettingsSection
+          title="Desktop companion"
+          opened={opened}
+          onToggle={fold}
+        >
           <p className="settings-muted">
             A moss ball that floats above your other windows with its own chat
             bar, so you can ask something without opening this one. It shares
@@ -581,7 +634,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               </em>
             </span>
           </label>
-        </section>
+        </SettingsSection>
 
         {/*
           Commands act on the conversation itself rather than being said in it,
@@ -590,8 +643,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           protocol's catalogue, so a command added there appears here, in the
           composer's menu, and nowhere else needs to know about it.
         */}
-        <section className="settings-section">
-          <h3>Commands</h3>
+        <SettingsSection title="Commands" opened={opened} onToggle={fold}>
           <p className="settings-muted">
             Commands run against a conversation from the composer&rsquo;s +
             menu. They are off the model&rsquo;s list entirely when switched off
@@ -623,19 +675,23 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               </span>
             </label>
           ))}
-        </section>
+        </SettingsSection>
 
         <ProviderSection
+          opened={opened}
+          onToggle={fold}
           onChange={() => {
             void load();
           }}
         />
 
-        <Memory />
+        <Memory opened={opened} onToggle={fold} />
 
         <Connectors
           servers={loaded.settings.mcpServers}
           statuses={loaded.statuses}
+          opened={opened}
+          onToggle={fold}
           onChange={() => {
             void load();
           }}
@@ -676,8 +732,12 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
  * turn.
  */
 function ProviderSection({
+  opened,
+  onToggle,
   onChange,
 }: {
+  opened: ReadonlySet<string>;
+  onToggle: (title: string, expanded: boolean) => void;
   onChange?: () => void;
 }): React.JSX.Element | null {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
@@ -810,8 +870,7 @@ function ProviderSection({
   };
 
   return (
-    <section className="settings-section">
-      <h3>Provider</h3>
+    <SettingsSection title="Provider" opened={opened} onToggle={onToggle}>
       <p className="settings-muted">
         Which service answers, how the app reaches it, and which of its models.
         Every provider keeps its own address, model and key, so trying one and
@@ -975,7 +1034,7 @@ function ProviderSection({
         {note !== null && <p className="settings-muted">{note}</p>}
         {problem !== null && <p className="settings-problem">{problem}</p>}
       </div>
-    </section>
+    </SettingsSection>
   );
 }
 

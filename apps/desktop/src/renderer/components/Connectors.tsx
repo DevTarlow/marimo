@@ -25,6 +25,7 @@ import {
   parseCommandLine,
   parseSecret,
 } from '../command-line.js';
+import {SettingsSection} from './SettingsSection.js';
 
 /** A connector being written, before it is a valid `McpServer`. */
 interface Draft {
@@ -125,10 +126,14 @@ function toServer(draft: Draft): {server: McpServer} | {problem: string} {
 export function Connectors({
   servers,
   statuses,
+  opened,
+  onToggle,
   onChange,
 }: {
   servers: McpServer[];
   statuses: Record<string, McpStatus>;
+  opened: ReadonlySet<string>;
+  onToggle: (title: string, expanded: boolean) => void;
   onChange: () => void;
 }): React.JSX.Element {
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -163,8 +168,7 @@ export function Connectors({
   };
 
   return (
-    <section className="settings-section">
-      <h3>Connectors</h3>
+    <SettingsSection title="Connectors" opened={opened} onToggle={onToggle}>
       <p className="settings-muted">
         Connect this agent to an MCP server — a program that offers it extra
         tools. Until you trust one, every tool it offers asks your permission
@@ -425,7 +429,7 @@ export function Connectors({
       {problem !== null && (
         <p className="connector-detail connector-error">{problem}</p>
       )}
-    </section>
+    </SettingsSection>
   );
 }
 

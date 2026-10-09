@@ -920,6 +920,69 @@ async function main() {
         ?.click()`,
       returnByValue: true,
     });
+
+    /*
+     * The sections fold, and they start folded.
+     *
+     * Asserted because every check below reaches *into* a panel: a folded
+     * `<details>` still answers a DOM query and still takes a programmatic
+     * click, so without this the rest of this block would pass against a dialog
+     * nobody can get at.
+     */
+    const foldedSections = await until('the settings sections', async () => {
+      const value = await evaluate(`(() => {
+        const sections = [...document.querySelectorAll('details.settings-section')];
+        if (sections.length === 0) return undefined;
+        return JSON.stringify(
+          sections.map((entry) => ({
+            title: entry.querySelector('h3')?.textContent ?? '',
+            open: entry.open,
+          })),
+        );
+      })()`);
+      return value === undefined ? undefined : JSON.parse(value);
+    });
+    const openOnArrival = foldedSections.filter((entry) => entry.open);
+    if (foldedSections.length < 8) {
+      fail(`the dialog has ${String(foldedSections.length)} foldable section(s)`);
+    } else if (openOnArrival.length > 0) {
+      fail(
+        `a fresh install expands ${openOnArrival
+          .map((entry) => entry.title)
+          .join(', ')}`,
+      );
+    } else {
+      ok(`all ${String(foldedSections.length)} settings sections start folded`);
+    }
+
+    /**
+     * Opens a section the way a person does — a click on its heading.
+     *
+     * Idempotent, because the fold is stored: the walk below comes back to the
+     * Commands panel a second time and it is still open from the first visit.
+     */
+    const openSection = async (title) => {
+      await evaluate(`(() => {
+        const section = [...document.querySelectorAll('details.settings-section')]
+          .find((entry) => entry.querySelector('h3')?.textContent === ${JSON.stringify(title)});
+        if (section !== undefined && !section.open) {
+          section.querySelector('summary')?.click();
+        }
+      })()`);
+      const opened = await until(`the ${title} section to open`, async () => {
+        const value = await evaluate(`(() => {
+          const section = [...document.querySelectorAll('details.settings-section')]
+            .find((entry) => entry.querySelector('h3')?.textContent === ${JSON.stringify(title)});
+          return section === undefined ? undefined : section.open;
+        })()`);
+        return value === true ? true : undefined;
+      });
+      if (opened !== true) {
+        fail(`the ${title} section could not be opened`);
+      }
+    };
+
+    await openSection('Provider');
     const picker = await until('the provider picker to appear', async () => {
       const {result} = await send('Runtime.evaluate', {
         expression: `(() => {
@@ -1073,6 +1136,7 @@ async function main() {
     } else if (!/Compact history/u.test(switched.label)) {
       fail(`the Commands section names the wrong thing: ${switched.label}`);
     } else {
+      await openSection('Commands');
       await evaluate(
         `(() => {
           const section = [...document.querySelectorAll('.settings-section')]
@@ -1139,6 +1203,9 @@ async function main() {
           })()`);
           return state === undefined ? undefined : JSON.parse(state);
         });
+        // Still open from the visit above, but said again: this is the gesture a
+        // person makes after reopening the dialog, whatever the file remembers.
+        await openSection('Commands');
         await evaluate(
           `(() => {
             const section = [...document.querySelectorAll('.settings-section')]

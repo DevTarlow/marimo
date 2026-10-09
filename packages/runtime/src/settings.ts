@@ -82,8 +82,9 @@ export function defaultStoredSettings(): StoredSettings {
     // The file tree opens folded, like the notes: the to-do list is the rail a
     // fresh install starts with, and it should not have to share the column.
     filesOpen: false,
-    // Nothing folded: the dialog opens exactly as it did before it could fold.
-    collapsedSections: [],
+    // Nothing opened: every section of the dialog starts folded, so a fresh
+    // install opens on the list of headings rather than on eight cards.
+    expandedSections: [],
     // Nothing switched off. A command that exists is offered, and one the user
     // turns off stays off — which is why the stored list is the *disabled* half.
     disabledCommands: [],

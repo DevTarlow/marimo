@@ -27,8 +27,17 @@ import {
 import type {MemoryProposal, MemoryUsage} from '@marimo/protocol';
 
 import {formatKiB, summarizeMemory} from '../memory-format.js';
+import {SettingsSection} from './SettingsSection.js';
 
-export function Memory({onChange}: {onChange?: () => void}): React.JSX.Element {
+export function Memory({
+  opened,
+  onToggle,
+  onChange,
+}: {
+  opened: ReadonlySet<string>;
+  onToggle: (title: string, expanded: boolean) => void;
+  onChange?: () => void;
+}): React.JSX.Element {
   const [proposals, setProposals] = useState<MemoryProposal[] | null>(null);
   const [usage, setUsage] = useState<MemoryUsage | null>(null);
   /**
@@ -121,9 +130,7 @@ export function Memory({onChange}: {onChange?: () => void}): React.JSX.Element {
     draftLimit ?? usage?.limitBytes ?? DEFAULT_MEMORY_SOFT_LIMIT_BYTES;
 
   return (
-    <section className="settings-section">
-      <h3>Memory</h3>
-
+    <SettingsSection title="Memory" opened={opened} onToggle={onToggle}>
       {usage === null ? (
         <p className="settings-muted">{problem ?? 'Reading…'}</p>
       ) : (
@@ -178,7 +185,7 @@ export function Memory({onChange}: {onChange?: () => void}): React.JSX.Element {
         </>
       )}
 
-      <h3 className="memory-proposals-heading">What it would remember</h3>
+      <h4 className="memory-proposals-heading">What it would remember</h4>
       <p className="settings-muted">
         After a conversation goes quiet, the agent reads it back and suggests
         what is worth keeping. These are shown to it at the start of every
@@ -232,7 +239,7 @@ export function Memory({onChange}: {onChange?: () => void}): React.JSX.Element {
       {problem !== null && (
         <p className="connector-detail connector-error">{problem}</p>
       )}
-    </section>
+    </SettingsSection>
   );
 }
 

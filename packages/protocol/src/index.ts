@@ -750,28 +750,30 @@ export const settingsSchema = z.object({
    */
   filesOpen: z.boolean(),
   /**
-   * The settings dialog's sections the user has folded away, by title.
+   * The settings dialog's sections the user has opened, by title.
    *
-   * Layout state, like the widths above, and here for the same reason: a dialog
-   * five sections deep is one the user collapses to get to the section they came
-   * for, and having to do that again on every launch is the annoyance the folding
-   * was meant to remove.
+   * Layout state, like the widths above, and here for the same reason: eight
+   * sections expanded is a page whose shape nobody can see, so they all start
+   * folded and what this remembers is the ones somebody opened to work in. The
+   * *open* half rather than the folded one because the default is folded —
+   * storing the closed half would mean this document listing every section just
+   * to describe a fresh install.
    *
    * Free-form strings rather than an enum of the sections, because the sections
    * are the renderer's business and this is a list of names it no longer cares
-   * about — a renamed section simply loses its folded state instead of failing to
+   * about — a renamed section simply loses its open state instead of failing to
    * load, and adding one needs no protocol change. `.catch` for the same
    * forgivingness: this is a flat field, so without it a hand-edited file holding
    * something that is not an array would fail the whole settings schema and cost
    * the user every other setting they had.
    */
-  collapsedSections: z.array(z.string()).catch([]),
+  expandedSections: z.array(z.string()).catch([]),
   /**
    * The commands the user has switched off.
    *
    * A list of the ones that are *off* rather than of the ones that are on, so a
    * command added in a later build is available to somebody who never touched
-   * this setting. `.catch` for the same reason `collapsedSections` has it: a
+   * this setting. `.catch` for the same reason `expandedSections` has it: a
    * command renamed or removed later must cost its own row, not fail the
    * settings schema and take every other preference with it.
    */

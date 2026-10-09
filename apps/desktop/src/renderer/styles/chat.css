@@ -1080,8 +1080,26 @@
   gap: var(--space-2);
 }
 
+/*
+ * The button keeps its own width; the field absorbs what is left. Without this
+ * a long label — "Fetch Models" beside a long model id — is squeezed onto two
+ * lines by the field's overflow instead of the field being clipped.
+ */
+.settings-row > .button {
+  flex: none;
+}
+
 .settings-input {
   flex: 1;
+  /*
+   * A flex item's automatic minimum size is its min-content width, and a
+   * `<select>`'s min-content width is its *longest option*. A llama.cpp model
+   * id is an absolute path, so one long one made the select refuse to shrink
+   * below it and pushed itself and the button past the panel's edge. Zeroing
+   * the floor lets the field take the width the row gives it and clip the text
+   * the way the text inputs already do.
+   */
+  min-width: 0;
   padding: var(--space-2) var(--space-3);
   background: var(--surface);
   color: var(--text);
@@ -1611,8 +1629,4 @@
   white-space: nowrap;
   color: var(--text-muted);
   font-size: var(--text-xs);
-}
-
-.secret-row .settings-input {
-  min-width: 0;
 }

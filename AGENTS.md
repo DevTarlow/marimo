@@ -178,11 +178,12 @@ per task, and it is the agent's job to make it — nobody should have to ask. A
 commit is not a push: it is local, reversible, and the thing that makes the next
 task's diff readable.
 
-**Never push on your own initiative.** There is no remote configured in this
-checkout by default; when one is added it is
-`https://github.com/DevTarlow/marimo-agent.git`, and pushing is done when asked,
-usually after a review of the commit. If a push is refused for authentication,
-say so — do not reach for a token or rewrite a remote.
+**Never push on your own initiative.** Pushing is done when asked, usually after
+a review of the commit. The remote this checkout has is the Gitea instance
+`git remote -v` names — the same one the CI section above is about — and `main`
+tracks it, so the push is `git push` with no arguments and no second remote
+invented for the job. If a push is refused for authentication, say so — do not
+reach for a token or rewrite a remote.
 
 Messages follow the history rather than a convention document:
 
@@ -199,10 +200,11 @@ Messages follow the history rather than a convention document:
 
 **Verification scales with the change, and the ordering matters.** A
 renderer-only change needs `typecheck`, the desktop tests and `build:web` — not
-the agent's 435 tests. A change to `packages/agent` needs the lot, because that
-package is what the window *and* the headless runner both run. Anything that
-touches the preload, the IPC schemas or the built bundles needs `build:web` and
-the smoke check, because those three failing looks like something else.
+the agent package's own suite, which is most of the workspace and none of what
+changed. A change to `packages/agent` needs the lot, because that package is what
+the window *and* the headless runner both run. Anything that touches the preload,
+the IPC schemas or the built bundles needs `build:web` and the smoke check,
+because those three failing looks like something else.
 
 **Two speed notes that are worth knowing before optimising.** TypeScript's
 `-b` is not incremental here in practice — a warm `pnpm typecheck` costs about

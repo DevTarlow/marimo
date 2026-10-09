@@ -9,9 +9,10 @@ import {mkdtemp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import type {BaseTool, Context} from '@google/adk';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {
+  createCurrentTimeTool,
   createListDirTool,
   createReadFileTool,
   createWriteFileTool,
@@ -196,6 +197,48 @@ describe('filesystem tools', () => {
       await mkdir(join(workDir, 'sub'));
       const tool = createWriteFileTool({workspaceRoot: workDir});
       expect(await gated(tool, {path: 'sub', content: 'x'})).toBe(false);
+    });
+  });
+
+  /*
+   * The bug this pins down, from a real conversation: the output led with the ISO
+   * instant, and the model answered a request for the time with that instant's
+   * UTC reading — "6:37 PM" for 23:37 local — because a tool result is read from
+   * the front.
+   *
+   * The expectations are computed from the frozen date's own local getters rather
+   * than written as a literal, so this passes in every timezone and still fails
+   * the moment the answer stops being the local wall clock.
+   */
+  describe('current_time', () => {
+    it('leads with the local wall clock, keeping the instant as a footnote', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-09T06:37:50.589Z'));
+      try {
+        const text = await run(createCurrentTimeTool(), {});
+        const now = new Date();
+        const hour12 = ((now.getHours() + 11) % 12) + 1;
+        const minute = String(now.getMinutes()).padStart(2, '0');
+        const meridiem = now.getHours() < 12 ? 'AM' : 'PM';
+
+        expect(text.startsWith(`${hour12}:${minute} ${meridiem}`)).toBe(true);
+        // The old output's first token, and therefore the old answer.
+        expect(text.startsWith(now.toISOString())).toBe(false);
+        // The instant is still there, after the time that was asked for.
+        expect(text).toContain(now.toISOString());
+        expect(text.indexOf(now.toISOString())).toBeGreaterThan(
+          text.indexOf(meridiem),
+        );
+        // Legible as a day as well as a clock, and labelled so neither reading
+        // can be taken for the other.
+        expect(text).toContain(
+          now.toLocaleDateString('en-US', {weekday: 'long'}),
+        );
+        expect(text).toContain("the machine's local time");
+        expect(text).toMatch(/UTC[+-]\d{2}:\d{2}/u);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

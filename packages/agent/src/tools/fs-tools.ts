@@ -226,7 +226,8 @@ export function createCurrentTimeTool() {
   return new FunctionTool({
     name: 'current_time',
     description:
-      "Return the current local date and time, with the machine's UTC offset.",
+      "Return the current local date and time, with the machine's UTC offset. " +
+      'The local time is the answer and comes first; the UTC instant follows it.',
     parameters: z.object({}),
     execute: () => {
       const now = new Date();
@@ -237,7 +238,35 @@ export function createCurrentTimeTool() {
         '0',
       );
       const minutes = String(Math.abs(offsetMinutes) % 60).padStart(2, '0');
-      return `${now.toISOString()} (local ${now.toString()}, UTC${sign}${hours}:${minutes})`;
+      /*
+       * The local time leads, and says that it is the local time.
+       *
+       * It used to be `${now.toISOString()} (local ${now.toString()}, UTC-07:00)`
+       * and the model read the leading token: asked for the time at 23:37 local,
+       * it answered "6:37 PM" — that instant's UTC reading, wearing the user's
+       * timezone as a label. A tool result is read from the front, so the value
+       * being asked for has to be the value that is there, and the ISO instant —
+       * the one form a model cannot convert by eye — keeps only the job of a
+       * footnote.
+       *
+       * `en-US` and an explicit shape rather than `toLocaleString`, because this
+       * goes into a prompt: a machine's locale must not change what the model is
+       * told the time is, and a test has to be able to assert on it.
+       */
+      const clock = now.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+      const day = now.toLocaleDateString('en-US', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      });
+      return (
+        `${clock} on ${day} — the machine's local time ` +
+        `(UTC${sign}${hours}:${minutes}, ${now.toISOString()})`
+      );
     },
   });
 }

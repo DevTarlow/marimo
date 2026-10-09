@@ -15,6 +15,7 @@ import {describe, expect, it} from 'vitest';
 
 import type {AdkEvent} from '../sessions/file-session-service.js';
 import {pendingGatesIn} from './agent-host.js';
+import {buildCompactedEvent} from './compaction.js';
 
 const GATE = 'adk_request_confirmation';
 
@@ -249,5 +250,26 @@ describe('pendingGatesIn', () => {
       {timestamp: 1, content: {parts: []}} as unknown as AdkEvent,
     ]);
     expect(gates.map((entry) => entry.callId)).toEqual(['call_1']);
+  });
+
+  /*
+   * A compaction is appended to the same log as the turn it may be asking
+   * about, and it belongs to no invocation. Read as one, it would clear the
+   * pending set of the invocation that is actually waiting — and an approval
+   * card would vanish from the window of somebody who had just compacted the
+   * conversation it belongs to.
+   */
+  it('is not disturbed by a compaction appended after a waiting turn', () => {
+    const waiting = [
+      event('inv-1', gate('call-1')),
+      {
+        ...buildCompactedEvent({summary: 'earlier', startTime: 1, endTime: 2}),
+        timestamp: 1_700_000_000_100,
+      } as AdkEvent,
+    ];
+
+    expect(pendingGatesIn(waiting).map((entry) => entry.callId)).toEqual([
+      'call-1',
+    ]);
   });
 });

@@ -84,6 +84,9 @@ export function defaultStoredSettings(): StoredSettings {
     filesOpen: false,
     // Nothing folded: the dialog opens exactly as it did before it could fold.
     collapsedSections: [],
+    // Nothing switched off. A command that exists is offered, and one the user
+    // turns off stays off — which is why the stored list is the *disabled* half.
+    disabledCommands: [],
     // The size the window opened at before it remembered one, placed by the OS.
     window: defaultWindowState(),
     // Where the agent starts being told that memory.md is getting full. Well

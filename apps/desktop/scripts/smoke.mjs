@@ -765,6 +765,14 @@ async function main() {
     });
     if (!addMenu.items.includes('Add files…')) {
       fail(`the + menu has no way to add a file: ${JSON.stringify(addMenu.items)}`);
+    } else if (!addMenu.items.includes('Compact history')) {
+      /*
+       * The command catalogue and the setting that switches one off travel
+       * protocol → settings → this menu. An empty list here means one of those
+       * three stopped agreeing with the others, which is invisible from every
+       * unit test each of them passes on its own.
+       */
+      fail(`the + menu offers no commands: ${JSON.stringify(addMenu.items)}`);
     } else if (addMenu.withinViewport !== true) {
       fail(
         `the + menu is off the bottom of the window: ${JSON.stringify(addMenu.where)}`,
@@ -779,6 +787,36 @@ async function main() {
     );
     if ((await evaluate(`document.querySelector('.popover') === null`)) !== true) {
       fail('Escape did not close the + menu');
+    }
+
+    /*
+     * The compact command, run the way a person runs it.
+     *
+     * On this machine there is no key, so what it *must* do is say so: a command
+     * that reported success, or said nothing at all, would be worse than one that
+     * fails. That makes the assertion here the honest one for a fresh install —
+     * and it still proves the whole path, because the sentence comes from the
+     * provider configuration at the far end of it. A missing IPC handler would
+     * arrive as "unknown method" instead.
+     */
+    await evaluate(`document.querySelector('.composer-add')?.click()`);
+    await until('the + menu to reopen', async () =>
+      await evaluate(`document.querySelector('.popover') !== null`),
+    );
+    await evaluate(
+      `[...document.querySelectorAll('.popover-item')]
+        .find((item) => item.textContent.trim() === 'Compact history')?.click()`,
+    );
+    const refusal = await until('the complaint about the missing key', async () => {
+      const text = await evaluate(
+        `document.querySelector('.composer-hint.is-failure')?.textContent ?? null`,
+      );
+      return typeof text === 'string' ? text : undefined;
+    });
+    if (!/API key/u.test(refusal)) {
+      fail(`compacting without a key said the wrong thing: ${refusal}`);
+    } else {
+      ok('the compact command reached the agent and reported the missing key');
     }
 
     /*
@@ -1010,6 +1048,132 @@ async function main() {
         'Settings carries the app identity, a Reset, and an empty box for your ' +
           'own words',
       );
+    }
+
+    /*
+     * A command switched off in Settings is *absent* from the composer's menu
+     * rather than merely discouraged there — the rule the whole capability model
+     * rests on, and the one that cannot be checked from either side alone: the
+     * switch writes the settings file and the menu reads it, in two processes
+     * and three layers apart.
+     */
+    const switched = await until('the Commands section to answer', async () => {
+      const state = await evaluate(`(() => {
+        const section = [...document.querySelectorAll('.settings-section')]
+          .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
+        if (!section) return undefined;
+        const box = section.querySelector('input[type="checkbox"]');
+        const label = section.querySelector('.settings-check span')?.textContent ?? '';
+        return JSON.stringify({found: true, checked: box?.checked, label});
+      })()`);
+      return state === undefined ? undefined : JSON.parse(state);
+    });
+    if (switched.checked !== true) {
+      fail(`a fresh install has the command switched off: ${JSON.stringify(switched)}`);
+    } else if (!/Compact history/u.test(switched.label)) {
+      fail(`the Commands section names the wrong thing: ${switched.label}`);
+    } else {
+      await evaluate(
+        `(() => {
+          const section = [...document.querySelectorAll('.settings-section')]
+            .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
+          section?.querySelector('input[type="checkbox"]')?.click();
+        })()`,
+      );
+      const off = await until('the switch to take', async () => {
+        const value = await evaluate(`(() => {
+          const section = [...document.querySelectorAll('.settings-section')]
+            .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
+          const box = section?.querySelector('input[type="checkbox"]');
+          return box === null || box === undefined ? undefined : !box.checked;
+        })()`);
+        return value === true ? true : undefined;
+      });
+      if (off !== true) {
+        fail('switching a command off in Settings did not take');
+      } else {
+        // Back to the chat, where the menu either offers it or does not.
+        await evaluate(
+          `[...document.querySelectorAll('.settings-head button')]
+            .find((entry) => entry.textContent.trim() === 'Back to chat')?.click()`,
+        );
+        await until('the composer to come back', async () =>
+          await evaluate(`document.querySelector('.composer-add') !== null`),
+        );
+        await evaluate(`document.querySelector('.composer-add')?.click()`);
+        const items = await until('the + menu to open', async () => {
+          const value = await evaluate(`(() => {
+            const menu = document.querySelector('.popover');
+            return menu === null
+              ? undefined
+              : JSON.stringify(
+                  [...menu.querySelectorAll('.popover-item')].map((item) =>
+                    item.textContent.trim(),
+                  ),
+                );
+          })()`);
+          return value === undefined ? undefined : JSON.parse(value);
+        });
+        await evaluate(
+          `document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
+        );
+        if (items.includes('Compact history')) {
+          fail('a command switched off in Settings is still in the + menu');
+        } else if (!items.includes('Add files…')) {
+          fail('switching a command off took the other items with it');
+        } else {
+          ok('a command switched off in Settings is gone from the + menu');
+        }
+        // Put it back: the checks after this one expect a fresh install.
+        await evaluate(
+          `[...document.querySelectorAll('.head button')]
+            .find((entry) => entry.textContent.trim() === 'Settings')?.click()`,
+        );
+        const reopen = await until('the Commands section to come back', async () => {
+          const state = await evaluate(`(() => {
+            const section = [...document.querySelectorAll('.settings-section')]
+              .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
+            if (!section) return undefined;
+            const box = section.querySelector('input[type="checkbox"]');
+            return JSON.stringify({present: true, checked: box?.checked});
+          })()`);
+          return state === undefined ? undefined : JSON.parse(state);
+        });
+        await evaluate(
+          `(() => {
+            const section = [...document.querySelectorAll('.settings-section')]
+              .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
+            section?.querySelector('input[type="checkbox"]')?.click();
+          })()`,
+        );
+        const restored = await until('the command to be switched back on', async () => {
+          /*
+           * `undefined` until it is actually back on: `until` resolves on the
+           * first non-undefined answer, and a state returned the moment the box
+           * was clicked is a state read while the write is still in flight — the
+           * box is disabled and still shows the old value until the pane has
+           * re-read the settings.
+           */
+          const state = await evaluate(`(() => {
+            const section = [...document.querySelectorAll('.settings-section')]
+              .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
+            if (!section) return undefined;
+            const box = section.querySelector('input[type="checkbox"]');
+            return JSON.stringify({checked: box?.checked, saving: box?.disabled});
+          })()`);
+          if (state === undefined) {
+            return undefined;
+          }
+          const parsed = JSON.parse(state);
+          return parsed.checked === true ? parsed : undefined;
+        });
+        if (restored.checked !== true) {
+          fail(
+            `the command could not be switched back on: after reopening it was ` +
+              `${JSON.stringify(reopen)}, now ${JSON.stringify(restored)}`,
+          );
+        }
+      }
     }
 
     /*

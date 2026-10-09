@@ -75,6 +75,45 @@ export const providerIdSchema = z.enum(PROVIDER_IDS);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
 /**
+ * The things the window can do to a conversation itself, as opposed to things
+ * said *in* it.
+ *
+ * A command is not a message: it never reaches the model as the user's words, it
+ * acts on the conversation, and the answer is a result rather than a turn. The
+ * catalogue is here, beside the providers, for the reason that list is here — the
+ * Settings switch, the `+` menu and the call that runs it are all keyed off one
+ * declaration, so adding a command is one entry and one handler rather than a
+ * string typed out in three places.
+ *
+ * `compact` is the first because it is the one that makes long conversations
+ * usable: it replaces the older messages with a summary the model writes, so the
+ * request stops growing while the file keeps everything.
+ */
+export const COMMAND_IDS = ['compact'] as const;
+export const commandIdSchema = z.enum(COMMAND_IDS);
+export type CommandId = z.infer<typeof commandIdSchema>;
+
+export interface CommandDescriptor {
+  /** What the switch and the menu item say. */
+  label: string;
+  /**
+   * What it does, said to the person deciding rather than to the model — the
+   * same division as a tool's `blurb` and its `description`.
+   */
+  blurb: string;
+}
+
+export const COMMANDS: Record<CommandId, CommandDescriptor> = {
+  compact: {
+    label: 'Compact history',
+    blurb:
+      'Replaces the older part of a conversation with a summary the model ' +
+      'writes, so a long chat still fits. Every message stays in the ' +
+      'conversation file; the transcript shows one card where they were.',
+  },
+};
+
+/**
  * Everything about a provider that is not a user choice.
  *
  * The two wire flags are here rather than in the transport because they are
@@ -728,6 +767,16 @@ export const settingsSchema = z.object({
    */
   collapsedSections: z.array(z.string()).catch([]),
   /**
+   * The commands the user has switched off.
+   *
+   * A list of the ones that are *off* rather than of the ones that are on, so a
+   * command added in a later build is available to somebody who never touched
+   * this setting. `.catch` for the same reason `collapsedSections` has it: a
+   * command renamed or removed later must cost its own row, not fail the
+   * settings schema and take every other preference with it.
+   */
+  disabledCommands: z.array(commandIdSchema).catch([]),
+  /**
    * Where the window last was, so it opens where the user left it.
    *
    * A block rather than four flat fields because the four only mean anything
@@ -1151,6 +1200,30 @@ export interface TranscriptMessage {
   toolCalls?: ToolCallRecord[];
   createdAt: string;
   error?: string;
+  /**
+   * How many earlier messages this summary replaced.
+   *
+   * Present only on the one message a compaction wrote, and what makes the
+   * transcript draw a card instead of a bubble in the user's own voice: the text
+   * is the model's, and the role is the user's only because that is how the
+   * provider is sent it.
+   */
+  compacted?: number;
+}
+
+/**
+ * What a command did, or why it did nothing.
+ *
+ * Refusals are values rather than errors: "nothing to compact yet" is an ordinary
+ * answer about a short conversation, and turning it into a thrown error would put
+ * it in the same red banner as a provider that is down. A failure the user cannot
+ * act on — no key, no network — still throws, and the window knows the
+ * difference.
+ */
+export interface CompactResult {
+  compacted: boolean;
+  /** A sentence for the composer's hint slot, when nothing happened. */
+  reason?: string;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1957,6 +2030,18 @@ export const agentCallSchemas = {
     profileId: z.string().min(1),
     sessionId: z.string().min(1),
   }),
+  /*
+   * Runs a command against one conversation.
+   *
+   * An `invoke` rather than a turn, because a command is not something the user
+   * said: it never becomes the model's input as their words, and the answer is a
+   * result the window draws rather than a stream of events. The conversation it
+   * acted on is re-read afterwards, which is what shows the summary card.
+   */
+  'sessions.compact': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+  }),
 
   /*
    * A turn. The call returns as soon as the turn is *accepted*; the answer
@@ -2113,6 +2198,7 @@ export interface AgentCallResults {
   'sessions.move': {session: SessionSummary};
   'sessions.rename': {session: SessionSummary};
   'sessions.setModel': {session: SessionSummary};
+  'sessions.compact': CompactResult;
   'sessions.delete': {deleted: boolean};
   /**
    * What was attached and what was refused, with the folder both were judged

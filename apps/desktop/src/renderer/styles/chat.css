@@ -522,6 +522,41 @@
   font-size: var(--text-sm);
 }
 
+/*
+ * Where a compaction's summary sits.
+ *
+ * Full width and set apart by a rule rather than by a fill, because it is not
+ * one of the two voices in the conversation: it is a marker in the middle of the
+ * transcript saying that everything above it has been folded into what follows.
+ * The accent fill the user's own bubbles get would be a lie about who wrote it.
+ */
+.message-compacted {
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.compacted-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.compacted-label {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.compacted-note {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
 .calls {
   display: flex;
   flex-direction: column;

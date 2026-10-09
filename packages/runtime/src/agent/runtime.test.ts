@@ -628,6 +628,19 @@ describe('reading a conversation without a working provider', () => {
     expect(messages).toEqual([]);
     expect(pending).toEqual([]);
   });
+
+  it('refuses to compact with the sentence about the missing key', async () => {
+    /*
+     * Thrown rather than answered with `{compacted: false}`: the difference the
+     * two carry is the difference between "there was nothing to do" and "this
+     * install cannot do it at all", and only the second is worth a red banner.
+     * The sentence is the configuration's own, so it names the provider rather
+     * than a stack.
+     */
+    await expect(runtime().compact(profileId, sessionId)).rejects.toThrow(
+      /API key/u,
+    );
+  });
 });
 
 /*

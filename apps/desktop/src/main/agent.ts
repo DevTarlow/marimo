@@ -31,6 +31,7 @@ import type {AppPaths} from '@marimo/runtime';
 import {PROVIDERS} from '@marimo/protocol';
 import type {
   AgentProfile,
+  CompactResult,
   Job,
   McpServer,
   AgentUiEvent,
@@ -654,6 +655,18 @@ export class AgentService {
     sessionId: string,
   ): Promise<string | undefined> {
     return await this.runtime.conversationFolder(profileId, sessionId);
+  }
+
+  /** Replaces the older part of a conversation with a summary. */
+  async compact(profileId: string, sessionId: string): Promise<CompactResult> {
+    const result = await this.runtime.compact(profileId, sessionId);
+    /*
+     * Told even when nothing happened: the window that ran the command re-reads
+     * the conversation, and the rail's own copy of the entry is now stale — the
+     * summary is a new event, so the count and the time have both moved.
+     */
+    this.options.sendEvent({type: 'session.changed', sessionId});
+    return result;
   }
 
   async deleteSession(profileId: string, sessionId: string): Promise<void> {

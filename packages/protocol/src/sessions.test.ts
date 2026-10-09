@@ -241,6 +241,20 @@ describe('the filing calls', () => {
     ).toBeNull();
   });
 
+  it('names the conversation a command acts on', () => {
+    expect(
+      agentCallSchemas['sessions.compact'].safeParse({
+        profileId: 'p',
+        sessionId: 's',
+      }).success,
+    ).toBe(true);
+    // No text: a command is not something the user said, and a body would be one
+    // more field the window has to fill in for nothing.
+    expect(
+      agentCallSchemas['sessions.compact'].safeParse({profileId: 'p'}).success,
+    ).toBe(false);
+  });
+
   it('refuses a blank model rather than storing one that resolves to nothing', () => {
     // An empty string would be a third state — neither a choice nor the default
     // — and the agent would then resolve a turn against a model id of "".

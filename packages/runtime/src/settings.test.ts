@@ -618,6 +618,79 @@ describe('SettingsStore collapsedSections', () => {
 });
 
 /**
+ * The commands the user has switched off.
+ *
+ * Stored as the *disabled* half so that a command added in a later build is
+ * available without anybody touching this setting — and carrying a `.catch`,
+ * because a command renamed or removed later must cost its own row rather than
+ * fail the whole settings schema.
+ */
+describe('SettingsStore disabledCommands', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-commands-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): SettingsStore {
+    return new SettingsStore(join(dir, 'settings.json'));
+  }
+
+  it('offers every command on a fresh install', async () => {
+    expect((await store().load()).disabledCommands).toEqual([]);
+  });
+
+  it('remembers what was switched off, and only that', async () => {
+    const settings = store();
+    const off = await settings.patch({disabledCommands: ['compact']});
+    expect(off.disabledCommands).toEqual(['compact']);
+
+    // A later write of something else must not bring it back.
+    const after = await settings.patch({temperature: 0.2});
+    expect(after.disabledCommands).toEqual(['compact']);
+    expect(after.temperature).toBe(0.2);
+  });
+
+  it('gives a file written before the field existed nothing switched off', async () => {
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify({sidebarWidth: 300}, null, 2),
+      'utf8',
+    );
+    const settings = await store().load();
+
+    expect(settings.disabledCommands).toEqual([]);
+    expect(settings.sidebarWidth).toBe(300);
+  });
+
+  it('ignores a command this build does not know, rather than the file', async () => {
+    /*
+     * The failure this prevents is the one `.catch` is for: a name from a newer
+     * build — or a typo — inside a flat field would otherwise fail the whole
+     * settings schema, and the user would lose their model, their folders and
+     * their key setup over one string.
+     */
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify(
+        {disabledCommands: ['compact', 'a-command-from-a-newer-build'], sidebarWidth: 300},
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    const settings = await store().load();
+
+    expect(settings.disabledCommands).toEqual([]);
+    expect(settings.sidebarWidth).toBe(300);
+  });
+});
+
+/**
  * The appearance block: a choice with three fields, none of which may take the
  * others down with it.
  */

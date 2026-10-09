@@ -43,6 +43,7 @@ import type {
   AgentProfile,
   AgentUiEvent,
   CatalogEntry,
+  CompactResult,
   MemoryProposal,
   MemoryUsage,
   TranscriptMessage,
@@ -606,6 +607,27 @@ export class AgentRuntime {
   ): Promise<SessionSummary> {
     const host = await this.ensureHost(profileId);
     return await host.renameSession(sessionId, title, profileId);
+  }
+
+  /**
+   * Replaces the older part of a conversation with a summary.
+   *
+   * Resolved through `host()` rather than `ensureHost()`, which is the opposite
+   * of what the calls above do and deliberately so: those write metadata a
+   * conversation can be filed or named without a provider. This one *asks the
+   * model*, so it needs the real configuration, and a missing key has to come
+   * back as the sentence the window already knows how to draw rather than as a
+   * request to an empty endpoint.
+   */
+  async compact(
+    profileId: string,
+    sessionId: string,
+  ): Promise<CompactResult> {
+    const resolved = await this.host(profileId, sessionId);
+    if (!resolved.ok) {
+      throw new Error(resolved.problem);
+    }
+    return await resolved.host.compact(sessionId, profileId);
   }
 
   /**

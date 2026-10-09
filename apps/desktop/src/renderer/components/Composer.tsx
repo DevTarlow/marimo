@@ -32,7 +32,7 @@
  */
 import {useEffect, useRef, useState} from 'react';
 
-import type {PickedFile, SkippedFile} from '@marimo/protocol';
+import type {CommandId, PickedFile, SkippedFile} from '@marimo/protocol';
 
 import {composeMessage, describeSkipped} from '../attachments.js';
 import {describe} from '../describe.js';
@@ -50,6 +50,8 @@ export function Composer({
   usingDefault,
   onSelectModel,
   onPickFiles,
+  commands,
+  onRunCommand,
 }: {
   /**
    * Resolves `true` when the turn was accepted.
@@ -80,11 +82,28 @@ export function Composer({
    * the answer.
    */
   onPickFiles: () => Promise<{files: PickedFile[]; skipped: SkippedFile[]}>;
+  /**
+   * The commands the `+` menu offers — the ones Settings has not switched off.
+   *
+   * Passed in rather than looked up here, so the catalogue and the switch that
+   * turns one off live in the same place: this component draws what it is given.
+   */
+  commands: readonly {id: CommandId; label: string; blurb: string}[];
+  /**
+   * Runs one, and answers with what to say about it.
+   *
+   * A note rather than a result object, because the only thing the composer can
+   * do with an outcome is draw one line of it. A rejection is a genuine failure
+   * and is drawn in the failure colour; a resolved note is news.
+   */
+  onRunCommand: (id: CommandId) => Promise<string | null>;
 }): React.JSX.Element {
   const [text, setText] = useState('');
   const [attached, setAttached] = useState<PickedFile[]>([]);
   /** The last thing that happened, drawn in the hint slot. */
   const [note, setNote] = useState<{text: string; failed: boolean} | null>(null);
+  /** The command being run, so the row can say so while it does. */
+  const [running, setRunning] = useState<CommandId | null>(null);
   const [menu, setMenu] = useState<PopoverAnchor | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
   const add = useRef<HTMLButtonElement>(null);
@@ -133,12 +152,27 @@ export function Composer({
     }
   };
 
+  const run = async (id: CommandId): Promise<void> => {
+    setRunning(id);
+    setNote(null);
+    try {
+      const answer = await onRunCommand(id);
+      setNote(answer === null ? null : {text: answer, failed: false});
+    } catch (failure) {
+      setNote({text: describe(failure), failed: true});
+    } finally {
+      setRunning(null);
+    }
+  };
+
   const hint =
-    busy
+    running !== null
       ? 'Working…'
-      : note !== null
-        ? note.text
-        : 'Enter to send, Shift+Enter for a new line';
+      : busy
+        ? 'Working…'
+        : note !== null
+          ? note.text
+          : 'Enter to send, Shift+Enter for a new line';
 
   return (
     <div className="composer">
@@ -286,6 +320,28 @@ export function Composer({
           >
             Add files…
           </PopoverItem>
+
+          {commands.length > 0 && (
+            <>
+              <div className="popover-sep" />
+              <span className="popover-label">Commands</span>
+              {commands.map((command) => (
+                <PopoverItem
+                  key={command.id}
+                  // A command acts on the conversation the turn is running in, so
+                  // it waits for the turn: the agent refuses mid-flight anyway,
+                  // and a menu item that can only be refused is a dead control.
+                  disabled={busy || running !== null}
+                  onSelect={() => {
+                    setMenu(null);
+                    void run(command.id);
+                  }}
+                >
+                  {command.label}
+                </PopoverItem>
+              ))}
+            </>
+          )}
         </Popover>
       )}
     </div>

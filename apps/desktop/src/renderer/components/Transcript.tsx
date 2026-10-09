@@ -130,6 +130,34 @@ function ApprovalCard({
 }
 
 function Message({message}: {message: TranscriptMessage}): React.JSX.Element {
+  /*
+   * What a compaction wrote, in place of the messages it replaced. Drawn as its
+   * own thing rather than as a user's bubble — the words are the model's, and the
+   * role is the user's only because that is how the provider is sent it — and it
+   * says where the messages went, because "fewer messages than I wrote" is the
+   * one thing about compaction that reads as loss.
+   */
+  if (message.compacted !== undefined) {
+    return (
+      <article className="message message-compacted">
+        <div className="compacted-head">
+          <span className="compacted-label">Compacted history</span>
+          <Copy text={message.text} what="summary" />
+        </div>
+        <p className="compacted-note">
+          {message.compacted === 1
+            ? 'One earlier message was replaced by this summary.'
+            : `${String(message.compacted)} earlier messages were replaced by this summary.`}{' '}
+          They are still in this conversation&rsquo;s file — the agent is simply
+          not sent them any more.
+        </p>
+        <div className="bubble bubble-answer">
+          <Markdown text={message.text} />
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article
       className={`message message-${message.role}`}

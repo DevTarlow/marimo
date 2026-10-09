@@ -12,6 +12,7 @@
 import {randomUUID} from 'node:crypto';
 
 import {
+  isCompactedEvent,
   LlmAgent,
   REQUEST_CONFIRMATION_FUNCTION_CALL_NAME,
   Runner,
@@ -20,6 +21,7 @@ import {
 import type {Content, Part} from '@google/genai';
 import type {
   AgentUiEvent,
+  CompactResult,
   PendingGate,
   ProviderId,
   SessionSource,
@@ -50,6 +52,12 @@ import type {SkillService} from '../tools/skill-tools.js';
 import type {DiscordService} from '../tools/discord-tools.js';
 import type {JobService} from '../tools/job-tools.js';
 import type {WebSearchProvider} from '../tools/web-search-tool.js';
+import {
+  buildCompactedEvent,
+  compactionPrompt,
+  planCompaction,
+  renderForSummary,
+} from './compaction.js';
 import {projectTranscript} from './transcript.js';
 
 export interface AgentHostOptions {
@@ -478,6 +486,92 @@ export class AgentHost {
       : this.config.model;
   }
 
+  /**
+   * Replaces the older part of a conversation with a summary the model writes.
+   *
+   * One event is appended and nothing else is touched — see `compaction.ts` for
+   * why that is the whole mechanism, and why a rewrite was worth avoiding. The
+   * conversation keeps every message; the request gets smaller; the transcript
+   * shows one card where the replaced messages were.
+   *
+   * The refusals are returned rather than thrown. A command that cannot run is
+   * not a failure of the app: a short conversation has nothing to compact, and a
+   * turn that is mid-flight has a reason the user can act on. Throwing would turn
+   * all of those into the same red banner as a provider that is down.
+   */
+  async compact(sessionId: string, profileId?: string): Promise<CompactResult> {
+    await this.assertOwned(sessionId, profileId);
+
+    /*
+     * One turn at a time, and a compaction is a write to the conversation the
+     * turn is reading. The gates are the sharper half of the same rule: a paused
+     * turn is answered by the *next* invocation, and replacing the events it is
+     * paused in would leave a card the model can no longer confirm.
+     */
+    if (this.active?.sessionId === sessionId) {
+      return {
+        compacted: false,
+        reason:
+          'A turn is running in this conversation. Stop it, or wait for it to ' +
+          'finish, and then compact.',
+      };
+    }
+    const waiting = await this.pendingGates(sessionId);
+    if (waiting.length > 0) {
+      return {
+        compacted: false,
+        reason:
+          'This conversation is waiting for your approval. Answer it — or stop ' +
+          'the turn — and then compact.',
+      };
+    }
+
+    const session = await this.sessionService.getSession({
+      appName: this.appName,
+      userId: this.userId,
+      sessionId,
+    });
+    if (session === undefined) {
+      throw new Error(`Unknown session: ${sessionId}`);
+    }
+
+    const plan = planCompaction(session.events);
+    if (plan === undefined) {
+      return {
+        compacted: false,
+        reason: 'Nothing to compact yet — this conversation is short enough to fit.',
+      };
+    }
+
+    /*
+     * The one call this needs, and it is deliberately not a turn: `ask` has no
+     * tools, so the provider's "a tool-carrying turn must carry its reasoning"
+     * rule does not apply to it, and nothing it does is written to the session.
+     * A failed call throws out of here with the conversation untouched.
+     */
+    const summary = (
+      await this.ask(
+        compactionPrompt(renderForSummary(plan.summarise), plan.previous),
+      )
+    ).trim();
+    if (summary.length === 0) {
+      return {
+        compacted: false,
+        reason: 'The model returned an empty summary, so nothing was changed.',
+      };
+    }
+
+    await this.sessionService.appendEvent({
+      session,
+      event: buildCompactedEvent({
+        summary,
+        startTime: plan.startTime,
+        endTime: plan.endTime,
+      }),
+    });
+    return {compacted: true};
+  }
+
   async deleteSession(sessionId: string, profileId?: string): Promise<void> {
     await this.assertOwned(sessionId, profileId);
     if (this.active?.sessionId === sessionId) {
@@ -625,9 +719,14 @@ export class AgentHost {
    * appear in the transcript as something the user said, and would be re-reviewed
    * by the next look — a loop that grows.
    *
-   * The reply is the concatenation of whatever the model streamed. A refusal or
-   * a network failure throws, and the caller decides what that means; for a
-   * review, it means nothing was found.
+   * The reply is what the model *said*, not what it thought: thought parts are
+   * dropped. Our transport aggregates a turn into one response with the reasoning
+   * first (`openai-compat-llm.ts`), so the alternative is an answer with the
+   * model's working glued to the front of it — which for the summariser below
+   * means a summary that opens by narrating how it was written.
+   *
+   * A refusal or a network failure throws, and the caller decides what that
+   * means; for a review, it means nothing was found.
    */
   async ask(prompt: string, abortSignal?: AbortSignal): Promise<string> {
     const llm = this.llmFor();
@@ -643,9 +742,10 @@ export class AgentHost {
       abortSignal,
     )) {
       for (const part of response.content?.parts ?? []) {
-        if (typeof part.text === 'string') {
-          text += part.text;
+        if (part.thought === true || typeof part.text !== 'string') {
+          continue;
         }
+        text += part.text;
       }
     }
     return text;
@@ -1246,6 +1346,16 @@ export function pendingGatesIn(events: readonly AdkEvent[]): PendingGate[] {
   let answered = new Set<string>();
 
   for (const event of events) {
+    /*
+     * A compaction is not a turn and carries no invocation id. The empty id
+     * would read as "a new invocation" below and clear the cards of the turn
+     * that is actually waiting — a live approval silently disappearing when
+     * somebody compacted the conversation it belongs to.
+     */
+    if (isCompactedEvent(event)) {
+      continue;
+    }
+
     if (event.invocationId !== undefined && event.invocationId !== invocation) {
       invocation = event.invocationId;
       asked = new Map();

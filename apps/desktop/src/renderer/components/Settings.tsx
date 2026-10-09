@@ -28,6 +28,8 @@ import type {
 } from '@marimo/protocol';
 
 import {
+  COMMAND_IDS,
+  COMMANDS,
   COMPANION_ANSWER_LENGTHS,
   DEFAULT_AGENT_IDENTITY,
   PROVIDER_IDS,
@@ -579,6 +581,48 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               </em>
             </span>
           </label>
+        </section>
+
+        {/*
+          Commands act on the conversation itself rather than being said in it,
+          which is why they are not a tool: a tool is something the model decides
+          to use, and this is something the user decides to run. The list is the
+          protocol's catalogue, so a command added there appears here, in the
+          composer's menu, and nowhere else needs to know about it.
+        */}
+        <section className="settings-section">
+          <h3>Commands</h3>
+          <p className="settings-muted">
+            Commands run against a conversation from the composer&rsquo;s +
+            menu. They are off the model&rsquo;s list entirely when switched off
+            here, rather than merely discouraged.
+          </p>
+          {COMMAND_IDS.map((id) => (
+            <label className="settings-check" key={id}>
+              <input
+                type="checkbox"
+                checked={!loaded.settings.disabledCommands.includes(id)}
+                disabled={saving}
+                onChange={(event) => {
+                  const on = event.target.checked;
+                  const next = COMMAND_IDS.filter((candidate) =>
+                    candidate === id
+                      ? !on
+                      : loaded.settings.disabledCommands.includes(candidate),
+                  );
+                  void change(async () => {
+                    await window.marimo.call('settings.set', {
+                      patch: {disabledCommands: next},
+                    });
+                  });
+                }}
+              />
+              <span>
+                {COMMANDS[id].label}
+                <em className="settings-why">{COMMANDS[id].blurb}</em>
+              </span>
+            </label>
+          ))}
         </section>
 
         <ProviderSection

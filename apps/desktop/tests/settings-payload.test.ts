@@ -61,6 +61,7 @@ describe('a settings payload', () => {
         allowPlaintextApiKey: false,
         mcpServers: [],
         appearance: {theme: 'system'},
+        disabledCommands: [],
       },
       hasApiKey: true,
       providerKeys: {

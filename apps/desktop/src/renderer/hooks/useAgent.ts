@@ -111,6 +111,15 @@ export interface AgentController {
   decide: (callId: string, confirmed: boolean) => Promise<void>;
   stop: () => Promise<void>;
   open: (sessionId: string) => Promise<void>;
+  /**
+   * Re-reads the open conversation.
+   *
+   * For the things that change it without a turn: a compaction appends an event
+   * to the conversation on screen, and `session.changed` only re-lists the
+   * sidebar. Trusting that to redraw the transcript would leave a window showing
+   * the messages a summary has just replaced.
+   */
+  refresh: () => Promise<void>;
   /** Re-reads the agent and the conversation, after settings may have changed. */
   reload: () => Promise<void>;
   /**
@@ -223,6 +232,25 @@ export function useAgent(): AgentController {
     },
     [profile, loadTranscript],
   );
+
+  const refresh = useCallback(async (): Promise<void> => {
+    const id = openSession.current;
+    if (profile === undefined || id === null) {
+      return;
+    }
+    try {
+      /*
+       * No clearing of the live turn or the echo first: nothing about a refresh
+       * says a turn is over, and blanking the screen to reload it would blink
+       * over something the user is reading. `loadTranscript` replaces the
+       * messages and drops the echo in one batch, which is the same swap the end
+       * of a turn makes.
+       */
+      await loadTranscript(profile.id, id);
+    } catch (failure) {
+      setError(describe(failure));
+    }
+  }, [profile, loadTranscript]);
 
   /**
    * Adopts a whole folder list.
@@ -870,6 +898,7 @@ export function useAgent(): AgentController {
     decide,
     stop,
     open,
+    refresh,
     openSettings,
     themeMode,
     reload: boot,

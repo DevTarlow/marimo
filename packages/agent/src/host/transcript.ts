@@ -6,17 +6,68 @@
  * but it is far too granular for a transcript: one assistant turn can be a
  * dozen events, tool results arrive as their own events, and the
  * human-in-the-loop gate is an event that must never be shown as dialogue.
+ *
+ * It is projected through `activeEvents` for the same reason. A compacted
+ * conversation still *contains* every message it ever had — nothing was deleted,
+ * and that is the point — but the model no longer sees them, and a window showing
+ * a conversation the agent does not have is worse than one showing less than the
+ * file holds. What the user sees instead is the card the compaction wrote.
  */
-import {REQUEST_CONFIRMATION_FUNCTION_CALL_NAME} from '@google/adk';
+import {isCompactedEvent, REQUEST_CONFIRMATION_FUNCTION_CALL_NAME} from '@google/adk';
 
 import {MAIN_AGENT_NAME} from '@marimo/protocol';
 import type {TranscriptMessage, ToolCallRecord} from '@marimo/protocol';
 
 import type {AdkEvent} from '../sessions/file-session-service.js';
+import {activeEvents} from './compaction.js';
 
 const MAX_RECORDED_RESULT = 4_000;
 
 export function projectTranscript(events: AdkEvent[]): TranscriptMessage[] {
+  const active = activeEvents(events);
+  const first = active[0];
+  const summary =
+    first !== undefined && isCompactedEvent(first) ? first : undefined;
+  if (summary === undefined) {
+    return project(active);
+  }
+
+  /*
+   * How many messages the card stands in for: the projection of everything the
+   * file holds from before it, which is what the user would have been scrolling
+   * through. Counted by projecting it, because a count of *events* would tell
+   * them a number they never saw — one turn is several events.
+   *
+   * An earlier card is not counted as one of them. It was never a message
+   * anybody wrote: the messages it stood for are counted here instead, so the
+   * number is the same kind of number after a second compaction as after a
+   * first.
+   */
+  const replaced = project(
+    events.filter(
+      (event) => !isCompactedEvent(event) && event.timestamp <= summary.endTime,
+    ),
+  ).length;
+
+  return [
+    {
+      id: summary.id || 'compacted',
+      role: 'user',
+      /*
+       * The provider is sent this as a user message — ADK's
+       * `convertCompactedEvent` re-authors it that way — so the role is honest
+       * even though the words are the model's. `compacted` is what makes the
+       * transcript draw a card rather than a bubble in the user's own voice.
+       */
+      text: summary.compactedContent,
+      compacted: replaced,
+      createdAt: timestampOf(summary),
+    },
+    ...project(active.slice(1)),
+  ];
+}
+
+function project(events: readonly AdkEvent[]): TranscriptMessage[] {
   const messages: TranscriptMessage[] = [];
   let assistant: TranscriptMessage | undefined;
   /*
@@ -123,7 +174,14 @@ export function projectTranscript(events: AdkEvent[]): TranscriptMessage[] {
     }
   }
 
-  markInterruptedGate(events, messages);
+  /*
+   * Against the events being projected rather than all of them: a gate inside a
+   * compacted span is not a turn that stopped waiting, it is a turn the
+   * conversation has moved past — and a card that came back with "this stopped
+   * while waiting for your approval" on a summary the user just asked for would
+   * be describing something that is no longer in the request at all.
+   */
+  markInterruptedGate([...events], messages);
   return messages;
 }
 

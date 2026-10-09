@@ -1111,8 +1111,116 @@ describe('AgentHost', () => {
     expect(listed.map((entry) => entry.id)).toContain(session);
   });
 
-  it('fails with an actionable message when no API key is configured', async () => {
-    fake = await startFakeDeepSeek(() => textChunks('unused'));
+  it('replaces the older half of a conversation with a summary, and rewrites nothing', async () => {
+    const {host, session} = await startHost((messages, index) => {
+      /*
+       * The summariser's call is the one with nothing but the prompt: no system
+       * instruction, no tools. Distinguishing it here is what lets the same fake
+       * provider answer both kinds of request.
+       */
+      if (messages.length === 1) {
+        return textChunks('They asked for the time and were told it.');
+      }
+      if (index === 0) {
+        return toolCallChunks('call_time', 'current_time', {});
+      }
+      return textChunks(`answer ${String(index)}`);
+    });
+
+    for (let turn = 0; turn < 8; turn += 1) {
+      await collect(host.run(session, `question ${String(turn)}`));
+    }
+
+    const before = await host.eventsFor(session);
+    const result = await host.compact(session);
+    expect(result).toEqual({compacted: true});
+
+    /*
+     * Append-only, asserted on the file itself: the events already stored are
+     * still there, in order, character for character. This is the property that
+     * keeps the sidebar's count, the memory review's watermark and any
+     * unanswered gate meaningful — a rewrite would leave all three describing a
+     * conversation that no longer exists.
+     */
+    const after = await host.eventsFor(session);
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.slice(0, before.length)).toEqual(before);
+
+    // The window sees one card where the replaced messages were.
+    const {messages} = await host.getTranscript(session);
+    expect(messages[0]?.compacted).toBeGreaterThan(0);
+    expect(messages[0]?.text).toBe('They asked for the time and were told it.');
+    expect(messages.map((message) => message.text)).not.toContain('question 0');
+
+    // And the next turn is *sent* the summary rather than the messages.
+    const asked = fake?.requests.length ?? 0;
+    await collect(host.run(session, 'and now?'));
+    const sent = fake?.requests[asked]?.messages ?? [];
+    const contents = sent
+      .map((message) => String(message['content'] ?? ''))
+      .join('\n');
+    expect(contents).toContain('Previous Context Summary');
+    expect(contents).toContain('They asked for the time and were told it.');
+    expect(contents).not.toContain('question 0');
+
+    /*
+     * Invariant 3, on what was actually sent: the tool call the first turn made
+     * is inside the compacted span, so if the cut had landed between a call and
+     * its result the provider would refuse this request — and every later one.
+     */
+    const requested = sent
+      .filter((message) => message['role'] === 'assistant')
+      .flatMap((message) => (message['tool_calls'] ?? []) as Array<{id: string}>)
+      .map((call) => call.id);
+    const answered = sent
+      .filter((message) => message['role'] === 'tool')
+      .map((message) => message['tool_call_id']);
+    expect(answered).toEqual(expect.arrayContaining(requested));
+  });
+
+  it('has nothing to compact in a conversation that already fits', async () => {
+    const {host, session} = await startHost(() => textChunks('Noted.'));
+    await collect(host.run(session, 'one short question'));
+
+    const result = await host.compact(session);
+
+    // A value rather than an error: a short conversation is not a failure, and
+    // the window draws the sentence instead of a red banner.
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toMatch(/short enough/u);
+    expect(await host.eventsFor(session)).toHaveLength(2);
+  });
+
+  it('refuses to compact a conversation that is waiting for an approval', async () => {
+    const {host, session} = await startHost(() =>
+      toolCallChunks('call_shell', 'run_shell', {
+        command: `echo marimo-compact-gate-${String(Date.now())}`,
+      }),
+    );
+
+    const paused = await collect(host.run(session, 'run it'));
+    expect(paused.some((event) => event.type === 'approval.request')).toBe(true);
+
+    const result = await host.compact(session);
+
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toMatch(/approval/u);
+  });
+
+  it('refuses to compact a conversation while a turn is running in it', async () => {
+    const {host, session} = await startHost(() => textChunks('thinking'));
+
+    const stream = host.run(session, 'first');
+    await stream.next();
+
+    const result = await host.compact(session);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toMatch(/turn is running/u);
+
+    await collect(stream);
+  });
+
+  it('fails with an actionable message when no API key is configured', async () => {    fake = await startFakeDeepSeek(() => textChunks('unused'));
     const host = createHost(fake.baseUrl, '');
     const session = await host.createSession();
 

@@ -2,6 +2,7 @@ import {createEvent} from '@google/adk';
 import {describe, expect, it} from 'vitest';
 
 import type {AdkEvent} from '../sessions/file-session-service.js';
+import {buildCompactedEvent} from './compaction.js';
 import {projectTranscript} from './transcript.js';
 
 const GATE = 'adk_request_confirmation';
@@ -357,4 +358,85 @@ describe('a helper agent in the conversation', () => {
     expect(messages[3]?.text).toBe('a fresh answer');
     expect(messages[3]?.text).not.toContain('a finding');
   });
+
+  /*
+   * A compacted conversation, which is the one case where the transcript is
+   * deliberately *not* the whole file: the messages are still there, and the
+   * model is no longer sent them. A window showing them would be a window
+   * showing a conversation the agent does not have.
+   */
+  it('replaces the messages a summary stands for with one card', () => {
+    const older = [
+      stamped(user('what does this file do?'), 1_000),
+      stamped(agent([{text: 'It parses the config.'}]), 1_010),
+      stamped(user('and this one?'), 1_020),
+      stamped(agent([{text: 'It writes it back.'}]), 1_030),
+    ];
+    const summary = stamped(
+      buildCompactedEvent({
+        summary: 'They asked about two files and got answers.',
+        startTime: 1_000,
+        endTime: 1_030,
+      }),
+      2_000,
+    );
+    const later = [
+      stamped(user('now change the second one'), 3_000),
+      stamped(agent([{text: 'Changed.'}]), 3_010),
+    ];
+
+    const messages = projectTranscript([...older, summary, ...later]);
+
+    expect(messages).toHaveLength(3);
+    expect(messages[0]).toMatchObject({
+      role: 'user',
+      text: 'They asked about two files and got answers.',
+      // Four messages were hidden, counted as *messages* rather than events: a
+      // number of events would be one the user never saw.
+      compacted: 4,
+    });
+    expect(messages[1]?.text).toBe('now change the second one');
+    expect(messages[2]?.text).toBe('Changed.');
+    // Nothing that was compacted away is drawn, and nothing is missing from the
+    // tail that was kept.
+    expect(messages.map((message) => message.text).join(' ')).not.toContain(
+      'It parses the config.',
+    );
+  });
+
+  it('shows one card after a second compaction', () => {
+    const older = [
+      stamped(user('one'), 1_000),
+      stamped(agent([{text: 'first answer'}]), 1_010),
+      stamped(user('two'), 1_020),
+      stamped(agent([{text: 'second answer'}]), 1_030),
+      stamped(user('three'), 1_040),
+      stamped(agent([{text: 'third answer'}]), 1_050),
+    ];
+    const first = stamped(
+      buildCompactedEvent({summary: 'the first two', startTime: 1_000, endTime: 1_030}),
+      1_100,
+    );
+    const second = stamped(
+      buildCompactedEvent({summary: 'all three of them', startTime: 1_000, endTime: 1_050}),
+      1_200,
+    );
+
+    const messages = projectTranscript([...older, first, second]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.text).toBe('all three of them');
+    /*
+     * Six, and not seven: the card the first compaction wrote is not counted as
+     * one of the messages replaced. It was never a message the user saw — it
+     * stood in for four of them — so what the card reports is real messages, at
+     * every number of passes.
+     */
+    expect(messages[0]?.compacted).toBe(6);
+  });
 });
+
+/** An event at a chosen moment: compaction compares timestamps strictly. */
+function stamped(event: AdkEvent, timestamp: number): AdkEvent {
+  return {...event, timestamp};
+}

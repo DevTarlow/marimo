@@ -12,7 +12,7 @@
  */
 import {useEffect, useState} from 'react';
 
-import {THEME_MODES} from '@marimo/protocol';
+import {COMMAND_IDS, COMMANDS, THEME_MODES} from '@marimo/protocol';
 import type {AppInfo, PublicSettings, Theme, ThemeMode} from '@marimo/protocol';
 
 import {Composer} from './components/Composer.js';
@@ -131,6 +131,16 @@ export function App(): React.JSX.Element {
     currentModel.length === 0 || catalogue.includes(currentModel)
       ? catalogue
       : [currentModel, ...catalogue];
+
+  /*
+   * The commands the `+` menu offers: the catalogue filtered by what the user
+   * has switched off. Drawn from the protocol constant rather than from a list
+   * here, so the menu and the Settings switches cannot describe different sets.
+   */
+  const disabledCommands = settings?.disabledCommands ?? [];
+  const commands = COMMAND_IDS.filter(
+    (id) => !disabledCommands.includes(id),
+  ).map((id) => ({id, ...COMMANDS[id]}));
 
   if (showSettings) {
     return (
@@ -329,6 +339,30 @@ export function App(): React.JSX.Element {
               sessionId,
             });
             return {files, skipped};
+          }}
+          commands={commands}
+          onRunCommand={async (id) => {
+            const profile = agent.profile;
+            const sessionId = agent.sessionId;
+            if (profile === undefined || sessionId === null) {
+              throw new Error('There is no conversation open to act on.');
+            }
+            switch (id) {
+              case 'compact': {
+                const result = await window.marimo.call('sessions.compact', {
+                  profileId: profile.id,
+                  sessionId,
+                });
+                /*
+                 * Re-read before answering, so the note and the card appear
+                 * together: the card *is* the news, and a sentence saying the
+                 * conversation was compacted over a transcript that still shows
+                 * the old messages is a window contradicting itself.
+                 */
+                await agent.refresh();
+                return result.compacted ? null : (result.reason ?? null);
+              }
+            }
           }}
           onSend={async (text) => await agent.send(text)}
           onStop={() => {

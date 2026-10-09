@@ -16,7 +16,10 @@ import {join} from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {MAX_MEMORY_BYTES, resolveMemoryFile} from '@marimo/agent';
-import {DEFAULT_MEMORY_SOFT_LIMIT_BYTES} from '@marimo/protocol';
+import {
+  DEFAULT_AGENT_IDENTITY,
+  DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+} from '@marimo/protocol';
 
 import {resolveAppPaths} from '../paths.js';
 import type {AppPaths} from '../paths.js';
@@ -424,6 +427,63 @@ describe('changing an agent', () => {
 
     await instance.selectProfile(created.id);
     expect((await instance.activeProfile()).id).toBe(created.id);
+  });
+});
+
+/*
+ * The identity a new agent starts with, and the half that matters more: the
+ * identities already on disk that must not change.
+ *
+ * The two are one feature. Settings resets an edited identity to this same
+ * constant, so a seed and a button that disagreed would make Reset restore
+ * something no agent is ever given — and a "default" applied on read would be
+ * the app editing the user's words back to its own.
+ */
+describe('the identity a new agent gets', () => {
+  let dir: string;
+  let paths: AppPaths;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-identity-'));
+    paths = resolveAppPaths(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function runtime(): AgentRuntime {
+    return new AgentRuntime({
+      paths,
+      readSecret: async () => ({state: 'absent'}),
+    });
+  }
+
+  it('starts the first agent on the shipped identity', async () => {
+    const [profile] = await runtime().profiles();
+    expect(profile?.identity).toBe(DEFAULT_AGENT_IDENTITY);
+    // The same constant is what the Reset button restores, so a blank one is a
+    // feature that quietly does nothing in both places at once.
+    expect(DEFAULT_AGENT_IDENTITY.trim().length).toBeGreaterThan(0);
+  });
+
+  it('gives an agent made later the same identity', async () => {
+    const created = await runtime().createProfile('Researcher');
+    expect(created.identity).toBe(DEFAULT_AGENT_IDENTITY);
+  });
+
+  it('leaves an identity the user already saved alone', async () => {
+    const profiles = new ProfileStore({
+      file: paths.profiles,
+      defaultWorkspaceRoot: dir,
+      defaultIdentity: '',
+      defaultTools: [],
+      defaultSkills: [],
+    });
+    await profiles.load();
+
+    const [profile] = await runtime().profiles();
+    expect(profile?.identity).toBe('');
   });
 });
 

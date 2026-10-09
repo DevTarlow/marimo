@@ -38,7 +38,7 @@ import type {
   SkillService,
   WebSearchProvider,
 } from '@marimo/agent';
-import {activeProvider} from '@marimo/protocol';
+import {activeProvider, DEFAULT_AGENT_IDENTITY} from '@marimo/protocol';
 import type {
   AgentProfile,
   AgentUiEvent,
@@ -126,10 +126,15 @@ export class AgentRuntime {
     this.profileStore = new ProfileStore({
       file: options.paths.profiles,
       defaultWorkspaceRoot: options.paths.defaultWorkspace,
-      // A brand-new profile starts with an identity and nothing else: every
-      // capability is something the user turns on, which is the whole shape of
-      // this app. The empty lists are the point, not an oversight.
-      defaultIdentity: '',
+      // A brand-new profile starts with the app's identity and no capabilities:
+      // every one of those is something the user turns on, which is the whole
+      // shape of this app. The empty lists are the point, not an oversight.
+      //
+      // The identity is seeded rather than left blank because an agent with no
+      // persona at all is not "unconfigured" — it is one whose replies have no
+      // stated idea of who they are for, and the user has no text to edit back
+      // to. It stays editable, and Settings resets it to this same constant.
+      defaultIdentity: DEFAULT_AGENT_IDENTITY,
       /*
        * The safe core, and nothing with reach. A brand-new install can read,
        * remember and search; writing, running commands, fetching an arbitrary

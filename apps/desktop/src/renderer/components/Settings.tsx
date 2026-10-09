@@ -29,6 +29,7 @@ import type {
 
 import {
   COMPANION_ANSWER_LENGTHS,
+  DEFAULT_AGENT_IDENTITY,
   PROVIDER_IDS,
   PROVIDERS,
 } from '@marimo/protocol';
@@ -162,6 +163,14 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
 
   const granted = new Set(loaded.profile?.enabledTools ?? []);
   /*
+   * Reset would be a no-op only when the box already shows the default *and*
+   * that is what is stored. A box showing the default it has not saved yet is a
+   * change waiting to happen, and the button is how it gets saved.
+   */
+  const identityAtDefault =
+    draft?.identity === DEFAULT_AGENT_IDENTITY &&
+    loaded.profile?.identity === DEFAULT_AGENT_IDENTITY;
+  /*
    * Grouped by the grant itself, which is the one fact about a tool that cannot
    * be out of date — it is the same value the switch is drawn from. An earlier
    * version grouped by a hand-written "looking" or "acting" classification, and
@@ -259,7 +268,14 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
                 }}
               />
             </label>
-            <label className="settings-field">
+            {/*
+             * Not a `<label>` any more, because it now holds a button: a click
+             * anywhere inside a label focuses its control, so the reset below
+             * would have been a click on the text box. The name is carried by
+             * `aria-label` instead, which is how the other fields that are not
+             * wrapped in a label do it.
+             */}
+            <div className="settings-field">
               <span>Identity</span>
               <em className="settings-why">
                 Who this agent is and how it should behave. Written as an
@@ -268,6 +284,7 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               <textarea
                 className="settings-input settings-identity"
                 rows={6}
+                aria-label="Identity"
                 value={draft.identity}
                 disabled={saving}
                 onChange={(event) => {
@@ -286,7 +303,31 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
                   });
                 }}
               />
-            </label>
+              <div className="settings-row">
+                {/*
+                 * Saved in the click rather than left to a blur: the blur fires
+                 * first when the button takes focus, and would write whatever
+                 * the box held *before* the reset. The store serialises the
+                 * two, so the default is what lands.
+                 */}
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  disabled={saving || identityAtDefault}
+                  onClick={() => {
+                    setDraft({...draft, identity: DEFAULT_AGENT_IDENTITY});
+                    void change(async () => {
+                      await window.marimo.call('profiles.update', {
+                        profileId: loaded.profile?.id ?? '',
+                        patch: {identity: DEFAULT_AGENT_IDENTITY},
+                      });
+                    });
+                  }}
+                >
+                  Reset to default
+                </button>
+              </div>
+            </div>
           </section>
         )}
 

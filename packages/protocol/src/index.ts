@@ -816,6 +816,18 @@ export const workspaceSchema = z.object({
 });
 
 /**
+ * Who a brand-new agent is, until the user says otherwise.
+ *
+ * One constant rather than a literal in each place that needs it, because those
+ * places have to agree and a disagreement is invisible: this is the identity a
+ * new profile is seeded with *and* the text the Reset button puts back. A
+ * renderer holding its own copy would reset an agent to something the app never
+ * shipped, which looks like the button working.
+ */
+export const DEFAULT_AGENT_IDENTITY =
+  "You are Marimo, a helpful and useful AI assistant - the user's own personal assistant. You are talking to one person, on their own machine, about their own work.";
+
+/**
  * An agent: its identity (the system prompt), the folders it knows about, and
  * the tools and skills it is allowed to use. Switching profile is what makes the
  * app feel like a different agent, so each one also owns its conversations.

@@ -99,7 +99,14 @@ export interface AgentController {
    * first event, when there is nothing to show yet but a message on its way.
    */
   busy: boolean;
-  send: (text: string, origin?: 'window' | 'pet') => Promise<void>;
+  /**
+   * Sends a message, and answers whether the turn was accepted.
+   *
+   * The answer is what lets the composer keep what was typed: a refusal — a
+   * turn already running, an unknown conversation — is not a failure the user
+   * should have to retype a prompt to recover from.
+   */
+  send: (text: string, origin?: 'window' | 'pet') => Promise<boolean>;
   decide: (callId: string, confirmed: boolean) => Promise<void>;
   stop: () => Promise<void>;
   open: (sessionId: string) => Promise<void>;
@@ -597,9 +604,9 @@ export function useAgent(): AgentController {
     async (
       text: string,
       origin: 'window' | 'pet' = 'window',
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       if (profile === undefined || sessionId === null) {
-        return;
+        return false;
       }
       setError(null);
       /*
@@ -627,10 +634,13 @@ export function useAgent(): AgentController {
          */
         if (!accepted) {
           setOutbox(null);
+          return false;
         }
+        return true;
       } catch (failure) {
         setOutbox(null);
         setError(describe(failure));
+        return false;
       }
     },
     [profile, sessionId],

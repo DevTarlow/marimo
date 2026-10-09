@@ -688,6 +688,47 @@ async function main() {
     }
 
     /*
+     * The composer's shape, which no unit test can see: this package has no DOM
+     * test environment, and the two facts asserted here are the ones a
+     * restructured composer gets wrong silently — the arrow belongs on the line
+     * the message is typed on, and it is a circle. A Send that moved back to a
+     * row of its own, or a labelled rectangle, would pass every other check.
+     */
+    const shape = await send('Runtime.evaluate', {
+      expression: `JSON.stringify((() => {
+        const line = document.querySelector('.composer-line');
+        const input = line?.querySelector('textarea.composer-input');
+        const arrow = line?.querySelector('.composer-send');
+        if (!line || !input || !arrow) {
+          return {line: !!line, input: !!input, arrow: !!arrow};
+        }
+        const typed = input.getBoundingClientRect();
+        const button = arrow.getBoundingClientRect();
+        return {
+          line: true,
+          sameLine: button.top < typed.bottom && button.bottom > typed.top,
+          round: Math.abs(button.width - button.height) < 1,
+          label: arrow.getAttribute('aria-label'),
+          glyph: arrow.textContent.trim(),
+          foot: !!document.querySelector('.composer-foot'),
+        };
+      })())`,
+      returnByValue: true,
+    });
+    const composer = JSON.parse(shape.result.value);
+    if (composer.line !== true || composer.foot !== true) {
+      fail(`the composer lost its structure: ${shape.result.value}`);
+    } else if (composer.sameLine !== true) {
+      fail('the send button is not on the line the message is typed on');
+    } else if (composer.round !== true) {
+      fail('the send button is not a circle');
+    } else if (composer.label !== 'Send message' || composer.glyph !== '↑') {
+      fail(`the send button is not the arrow it should be: ${shape.result.value}`);
+    } else {
+      ok('the composer types and sends on one line, with a round arrow');
+    }
+
+    /*
      * The provider picker, opened the way a person opens it.
      *
      * Its list is drawn from the protocol catalogue and its value comes from the

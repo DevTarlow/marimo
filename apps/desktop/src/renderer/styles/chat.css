@@ -682,40 +682,124 @@
   padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
+/*
+ * The whole composer is one control, so the focus ring is drawn here rather
+ * than on the textarea inside it: the ring belongs around the box the user is
+ * typing into, and the arrow beside the text is part of that box.
+ */
 .composer-box {
-  width: 100%;
-  min-height: 44px;
-  max-height: 220px;
-  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-1);
   background: var(--surface);
-  color: var(--text);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  font: inherit;
-  resize: none;
-  overflow-y: auto;
-  user-select: text;
   transition: border-color var(--transition-fast);
 }
 
-.composer-box:focus {
-  outline: none;
+.composer-box:focus-within {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
 
-.composer-box::placeholder {
+/* The input line: the text, and the arrow at the end of it. */
+.composer-line {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  max-height: 220px;
+  padding: var(--space-1) 0;
+  background: none;
+  color: var(--text);
+  border: none;
+  font: inherit;
+  resize: none;
+  overflow-y: auto;
+  user-select: text;
+}
+
+/* The box already shows where the focus is. */
+.composer-input:focus,
+.composer-input:focus-visible {
+  outline: none;
+}
+
+.composer-input::placeholder {
   color: var(--text-faint);
 }
 
-.composer-row {
+/*
+ * The arrow. A circle rather than a labelled button because it sits at the end
+ * of the line the user is typing, where a word would push the text around.
+ *
+ * A disabled one is a resting button, not a grey arrow on an accent fill —
+ * which is the rule `.button-primary:disabled` states for the whole app, and
+ * the reason this declares its own disabled colours beside its own fill.
+ */
+.composer-send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-bottom: 1px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: var(--text-lg);
+  line-height: 1;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.composer-send:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.composer-send:disabled {
+  background: var(--surface-hover);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+/* While a turn runs the circle is the way out of it, so it reads as a control
+   rather than as the thing to press to send another message. */
+.composer-send.is-stop {
+  background: var(--surface-hover);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.composer-send.is-stop:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.composer-foot {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
+  min-height: 22px;
 }
 
 .composer-hint {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-faint);
   font-size: var(--text-xs);
 }

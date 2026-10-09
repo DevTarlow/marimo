@@ -269,9 +269,7 @@ export function App(): React.JSX.Element {
         <Composer
           busy={busy}
           disabled={disabled || !agent.ready}
-          onSend={(text) => {
-            void agent.send(text);
-          }}
+          onSend={async (text) => await agent.send(text)}
           onStop={() => {
             void agent.stop();
           }}

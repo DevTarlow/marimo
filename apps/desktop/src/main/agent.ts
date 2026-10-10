@@ -755,20 +755,27 @@ export class AgentService {
   ): Promise<void> {
     await this.runtime.updateSettings(patch);
     /*
-     * Switching away from the model the app runs leaves an engine behind.
+     * A settings change the running engine cannot honour puts it down.
      *
-     * A gigabyte of memory and a spinning fan for a provider that is no longer
-     * being used, with nothing on screen to connect the two — so the switch that
-     * moves the app off it also puts it down. Switching *to* it is not started
-     * here: the next turn asks for an address, which is what starts it, and
-     * pre-warming from a settings write would load a model for somebody who was
-     * only passing through the picker.
+     * Two cases, and both are about the engine being honest rather than about
+     * saving memory. Switching to a provider the app does not run leaves a
+     * gigabyte of memory and a spinning fan attached to nothing, with nothing on
+     * screen to connect the two. And changing the model's own settings — the
+     * file, the context window, whether it thinks — cannot reach a process that
+     * has already loaded the old ones: the card would report the new file while
+     * the engine answered from the old one, and the next question would use
+     * settings the user had already changed.
+     *
+     * Switching *to* the model is not started here. The next turn asks for an
+     * address, which is what starts it, and pre-warming from a settings write
+     * would load a model for somebody who was only passing through the picker.
      */
-    if (patch.providers?.active !== undefined) {
-      const {providers} = await this.runtime.settings();
-      if (!PROVIDERS[providers.active].managed) {
-        await this.localModel.stop();
-      }
+    const tunedEngine = patch.localModel !== undefined;
+    const leftTheModel =
+      patch.providers?.active !== undefined &&
+      !PROVIDERS[(await this.runtime.settings()).providers.active].managed;
+    if (tunedEngine || leftTheModel) {
+      await this.localModel.stop();
     }
   }
 

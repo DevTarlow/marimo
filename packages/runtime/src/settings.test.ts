@@ -809,6 +809,80 @@ describe('SettingsStore experienceMode', () => {
 });
 
 /**
+ * The model the app carries: which file, how much context, whether it thinks.
+ *
+ * A block, so the merge is per field — pointing at another `.gguf` must not reset
+ * the context window, and the two are written by two different controls on one
+ * card. It also carries the defaults a fresh install starts with, which is what
+ * the engine is started from before anything has been chosen.
+ */
+describe('SettingsStore localModel', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-localmodel-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): SettingsStore {
+    return new SettingsStore(join(dir, 'settings.json'));
+  }
+
+  it('starts on the copy that shipped, with room and no thinking', async () => {
+    expect((await store().load()).localModel).toEqual({
+      // Empty means "the file in this app's own resources", which is the state
+      // nothing has to be written to reach.
+      ggufPath: '',
+      contextSize: 8192,
+      thinking: false,
+    });
+  });
+
+  it('merges one field without clearing the others', async () => {
+    const settings = store();
+    await settings.patch({localModel: {thinking: true}});
+    const after = await settings.patch({
+      localModel: {ggufPath: '/home/sam/other.gguf'},
+    });
+
+    expect(after.localModel).toEqual({
+      ggufPath: '/home/sam/other.gguf',
+      contextSize: 8192,
+      thinking: true,
+    });
+  });
+
+  it('keeps the choice through an unrelated write and a restart', async () => {
+    const settings = store();
+    await settings.patch({localModel: {contextSize: 32768}});
+    await settings.patch({temperature: 0.2});
+
+    expect((await store().load()).localModel.contextSize).toBe(32768);
+  });
+
+  it('falls back on the block alone when it is nonsense', async () => {
+    // A hand-edited context window must cost that block, not the provider, the
+    // connectors and every other preference the user has.
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify(
+        {localModel: {contextSize: 40}, providers: {active: 'gemini'}},
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    const settings = await store().load();
+
+    expect(settings.localModel.contextSize).toBe(8192);
+    expect(settings.providers.active).toBe('gemini');
+  });
+});
+
+/**
  * The appearance block: a choice with three fields, none of which may take the
  * others down with it.
  */

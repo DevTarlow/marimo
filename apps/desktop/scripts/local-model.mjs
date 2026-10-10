@@ -31,7 +31,16 @@
  */
 import {createHash} from 'node:crypto';
 import {createReadStream, createWriteStream} from 'node:fs';
-import {cp, mkdir, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
+import {
+  cp,
+  link,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import {dirname, join, resolve} from 'node:path';
 import {pipeline} from 'node:stream/promises';
 import {execFile} from 'node:child_process';
@@ -132,10 +141,7 @@ async function download(url, destination, expected, label) {
     },
   });
 
-  await pipeline(
-    response.body.pipeThrough(body),
-    createWriteStream(temporary),
-  );
+  await pipeline(response.body.pipeThrough(body), createWriteStream(temporary));
 
   const actual = await sha256(temporary);
   if (actual !== expected) {
@@ -209,6 +215,24 @@ async function unpackEngine(archive, key) {
   console.log(`  engine: unpacked to ${engineDir}`);
 }
 
+/**
+ * Puts the verified download where the app looks, without a second copy of it.
+ *
+ * A hard link, because the cache and the packaged directory are the same file on
+ * the same disk: the cache is what makes a rebuild free, and the packaged copy is
+ * what `electron-builder` picks up, and there is no reason for 1.1 GB to be
+ * stored twice to serve both. Falls back to a copy on a filesystem that will not
+ * link — a cache on another mount, which costs disk and nothing else.
+ */
+async function place(source, destination) {
+  await rm(destination, {force: true});
+  try {
+    await link(source, destination);
+  } catch {
+    await cp(source, destination);
+  }
+}
+
 async function findFile(root, name) {
   const entries = await readdir(root, {withFileTypes: true});
   for (const entry of entries) {
@@ -247,10 +271,10 @@ async function fetchAll() {
   await download(modelUrl(), weights, pins.model.sha256, 'weights');
 
   await unpackEngine(engineArchive, key);
-  await rm(join(outDir, pins.model.file), {force: true});
-  await cp(weights, join(outDir, pins.model.file));
+  await place(weights, join(outDir, pins.model.file));
 
-  const total = (await sizeOf(join(outDir, pins.model.file))) + (await dirSize(engineDir));
+  const total =
+    (await sizeOf(join(outDir, pins.model.file))) + (await dirSize(engineDir));
   console.log(
     `\nThe model is ready in ${outDir} (${formatBytes(total)}).\n` +
       `A development run points at it with:\n` +
@@ -262,7 +286,10 @@ async function verify() {
   const key = platformKey();
   const problems = [];
 
-  const engineBinary = join(engineDir, key.startsWith('win32') ? 'llama-server.exe' : 'llama-server');
+  const engineBinary = join(
+    engineDir,
+    key.startsWith('win32') ? 'llama-server.exe' : 'llama-server',
+  );
   if ((await sizeOf(engineBinary)) < 0) {
     problems.push(`the engine is missing: ${engineBinary}`);
   }
@@ -323,7 +350,9 @@ try {
     await verify();
   } else if (command === 'where') {
     // What a development run sets MARIMO_MODEL_DIR to, and what the README says.
-    console.log(await mkdir(outDir, {recursive: true}).then(() => resolve(outDir)));
+    console.log(
+      await mkdir(outDir, {recursive: true}).then(() => resolve(outDir)),
+    );
   } else {
     console.error(`Unknown command "${command}". Use fetch, verify or where.`);
     process.exitCode = 2;

@@ -1496,4 +1496,236 @@ describe('AgentHost', () => {
       expect(events).toEqual([]);
     });
   });
+
+  /*
+   * The two failures a small local model actually produces. Both come from a
+   * real `Qwen3-1.7B` conversation: a turn that called `web_search` and
+   * `read_file` alternately with identical arguments until the context was
+   * spent, and then a turn that ended on reasoning with no reply at all, so the
+   * user got nothing. A prompt asking the model not to do either is the first
+   * thing a model this size loses, which is why both are enforced here.
+   */
+
+  it('warns on a repeated tool call and refuses the third', async () => {
+    const queries: string[] = [];
+    const provider: WebSearchProvider = {
+      search: async ({query}) => {
+        queries.push(query);
+        return [
+          {
+            title: 'Marimo',
+            url: 'https://example.com/marimo',
+            snippet: 'A reactive notebook',
+          },
+        ];
+      },
+    };
+
+    const {host, session} = await startHost(
+      (messages) => {
+        const results = messages.filter(
+          (message) => message['role'] === 'tool',
+        ).length;
+        return results < 3
+          ? toolCallChunks(`call_search_${results}`, 'web_search', {
+              query: 'marimo',
+            })
+          : textChunks('Answered.');
+      },
+      'test-key',
+      provider,
+    );
+
+    const events = await collect(host.run(session, 'search for marimo'));
+
+    /*
+     * The number that matters. The tool ran for the first and second calls and
+     * not for the third: a refusal that still executed the thing it refused
+     * would be worse than the loop it was meant to break.
+     */
+    expect(queries).toEqual(['marimo', 'marimo']);
+
+    const finished = events.filter((event) => event.type === 'tool.finished');
+    expect(finished).toHaveLength(3);
+    if (
+      finished[0]?.type === 'tool.finished' &&
+      finished[1]?.type === 'tool.finished' &&
+      finished[2]?.type === 'tool.finished'
+    ) {
+      expect(finished[0].ok).toBe(true);
+      expect(finished[0].result).not.toContain('[repeated call]');
+
+      // Still allowed through, so the model sees the result *and* the warning.
+      expect(finished[1].ok).toBe(true);
+      expect(finished[1].result).toContain('https://example.com/marimo');
+      expect(finished[1].result).toContain('[repeated call]');
+
+      // Refused, and marked failed so the window draws it as a call that did not
+      // happen rather than one that quietly returned something odd.
+      expect(finished[2].ok).toBe(false);
+      expect(finished[2].result).toContain('Refused');
+    }
+
+    expect(typesOf(events)).toContain('turn.completed');
+  });
+
+  it('forgets the count when the turn ends', async () => {
+    const queries: string[] = [];
+    const provider: WebSearchProvider = {
+      search: async ({query}) => {
+        queries.push(query);
+        return [{title: query, url: `https://example.com/${query}`, snippet: ''}];
+      },
+    };
+
+    const {host, session} = await startHost(
+      (_messages, callIndex) =>
+        callIndex % 2 === 0
+          ? toolCallChunks(`call_search_${callIndex}`, 'web_search', {
+              query: 'marimo',
+            })
+          : textChunks('Found it.'),
+      'test-key',
+      provider,
+    );
+
+    const first = await collect(host.run(session, 'search for marimo'));
+    const second = await collect(host.run(session, 'search for marimo again'));
+
+    // One call per turn with identical arguments is two turns doing the same
+    // thing, not one turn looping. Counting across turns would warn on the
+    // second one, and warn on the same harmless pattern forever after.
+    expect(queries).toEqual(['marimo', 'marimo']);
+    for (const call of [...first, ...second]) {
+      if (call.type === 'tool.finished') {
+        expect(call.result).not.toContain('[repeated call]');
+      }
+    }
+  });
+
+  it('lets a repeated call with different arguments through', async () => {
+    const queries: string[] = [];
+    const provider: WebSearchProvider = {
+      search: async ({query}) => {
+        queries.push(query);
+        return [
+          {title: query, url: `https://example.com/${query}`, snippet: ''},
+        ];
+      },
+    };
+
+    const {host, session} = await startHost(
+      (messages) => {
+        const results = messages.filter(
+          (message) => message['role'] === 'tool',
+        ).length;
+        return results < 2
+          ? toolCallChunks(`call_search_${results}`, 'web_search', {
+              query: results === 0 ? 'first' : 'second',
+            })
+          : textChunks('Both done.');
+      },
+      'test-key',
+      provider,
+    );
+
+    const events = await collect(host.run(session, 'search twice'));
+
+    // The guard is about the same call, not about the same tool: changing the
+    // query is the model doing exactly what the warning asks of it.
+    expect(queries).toEqual(['first', 'second']);
+    for (const call of events) {
+      if (call.type === 'tool.finished') {
+        expect(call.result).not.toContain('[repeated call]');
+      }
+    }
+  });
+
+  it('recovers the reply from a turn that produced only reasoning', async () => {
+    const {host, session} = await startHost((_messages, callIndex) =>
+      callIndex === 0
+        ? reasoningChunks('I should ask which recipe they want.', '')
+        : textChunks('Which recipe would you like for today?'),
+    );
+
+    const events = await collect(host.run(session, 'add in the one for today'));
+
+    expect(typesOf(events)).not.toContain('turn.failed');
+    expect(typesOf(events)).toContain('turn.completed');
+    expect(
+      events
+        .filter((event) => event.type === 'text.delta')
+        .map((event) => (event.type === 'text.delta' ? event.text : ''))
+        .join(''),
+    ).toBe('Which recipe would you like for today?');
+
+    // The second request is the recovery, and it carries the two things the
+    // model needs to answer from: what was asked, and what it already worked out.
+    const recovery = String(fake?.requests[1]?.messages[0]?.['content']);
+    expect(recovery).toContain('add in the one for today');
+    expect(recovery).toContain('I should ask which recipe they want.');
+
+    /*
+     * Stored, not merely streamed. The window re-reads the transcript the moment
+     * the turn completes, so a recovered reply that was only sent as a delta
+     * would vanish on the reload that follows it.
+     */
+    const {messages} = await host.getTranscript(session);
+    const last = messages[messages.length - 1];
+    expect(last?.text).toContain('Which recipe would you like for today?');
+  });
+
+  it('reports a turn that stays silent even after a second attempt', async () => {
+    const {host, session} = await startHost(() =>
+      reasoningChunks('thinking, and never saying', ''),
+    );
+
+    const events = await collect(host.run(session, 'hi'));
+
+    // Reported as a failure rather than as words the model never said: a
+    // sentence in the transcript would read as an answer, and there was none.
+    expect(typesOf(events)).not.toContain('turn.completed');
+    const failed = events.find((event) => event.type === 'turn.failed');
+    expect(failed).toMatchObject({type: 'turn.failed'});
+    if (failed?.type === 'turn.failed') {
+      expect(failed.message).toContain('second attempt');
+    }
+    expect(typesOf(events)).not.toContain('text.delta');
+  });
+
+  it('counts a whitespace-only reply as silence', async () => {
+    const {host, session} = await startHost((_messages, callIndex) =>
+      callIndex === 0 ? textChunks('   ') : textChunks('Here is your answer.'),
+    );
+
+    const events = await collect(host.run(session, 'well?'));
+
+    // A bubble holding a space is the same nothing to the person looking at it,
+    // so it gets the same recovery rather than being taken as an answer.
+    expect(typesOf(events)).not.toContain('turn.failed');
+    const text = events
+      .filter((event) => event.type === 'text.delta')
+      .map((event) => (event.type === 'text.delta' ? event.text : ''))
+      .join('');
+    expect(text).toContain('Here is your answer.');
+    expect(fake?.requests).toHaveLength(2);
+  });
+
+  it('does not treat a turn that is waiting for approval as silent', async () => {
+    await writeFile(join(workDir, 'notes.md'), 'original', 'utf8');
+
+    const {host, session} = await startHost(() =>
+      toolCallChunks('call_write', 'write_file', {
+        path: 'notes.md',
+        content: 'replaced',
+      }),
+    );
+
+    const paused = await collect(host.run(session, 'replace it'));
+    expect(paused.some((event) => event.type === 'approval.request')).toBe(true);
+
+    // One request, which is the gate. A recovery call would show up as a second:
+    // a turn waiting on the user is not a turn that said nothing.
+    expect(fake?.requests).toHaveLength(1);
+  });
 });

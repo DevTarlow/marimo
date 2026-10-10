@@ -77,6 +77,16 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     every built-in name *before* the profile filter — a tool the profile has
     switched off still owns its name, because the profile can change between
     turns.
+15. **A turn that says nothing is a failure, not an answer.** A small model can
+    end a turn with reasoning in `thought` parts, no content and no tool call.
+    ADK calls that a completed turn and the window draws an empty bubble, so
+    `drive` treats a turn with no visible text and no pending gate as broken: it
+    asks once more with the model's own reasoning handed back, stores the reply,
+    and reports `turn.failed` if that is empty too. `tool-loop-plugin.ts` is its
+    sibling and the same rule from the other end — the third identical tool call
+    in a turn is refused rather than run, because a model that loops arrives at
+    that silence by itself. Nothing here is a prompt: a prompt is what a 1.7B
+    model loses first.
 
 ## Documents
 

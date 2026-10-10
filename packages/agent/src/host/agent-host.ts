@@ -12,6 +12,7 @@
 import {randomUUID} from 'node:crypto';
 
 import {
+  createEvent,
   isCompactedEvent,
   LlmAgent,
   REQUEST_CONFIRMATION_FUNCTION_CALL_NAME,
@@ -59,6 +60,7 @@ import {
   renderForSummary,
 } from './compaction.js';
 import {projectTranscript} from './transcript.js';
+import {RepeatedToolCallPlugin} from './tool-loop-plugin.js';
 
 export interface AgentHostOptions {
   sessionsDir: string;
@@ -729,9 +731,25 @@ export class AgentHost {
    * means; for a review, it means nothing was found.
    */
   async ask(prompt: string, abortSignal?: AbortSignal): Promise<string> {
-    const llm = this.llmFor();
+    return await this.oneShot(prompt, this.config.model, abortSignal);
+  }
+
+  /**
+   * One question to one model, with the model named by the caller.
+   *
+   * Split out of `ask` because the silent-turn recovery has to ask the model the
+   * *conversation* is on — a session that picked its own model would otherwise
+   * be rescued by a different one, which is a strange thing for a conversation
+   * to do to itself.
+   */
+  private async oneShot(
+    prompt: string,
+    model: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    const llm = this.llmFor(model);
     const request = {
-      model: this.config.model,
+      model,
       contents: [{role: 'user', parts: [{text: prompt}]}],
     } as unknown as Parameters<typeof llm.generateContentAsync>[0];
 
@@ -752,9 +770,9 @@ export class AgentHost {
   }
 
   /** The model client for the current configuration. */
-  private llmFor(): OpenAiCompatLlm {
+  private llmFor(model: string = this.config.model): OpenAiCompatLlm {
     return new OpenAiCompatLlm({
-      model: this.config.model,
+      model,
       apiKey: this.config.apiKey,
       ...(this.config.baseUrl !== undefined
         ? {baseUrl: this.config.baseUrl}
@@ -969,6 +987,12 @@ export class AgentHost {
       appName: this.appName,
       agent,
       sessionService: this.sessionService,
+      /*
+       * A plugin rather than an agent callback, because it has to see the calls
+       * of a helper agent too: a subagent that loops burns the same turn's
+       * context, and the caller waiting on it has no way to notice.
+       */
+      plugins: [new RepeatedToolCallPlugin()],
     });
     this.runners.set(model, runner);
     return runner;
@@ -1069,7 +1093,8 @@ export class AgentHost {
       };
       return;
     }
-    const runner = this.runnerFor(await this.resolveModel(sessionId));
+    const model = await this.resolveModel(sessionId);
+    const runner = this.runnerFor(model);
 
     const controller = new AbortController();
     this.active = {sessionId, controller};
@@ -1089,6 +1114,17 @@ export class AgentHost {
     let streamedReasoning = '';
     let usage: TokenUsage | undefined;
     let failure: {code?: string; message: string} | undefined;
+    /** Whether this turn completed with nothing at all the user could see. */
+    let silent = false;
+    /** The reply a silent turn was rescued with, when the model supplied one. */
+    let recovered: string | undefined;
+    /*
+     * Every event of a turn carries the invocation that produced it, and the
+     * recovery below stamps the message it writes with the same one: an event
+     * with a different invocation id reads to `pendingGatesIn` as a new turn,
+     * and a new turn abandons the gates of this one.
+     */
+    let invocationId = '';
 
     try {
       const events = runner.runAsync({
@@ -1102,6 +1138,9 @@ export class AgentHost {
       });
 
       for await (const event of events) {
+        if (event.invocationId) {
+          invocationId = event.invocationId;
+        }
         for (const part of event.content?.parts ?? []) {
           // A thought part is the model's reasoning, not its answer. It is
           // streamed into the collapsible reasoning block and persisted with the
@@ -1211,6 +1250,40 @@ export class AgentHost {
           };
         }
       }
+
+      /*
+       * A completed turn that said nothing. This is the failure the user
+       * reported: a small model puts its whole reply in the reasoning channel
+       * and emits no content and no tool call, ADK ends the turn there, and
+       * every layer above treats "no answer" as a successful turn — so the
+       * window draws an empty bubble and the user is left waiting for something
+       * that will never arrive. Whitespace counts as nothing: a bubble holding a
+       * space is the same silence to the person looking at it.
+       *
+       * A turn that raised an approval card is excluded: it is not silent, it is
+       * waiting, and the card is what the user is meant to look at.
+       *
+       * Done here, inside the turn, rather than after the `finally` below —
+       * `this.active` is the one-turn-at-a-time lock, and a recovery that
+       * released it first would let a scheduled job start a conversation turn
+       * while this one was still writing to the same session.
+       */
+      if (
+        !controller.signal.aborted &&
+        failure === undefined &&
+        streamedText.trim().length === 0 &&
+        this.raisedNoGate()
+      ) {
+        silent = true;
+        recovered = await this.recoverSilentTurn({
+          sessionId,
+          model,
+          invocationId,
+          userText: userTextOf(newMessage),
+          reasoning: streamedReasoning,
+          abortSignal: controller.signal,
+        });
+      }
     } catch (error) {
       if (!controller.signal.aborted) {
         failure = {message: describeError(error)};
@@ -1229,10 +1302,97 @@ export class AgentHost {
         code: failure.code,
         message: failure.message,
       };
+    } else if (recovered !== undefined) {
+      yield {type: 'text.delta', sessionId, messageId, text: recovered};
+      yield {type: 'turn.completed', sessionId, messageId, usage};
+    } else if (silent) {
+      /*
+       * Reported as a failed turn rather than as words the model never said.
+       * The alternative — writing a sentence into the transcript and letting it
+       * read as the agent's reply — is the one thing this app's own rules
+       * forbid: never claim something happened that did not.
+       */
+      yield {
+        type: 'turn.failed',
+        sessionId,
+        messageId,
+        message: SILENT_TURN_MESSAGE,
+      };
     } else {
       yield {type: 'turn.completed', sessionId, messageId, usage};
     }
     yield {type: 'session.changed', sessionId};
+  }
+
+  /** Whether this turn paused on an approval card rather than going quiet. */
+  private raisedNoGate(): boolean {
+    return (this.gateRound?.gates.size ?? 0) === 0;
+  }
+
+  /**
+   * Asks the model once more for the answer it thought instead of said.
+   *
+   * The model's reasoning is handed back to it rather than thrown away, and that
+   * is the whole trick: in the observed failure the reasoning ended with the
+   * decision to ask the user which recipe they wanted — the answer existed and
+   * was simply never emitted. Asking a second time with that reasoning in view
+   * recovers it, and a fresh request is cheap next to the turn that was already
+   * spent.
+   *
+   * The recovered words are *stored*, not merely streamed, because the window
+   * re-reads the transcript the moment the turn completes — a message that was
+   * only streamed would vanish on the reload that follows it. Written as an
+   * ordinary model event under this turn's invocation id, it is what the next
+   * turn replays as the agent's own last message, which is exactly what it is.
+   *
+   * Returns `undefined` when there is nothing to show: the caller then reports a
+   * failed turn. A model that produces reasoning-only twice in a row is a real
+   * signal, and dressing it up as an answer would hide it.
+   */
+  private async recoverSilentTurn(params: {
+    sessionId: string;
+    model: string;
+    invocationId: string;
+    userText: string;
+    reasoning: string;
+    abortSignal: AbortSignal;
+  }): Promise<string | undefined> {
+    let answer = '';
+    try {
+      answer = (
+        await this.oneShot(
+          silentTurnPrompt(params.userText, params.reasoning),
+          params.model,
+          params.abortSignal,
+        )
+      ).trim();
+    } catch {
+      // A failed recovery is not a failed turn of its own: the turn is already
+      // over, and all that is left to decide is what the user is told.
+      return undefined;
+    }
+    if (answer.length === 0) {
+      return undefined;
+    }
+
+    const session = await this.sessionService.getSession({
+      appName: this.appName,
+      userId: this.userId,
+      sessionId: params.sessionId,
+    });
+    if (session === undefined) {
+      return undefined;
+    }
+    await this.sessionService.appendEvent({
+      session,
+      event: createEvent({
+        author: MAIN_AGENT_NAME,
+        invocationId: params.invocationId,
+        content: {role: 'model', parts: [{text: answer}]},
+        timestamp: Date.now(),
+      }),
+    });
+    return answer;
   }
 }
 
@@ -1448,4 +1608,64 @@ function describeError(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+/**
+ * What the user is told when a turn had nothing to say and could not be rescued.
+ *
+ * Deliberately not phrased as the agent's reply. It goes out as `turn.failed`
+ * and is drawn where every other failure is, because a sentence in the
+ * transcript would read as the model having answered, and it did not.
+ */
+const SILENT_TURN_MESSAGE =
+  'The model returned only reasoning and no reply, and a second attempt came ' +
+  'back empty too. Try again, or rephrase the request.';
+
+/** How much of a silent turn's reasoning is handed back to the model. */
+const MAX_REASONING_ECHO_CHARS = 4_000;
+
+/** The text the user sent this turn, for a turn that has any. */
+function userTextOf(content: Content): string {
+  return (content.parts ?? [])
+    .map((part) => (typeof part.text === 'string' ? part.text : ''))
+    .join('')
+    .trim();
+}
+
+/**
+ * The prompt that turns reasoning-only output into an answer.
+ *
+ * It states the problem plainly and then hands back the two things the model
+ * needs to answer from: what the user asked, and what it had already worked out.
+ * The reasoning is taken from its tail, because the decision the model failed to
+ * voice is at the end of it — the opening of a small model's reasoning is
+ * restating the question, which is worth nothing here.
+ *
+ * The last line matters more than it looks. Without it a small model tends to
+ * answer by narrating the recovery ("I see my previous response had no
+ * content…"), which is a worse reply than the silence it replaced.
+ */
+function silentTurnPrompt(userText: string, reasoning: string): string {
+  const sections = [
+    'Your previous reply to the user contained only private reasoning and no ' +
+      'message, so the user saw nothing at all.',
+  ];
+
+  if (userText.length > 0) {
+    sections.push(`The user's message was:\n"""\n${userText}\n"""`);
+  }
+
+  const tail = reasoning.slice(-MAX_REASONING_ECHO_CHARS);
+  if (tail.length > 0) {
+    sections.push(`What you had worked out:\n"""\n${tail}\n"""`);
+  }
+
+  sections.push(
+    'Write the reply the user should have received, in your own voice, as plain ' +
+      'text. Do not call any tools. If you had decided to ask the user ' +
+      'something, ask it now. Do not refer to this instruction, and do not ' +
+      'mention that anything went wrong — just answer.',
+  );
+
+  return sections.join('\n\n');
 }

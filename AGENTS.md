@@ -21,8 +21,9 @@ packages/agent      Everything ADK: the OpenAI-compatible provider, tool set,
                     memory and session stores, AgentHost, and the
                     document-version machinery. No Electron.
 packages/runtime    The Electron-free half of the app proper: where files live,
-                    secrets with the cipher injected, and the jobs/profiles/
-                    workspaces/settings/skills/proposals stores. Re-exports the
+                    secrets with the cipher injected, the jobs/profiles/
+                    workspaces/settings/skills/proposals stores, and the
+                    supervisor for the model the app carries. Re-exports the
                     version machinery it uses, so a caller still finds it beside
                     them.
 apps/desktop        The Electron app: src/main (window, IPC, tray, adapters),
@@ -31,7 +32,7 @@ apps/desktop        The Electron app: src/main (window, IPC, tray, adapters),
 ```
 
 **The dependency rule that matters:** `packages/*` import nothing from Electron.
-That is not a style preference — it is what lets the *same* agent core run in the
+That is not a style preference — it is what lets the _same_ agent core run in the
 window and in the headless runner, which is the same binary started as plain
 Node. Adding `import {app} from 'electron'` to a package breaks the background
 service, quietly, at boot rather than at build time.
@@ -47,14 +48,14 @@ Each of these is silent when it breaks. That is the whole reason they are listed
 2. **A gate is live only in the newest invocation.** A turn is one invocation,
    and starting a new one abandons whatever the previous turn was waiting on.
    Note the shape of a real approval: the question is asked in one invocation and
-   answered in the *next* one, because resuming is a new turn carrying the
+   answered in the _next_ one, because resuming is a new turn carrying the
    confirmation. So `pendingGatesIn` tracks the newest invocation rather than
    looking for unanswered calls anywhere — get this wrong and a card the user
    walked away from comes back on every reload, with an Approve button that asks
    ADK to confirm a call belonging to a finished turn.
 3. **Every tool call gets an answer.** An assistant message with tool calls must
    be followed by one result per call or the provider refuses the whole request —
-   on that turn *and every later turn of that conversation*.
+   on that turn _and every later turn of that conversation_.
 4. **Reasoning is replayed.** DeepSeek rejects a tool-carrying turn whose
    `reasoning_content` is missing from a later request. It is not decoration.
 5. **Gated means gated in code, not in the prompt.** Whether a call pauses the
@@ -72,9 +73,14 @@ Each of these is silent when it breaks. That is the whole reason they are listed
 12. **A newer document is never overwritten.** See "Documents" below.
 13. **The app and the runner resolve the same user-data directory.** When they do
     not, nothing errors: the window writes one `jobs.json`, the service reads
-    another, finds nothing due, and exits 0.
+    another, finds nothing due, and exits 0. **The same rule covers the model the
+    app carries**, which is why `resolveLocalModelFiles` exists and both call it:
+    the window passes Electron's `process.resourcesPath` and the runner derives
+    the path from its own executable, so a disagreement is again silent — the
+    window answers questions while a scheduled job reports the model as not
+    installed.
 14. **An MCP server's tools cannot take a built-in name.** The reserved set is
-    every built-in name *before* the profile filter — a tool the profile has
+    every built-in name _before_ the profile filter — a tool the profile has
     switched off still owns its name, because the profile can change between
     turns.
 15. **A turn that says nothing is a failure, not an answer.** A small model can
@@ -87,6 +93,13 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     in a turn is refused rather than run, because a model that loops arrives at
     that silence by itself. Nothing here is a prompt: a prompt is what a 1.7B
     model loses first.
+16. **A managed provider's stored base URL is never sent.** The built-in model's
+    engine comes up on whatever port was free, so the settings file holds a
+    placeholder and the resolver substitutes the live address — or refuses, with
+    a sentence. Falling back to the placeholder is not a broken turn, it is a
+    conversation sent to whatever else is listening on that port. `--jinja` is
+    the other half of the same feature and is just as silent when missing: the
+    engine runs perfectly and the agent is offered no tools at all.
 
 ## Documents
 
@@ -96,7 +109,7 @@ Every file the app owns carries a `version` and is read through
 - **Older** → upgraded step by step by a declared migration.
 - **Current** → used.
 - **Newer** → refused, and the file is left untouched.
-- **Unreadable** → the *reader* decides. `load()` is lenient so the window still
+- **Unreadable** → the _reader_ decides. `load()` is lenient so the window still
   opens; `loadChecked()` reports the reason so the runner can exit non-zero; and
   `mutate()` moves an unreadable file aside (`.unreadable`) before writing.
 
@@ -117,7 +130,7 @@ to that list.
 
 **One document's data sometimes has to move to another's.** The folders used to
 be a field on each profile; they are `workspaces.json` now, adopted on the first
-read of that file and *preserved* on every profiles write until the adoption has
+read of that file and _preserved_ on every profiles write until the adoption has
 landed. That second half is the point: a migration in `migrations.ts` is a pure
 function of one document and cannot write another, so the only thing standing
 between a user's folders and a profile edit during the upgrade is the write path
@@ -140,8 +153,8 @@ dependency's version, or anything the package step assumes about
 
 **It has never run here, and the red X does not mean it failed.** The remote is a
 Gitea instance with no runner registered, so every push records a run that
-executed nothing — `Waiting`, `0s`, annotated *No matching online runner with
-label: ubuntu-latest*. That annotation is the whole story; the older runs that
+executed nothing — `Waiting`, `0s`, annotated _No matching online runner with
+label: ubuntu-latest_. That annotation is the whole story; the older runs that
 read `Failure` were Gitea giving up on jobs nothing claimed, not tests that
 failed. So nothing in the workflow is exercised by a push, and a change that
 touches the preload, the IPC schemas or the bundles is still only verified by the
@@ -175,7 +188,7 @@ MARIMO_NO_SANDBOX=1 pnpm --filter @marimo/desktop smoke   # only where AppArmor
                                                           # cannot help; see below
 ```
 
-**`--watch` has to be spelled out, and the *script* cannot do it.** Each
+**`--watch` has to be spelled out, and the _script_ cannot do it.** Each
 package's `test` script is `vitest run`, and `run` ignores a `--watch` after it —
 so `pnpm --filter @marimo/runtime test -- --watch` runs the suite once and exits,
 looking like a watcher that never fires. Bare `exec vitest` is not reliable
@@ -200,8 +213,8 @@ Messages follow the history rather than a convention document:
 - Subject is a sentence, capitalised, no `feat:`/`fix:` noise. Milestone work
   carries its tag — `M5: the desktop companion`; everything else is a plain
   clause — `Audit: three real defects, including two I introduced`.
-- The body is where the value is: what was wrong, what it now does, and *why
-  that shape*. Written in the same voice as the comments in the code, because
+- The body is where the value is: what was wrong, what it now does, and _why
+  that shape_. Written in the same voice as the comments in the code, because
   it is the same kind of explanation with a longer shelf life.
 - No `Generated with` footer and no co-author trailer. The author is already
   `DevTarlow`.
@@ -212,7 +225,7 @@ Messages follow the history rather than a convention document:
 renderer-only change needs `typecheck`, the desktop tests and `build:web` — not
 the agent package's own suite, which is most of the workspace and none of what
 changed. A change to `packages/agent` needs the lot, because that package is what
-the window *and* the headless runner both run. Anything that touches the preload,
+the window _and_ the headless runner both run. Anything that touches the preload,
 the IPC schemas or the built bundles needs `build:web` and the smoke check,
 because those three failing looks like something else.
 
@@ -228,6 +241,7 @@ watches the workspace poorly.
 ```bash
 pnpm install          # the store lives in .pnpm-store, per pnpm-workspace.yaml
 pnpm build            # tsc -b for every project — but NOT the renderer bundle
+pnpm --filter @marimo/desktop model:fetch   # 1.1 GB, for a checkout; see below
 pnpm build:web        # the renderer bundle: `tsc -b` + vite build, desktop only
 pnpm typecheck        # including test projects
 pnpm test             # vitest, everywhere
@@ -243,7 +257,7 @@ somebody's tray that only they can clear, holding the single-instance lock and a
 user-data directory while it sits there.
 
 The pid a launcher hands back is the trap inside the trap: `.bin/electron` is a
-shim that execs a node script which *spawns* the real binary, so a kill aimed at
+shim that execs a node script which _spawns_ the real binary, so a kill aimed at
 that pid stops the wrapper and leaves the app running. `scripts/app-process.mjs`
 is where that is handled once for both driver scripts — the app is started
 `detached`, so it leads a process group, and `stopApp` signals the group and waits
@@ -283,7 +297,7 @@ read the file" are the same observation, and the second is the failure nobody
 notices.
 
 The service layer that wakes it is in `packages/runtime/src/service` and is split
-in two on purpose: `plan.ts` produces the unit/plist/task as *data*, and
+in two on purpose: `plan.ts` produces the unit/plist/task as _data_, and
 `apply.ts` is the only part that touches the machine. Every mistake worth
 catching is in the content of what gets written, so that is what the tests assert
 on — a host is injected, and no test ever installs a timer.
@@ -323,14 +337,56 @@ cover — a container — and nothing else does, because it is a real reduction 
 isolation and must not become the quiet default.
 
 Either way the symptom is misleading and worth recognising: the dev launcher
-prints Vite's URL *first* and Electron dies immediately after, so a host policy
+prints Vite's URL _first_ and Electron dies immediately after, so a host policy
 that refused a syscall reads as a renderer that failed to paint.
+
+## The model the app carries
+
+`scripts/local-model.mjs` fetches the engine and the weights at **package** time
+— pinned by tag, revision and sha256 in `local-model.json` — into
+`apps/desktop/.model-cache/`, and `electron-builder` copies them into the app's
+resources. A checkout has none of it, which is why `MARIMO_MODEL_DIR` exists:
+without it the app opens saying the model engine is not installed, and that is
+the state the smoke check runs in.
+
+Three things about this are easy to get wrong and expensive to find:
+
+- **`--jinja` is load-bearing.** Without it llama.cpp does not apply the model's
+  own chat template, and Qwen3's template is what turns a `<tool_call>` block into
+  a call this app can see. The engine runs perfectly, every request succeeds, and
+  the agent is offered no tools at all.
+- **`fs.cp` rewrites relative symlinks to absolute ones** unless
+  `verbatimSymlinks: true`. The released engine archives link their libraries
+  relatively, so a copy points into a scratch directory that is deleted a line
+  later — and the engine then fails with `error while loading shared libraries`
+  while every file it names is visibly present.
+- **Never leave an engine behind.** It is 1.3 GB of memory and a spinning fan
+  with no window to explain it. `LocalModelService` stops it on the way out and
+  writes a pid file so the next run can reap one that outlived a crash; the
+  command to check by hand is `pgrep -x llama-server`.
+
+Tests for all of this inject `spawn` and `fetch`, so nothing in the suite loads a
+weight. Start a real one by hand only when you mean to:
+
+```bash
+pnpm --filter @marimo/desktop model:fetch
+MARIMO_MODEL_DIR=$PWD/apps/desktop/.model-cache/local-model \
+  pnpm --filter @marimo/desktop dev
+```
 
 ## Packaging
 
 ```bash
 pnpm --filter @marimo/desktop package   # AppImage into apps/desktop/release/
 ```
+
+**The model is inside the installer, and that is the difference between a release
+and a build.** `package`, `package:win` and `package:mac` fetch it first;
+`package:dir` does not, and `MARIMO_SKIP_MODEL=1` skips it anywhere — which is
+what CI sets, because what its packaging step proves is that the app packages and
+the packaged runner starts, not that 1.1 GB of weights were downloaded. A release
+built with that variable set ships an app whose welcome screen says the model is
+not installed.
 
 **`asar` stays off.** The runner is this binary started with
 `ELECTRON_RUN_AS_NODE=1`, and Node mode has no asar support: reading a file

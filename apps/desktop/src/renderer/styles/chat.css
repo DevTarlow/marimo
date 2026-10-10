@@ -2059,3 +2059,25 @@
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
+
+/*
+ * The exact command line the app hands llama.cpp.
+ *
+ * Monospaced and wrapped rather than scrolled: it is a long single line with a
+ * dozen arguments in it, and the one thing a reader does with it is compare it
+ * against the command they would have typed — which means seeing all of it.
+ */
+.model-command {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}

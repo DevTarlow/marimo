@@ -39,7 +39,11 @@ import type {
   SkillService,
   WebSearchProvider,
 } from '@marimo/agent';
-import {activeProvider, DEFAULT_AGENT_IDENTITY} from '@marimo/protocol';
+import {
+  activeProvider,
+  DEFAULT_AGENT_IDENTITY,
+  PROVIDERS,
+} from '@marimo/protocol';
 import type {
   AgentProfile,
   AgentUiEvent,
@@ -77,6 +81,24 @@ export interface RuntimeServices {
   discordService?: DiscordService;
 }
 
+/**
+ * The engine behind a provider this app runs itself, as the runtime needs it.
+ *
+ * Two methods, and deliberately not the supervisor's `status`: this package
+ * starts an engine and stops one, and the card that *describes* it belongs to
+ * the window that draws the card. An interface here rather than the class, for
+ * the reason `readSecret` below is a function — the two processes answer it
+ * differently (the window keeps an engine warm, the runner starts one for the
+ * length of a job) and neither answer belongs in this file. It also means no
+ * test of this package loads a gigabyte of weights.
+ */
+export interface LocalModelRunner {
+  ensureRunning(): Promise<
+    {ok: true; baseUrl: string} | {ok: false; problem: string}
+  >;
+  stop(): Promise<void>;
+}
+
 export interface AgentRuntimeOptions {
   paths: AppPaths;
   /**
@@ -109,6 +131,14 @@ export interface AgentRuntimeOptions {
    */
   onEvent?: (event: AgentUiEvent) => void;
   appName?: string;
+  /**
+   * The engine for a provider this app runs itself.
+   *
+   * Absent in a caller that cannot have one — a test, a future CLI pointed at an
+   * API — and in that case a managed provider is refused with a sentence rather
+   * than half-answered.
+   */
+  localModel?: LocalModelRunner;
 }
 
 /** Either a host ready for a turn, or the sentence explaining why not. */
@@ -759,7 +789,22 @@ export class AgentRuntime {
     }
 
     /*
-     * The host first, because it is what reads the conversation index — and a
+     * The engine, before the configuration that points at it.
+     *
+     * Deliberately first: starting it takes seconds, and a resolution that
+     * happened before it was up would produce a configuration with no address
+     * and a refusal the user cannot act on. Starting it *here* rather than in a
+     * caller is what makes the two processes the same code — the window and the
+     * headless runner both arrive at `host`, and neither has to know that a
+     * managed provider is a process.
+     */
+    const engine = await this.managedEngine(settings);
+    if (!engine.ok) {
+      return engine;
+    }
+
+    /*
+     * The host next, because it is what reads the conversation index — and a
      * placeholder-config host is exactly what `transcript` and `approve`
      * already build. Resolving the configuration first would mean reading the
      * folder before knowing which conversation is asking.
@@ -780,6 +825,7 @@ export class AgentRuntime {
       readSecret: this.options.readSecret,
       skills: await this.skillsFor(profile),
       ...(workspaceRoot === undefined ? {} : {workspaceRoot}),
+      ...(engine.baseUrl === undefined ? {} : {managedBaseUrl: engine.baseUrl}),
     });
     if (!resolved.ok) {
       return resolved;
@@ -887,12 +933,63 @@ export class AgentRuntime {
     }
   }
 
-  dispose(): void {
+  /**
+   * Lets go of everything, including the engine if this process started one.
+   *
+   * Asynchronous because stopping a process is, and awaited by both callers on
+   * their way out: the app before it quits, and the runner before it exits. A
+   * child still loading weights when its parent disappears is a gigabyte of
+   * memory and a spinning fan with no window left to explain it — which is
+   * exactly the failure the pid file is the second line of defence against.
+   */
+  async dispose(): Promise<void> {
     for (const host of this.hosts.values()) {
       host.dispose();
     }
     this.hosts.clear();
     this.applied.clear();
+    await this.options.localModel?.stop();
+  }
+
+  /**
+   * Starts the app's own engine when the active provider needs one.
+   *
+   * Answers with the live address, or with the sentence explaining why not — the
+   * same shape a missing key has, because from the window's side it is the same
+   * kind of news: a fact about the install, discovered before the turn starts
+   * rather than halfway through it.
+   *
+   * A provider that is not managed costs one lookup and no work at all, which is
+   * why this can sit in front of every turn.
+   */
+  private async managedEngine(
+    settings: StoredSettings,
+  ): Promise<{ok: true; baseUrl?: string} | {ok: false; problem: string}> {
+    const descriptor = PROVIDERS[settings.providers.active];
+    if (!descriptor.managed) {
+      return {ok: true};
+    }
+
+    const runner = this.options.localModel;
+    if (runner === undefined) {
+      /*
+       * A caller with no engine — a test, or a future headless command pointed at
+       * an API — reaching a managed provider. Said plainly rather than resolved
+       * against the placeholder address, which would send a conversation to
+       * whatever happens to be listening on that port.
+       */
+      return {
+        ok: false,
+        problem:
+          `${descriptor.label} runs inside the app, and this process has no ` +
+          'engine to start it with. Choose another service in Settings.',
+      };
+    }
+
+    const started = await runner.ensureRunning();
+    return started.ok
+      ? {ok: true, baseUrl: started.baseUrl}
+      : {ok: false, problem: started.problem};
   }
 
   private async profileFor(

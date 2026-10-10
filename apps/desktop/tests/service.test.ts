@@ -102,7 +102,10 @@ describe('whether the runner could read the key', () => {
   }
 
   it('is true when the key is stored as plain text', async () => {
-    await writeKey(keyFile(), `plaintext:${Buffer.from('sk-abc').toString('base64')}`);
+    await writeKey(
+      keyFile(),
+      `plaintext:${Buffer.from('sk-abc').toString('base64')}`,
+    );
     expect(await keysAreReadable(context)).toBe(true);
   });
 
@@ -112,7 +115,10 @@ describe('whether the runner could read the key', () => {
    * run every minute and stop at the key every time.
    */
   it('is false when the key is encrypted', async () => {
-    await writeKey(keyFile(), `encrypted:${Buffer.from('whatever').toString('base64')}`);
+    await writeKey(
+      keyFile(),
+      `encrypted:${Buffer.from('whatever').toString('base64')}`,
+    );
     expect(await keysAreReadable(context)).toBe(false);
   });
 
@@ -137,5 +143,34 @@ describe('whether the runner could read the key', () => {
       },
     };
     expect(await keysAreReadable(broken)).toBe(false);
+  });
+
+  /*
+   * The built-in model, and the reason this is worth its own case.
+   *
+   * `keysReadable` is what the "keep jobs running" switch warns on, and the
+   * warning is about a key the runner could not decrypt. A fresh install has no
+   * key at all — the model the app carries needs none — so there is nothing to
+   * warn about, and the switch works with no setup. That falls out of asking the
+   * *active* provider for its secret rather than asking about secrets in
+   * general, which is exactly why it is asserted: a change that read the
+   * DeepSeek file regardless would put a warning about encryption in front of
+   * every new user, about a key they do not have.
+   */
+  it('is true for the built-in model, which has no key to be unreadable', async () => {
+    const fresh: ServiceContext = {
+      ...context,
+      providers: async () => ({
+        ...defaultProviders(),
+        active: 'builtin' as const,
+      }),
+    };
+    // A key left over from a previous provider must not be consulted either.
+    await writeKey(
+      paths.providerSecrets.deepseek,
+      `encrypted:${Buffer.from('whatever').toString('base64')}`,
+    );
+
+    expect(await keysAreReadable(fresh)).toBe(true);
   });
 });

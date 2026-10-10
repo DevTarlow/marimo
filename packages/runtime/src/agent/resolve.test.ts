@@ -48,7 +48,8 @@ function resolve(
 
 /** Settings with one provider live, and its key supplied however the test wants. */
 function settingsWith(
-  providerId: 'deepseek' | 'llamacpp' | 'gemini' | 'openrouter' = 'deepseek',
+  providerId:
+    'builtin' | 'deepseek' | 'llamacpp' | 'gemini' | 'openrouter' = 'deepseek',
 ) {
   const settings = defaultStoredSettings();
   return {
@@ -208,6 +209,67 @@ describe('resolveAgentConfig', () => {
     if (result.ok) {
       expect(result.config.apiKey).toBe('');
       expect(result.config.provider).toBe('llamacpp');
+    }
+  });
+
+  /*
+   * The built-in model: no key, but an engine that has to be running.
+   *
+   * The refusal matters more than the success. A managed provider's stored
+   * `baseUrl` is a placeholder for a port the app has not chosen yet, so
+   * resolving without a live address would not produce a broken configuration —
+   * it would produce one that points at whatever happens to be listening on
+   * 8137, and the user's conversation would go there.
+   */
+  it('refuses the built-in model until the app has started it', async () => {
+    const result = await resolve({
+      settings: settingsWith('builtin'),
+      profile: profile(),
+      readSecret: async () => absent,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problem).toContain('not running');
+      expect(result.problem).toContain('Settings');
+    }
+  });
+
+  it('uses the live address of the engine, never the stored placeholder', async () => {
+    const settings = settingsWith('builtin');
+    const result = await resolve({
+      settings,
+      profile: profile(),
+      readSecret: async () => absent,
+      managedBaseUrl: 'http://127.0.0.1:49231/v1',
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.baseUrl).toBe('http://127.0.0.1:49231/v1');
+      expect(result.config.baseUrl).not.toBe(
+        settings.providers.configs['builtin'].baseUrl,
+      );
+      expect(result.config.provider).toBe('builtin');
+      expect(result.config.apiKey).toBe('');
+    }
+  });
+
+  /*
+   * The same field must not be able to redirect a provider the user *did*
+   * configure: their address is the one they typed.
+   */
+  it('ignores a live address for a provider that is not managed', async () => {
+    const result = await resolve({
+      settings: settingsWith('deepseek'),
+      profile: profile(),
+      readSecret: async () => present('sk-test'),
+      managedBaseUrl: 'http://127.0.0.1:49231/v1',
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.baseUrl).toBe('https://example.test');
     }
   });
 

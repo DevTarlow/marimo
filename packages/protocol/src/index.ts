@@ -56,15 +56,19 @@ import type {McpServer} from './mcp.js';
  * the model list is all one shape.
  *
  * The order is alphabetical by label, and it is the order the Settings picker
- * draws: a list of five endpoints nobody can reorder in their head is one they
- * have to read every time. `deepseek` is additionally the default a fresh
- * install is pointed at, which alphabetical order happens to put first anyway.
+ * draws: a list of six endpoints nobody can reorder in their head is one they
+ * have to read every time.
+ *
+ * `builtin` is additionally what a fresh install is pointed at, and it is first
+ * because "Built-in model" sorts first — not because a default is being smuggled
+ * into the order. A provider is chosen by id, and this list is a menu.
  *
  * This array is the catalogue: the provider descriptors, the settings schemas
  * and the picker are all keyed off it, so a provider added here is one added
  * everywhere.
  */
 export const PROVIDER_IDS = [
+  'builtin',
   'deepseek',
   'gemini',
   'llamacpp',
@@ -155,9 +159,55 @@ export interface ProviderDescriptor {
   reasoningChannel: boolean;
   /** Whether `stream_options.include_usage` may be sent. */
   usageInStream: boolean;
+  /**
+   * Whether this app runs the backend itself.
+   *
+   * True for the one provider that is not somebody else's service: the app
+   * downloads and supervises the engine, and the address requests go to is
+   * resolved at the moment a turn starts rather than read from the settings
+   * file. Which is why the stored `baseUrl` for such a provider is a
+   * placeholder and must never be sent — the port is the one the engine
+   * actually came up on, and two sources for it is one that is wrong.
+   *
+   * Required on every entry, like `requiresApiKey` above it, so that adding a
+   * provider means answering the question rather than inheriting an answer.
+   */
+  managed: boolean;
 }
 
 export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
+  builtin: {
+    id: 'builtin',
+    label: 'Built-in model',
+    blurb:
+      'Runs on this computer. No account, no key, and nothing you type leaves ' +
+      'the machine.',
+    /*
+     * A placeholder, and the one address in this catalogue that is never sent.
+     *
+     * The app starts the engine itself and it comes up on a port that was free
+     * at that moment, so the real address exists only in the running process —
+     * `resolveAgentConfig` substitutes it for this value and refuses the turn if
+     * there is none. A fixed port here would be a second source of truth for
+     * where the engine is, and the first machine with something else on it would
+     * be a turn that talks to a stranger.
+     */
+    defaultBaseUrl: 'http://127.0.0.1:8137/v1',
+    /*
+     * What the app passes as the model in every request, and what the engine is
+     * started with as its `--alias`. It is deliberately not the file name: the
+     * id in a request is a label between two processes of this app, and the name
+     * of a quantization on disk is an implementation detail a user may change by
+     * pointing at their own file.
+     */
+    fallbackModels: ['qwen3-1.7b'],
+    requiresApiKey: false,
+    keyPlaceholder: 'not needed',
+    keyHelp: 'The built-in model needs no key.',
+    reasoningChannel: true,
+    usageInStream: true,
+    managed: true,
+  },
   deepseek: {
     id: 'deepseek',
     label: 'DeepSeek',
@@ -169,6 +219,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
     keyHelp: 'From platform.deepseek.com → API keys.',
     reasoningChannel: true,
     usageInStream: true,
+    managed: false,
   },
   gemini: {
     id: 'gemini',
@@ -188,6 +239,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
      * loss than every turn failing.
      */
     usageInStream: false,
+    managed: false,
   },
   llamacpp: {
     id: 'llamacpp',
@@ -220,6 +272,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
       'with authentication on. Most take no key; leave it empty otherwise.',
     reasoningChannel: true,
     usageInStream: true,
+    managed: false,
   },
   opencode_go: {
     id: 'opencode_go',
@@ -248,6 +301,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
       'turn — pick another from the list.',
     reasoningChannel: true,
     usageInStream: true,
+    managed: false,
     /*
      * The dashboard also sends `x-opencode-session` — the conversation's id, so
      * the gateway's routing and its per-conversation prompt cache follow the
@@ -284,6 +338,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
      */
     reasoningChannel: true,
     usageInStream: true,
+    managed: false,
   },
 };
 
@@ -365,7 +420,20 @@ export type ProvidersPatch = z.infer<typeof providersPatchSchema>;
 
 export function defaultProviders(): Providers {
   return {
-    active: 'deepseek',
+    /*
+     * The built-in model, which is the whole of "it works when you install it".
+     *
+     * A fresh install has no account, no key and no address to type, and a
+     * default that refused the first question until all three existed would be
+     * the app asking a stranger to configure it before it said anything. Every
+     * other provider is one switch away, in the screen that explains what they
+     * cost.
+     *
+     * Named rather than taken from `PROVIDER_IDS[0]`: the order of that array is
+     * the order of a menu, and a default that moved because somebody sorted the
+     * list would be a silent change of what the app does on first run.
+     */
+    active: 'builtin',
     configs: Object.fromEntries(
       PROVIDER_IDS.map((id) => [
         id,
@@ -585,6 +653,62 @@ export function defaultCompanionSettings(): CompanionSettings {
 /** A patch of the block: any subset, merged over what is stored. */
 export const companionSettingsPatchSchema = companionSettingsSchema.partial();
 
+/**
+ * The model that ships with the app: which file, and how it runs.
+ *
+ * A block rather than three flat fields, for the reason the companion's is one:
+ * these are three answers to a single question, and the settings screen draws
+ * them as one card.
+ *
+ * The weights themselves are not here. The app carries a copy and finds it in
+ * its own resources, so `ggufPath` is an *override*: empty means "the file that
+ * came with the app", which is the state every install is in and the one
+ * nothing has to be written to reach.
+ */
+export const localModelSettingsSchema = z.object({
+  /**
+   * A `.gguf` of the user's own, instead of the one that shipped.
+   *
+   * The escape hatch that keeps the built-in model from being a dead end: a
+   * machine that cannot run 1.7B, somebody who already has a file, and a
+   * developer with no weights in their checkout all reach a working app through
+   * this one field.
+   */
+  ggufPath: z.string(),
+  /**
+   * How much of a conversation the engine may hold at once.
+   *
+   * The model is trained for far more than this — 40960 tokens — and the default
+   * sits well under it on purpose: a window costs memory that grows with every
+   * message, and an app that has to be restarted because the machine ran out is
+   * a worse failure than one that forgets how a long chat began.
+   */
+  contextSize: z.number().int().min(2048).max(32768),
+  /**
+   * Whether the model reasons before it answers.
+   *
+   * Qwen3 can, and at this size it is a real trade rather than a quality switch:
+   * thinking helps a hard question and makes every easy one take seconds longer.
+   * Off, because most questions are the easy kind — and because a power user who
+   * wants it can say so.
+   */
+  thinking: z.boolean(),
+});
+
+export type LocalModelSettings = z.infer<typeof localModelSettingsSchema>;
+export const localModelSettingsPatchSchema = localModelSettingsSchema.partial();
+
+export function defaultLocalModelSettings(): LocalModelSettings {
+  return {
+    // Empty: the copy in this app's own resources, which is the one it shipped.
+    ggufPath: '',
+    // Comfortably under the 40960 the model was trained for, and enough for a
+    // long conversation with several file reads in it.
+    contextSize: 8192,
+    thinking: false,
+  };
+}
+
 /** The bot's own account, as `GET /users/@me` reports it. */
 export interface DiscordBot {
   id: string;
@@ -763,6 +887,14 @@ export const settingsSchema = z.object({
    */
   companion: companionSettingsSchema,
   /**
+   * The model the app runs itself.
+   *
+   * Here rather than on a profile, like Discord and the companion above: there
+   * is one engine, one file and one port for the whole app, and which agent is
+   * talking does not change any of them.
+   */
+  localModel: localModelSettingsSchema,
+  /**
    * How wide the two rails are, in pixels. Clamped here rather than trusted: a
    * width is dragged, and a drag can end anywhere including off the screen, so
    * the bounds belong to the contract rather than to the drag handler.
@@ -867,6 +999,7 @@ export const discordSettingsPatchSchema = discordSettingsSchema.partial();
 export const settingsPatchSchema = settingsSchema.partial().extend({
   discord: discordSettingsPatchSchema.optional(),
   companion: companionSettingsPatchSchema.optional(),
+  localModel: localModelSettingsPatchSchema.optional(),
   providers: providersPatchSchema.optional(),
   appearance: appearancePatchSchema.optional(),
 });
@@ -1113,6 +1246,37 @@ export function emptySkillsFile(): SkillsFile {
 }
 
 /**
+ * How the built-in model is doing, as the window draws it.
+ *
+ * One shape for one card, and it carries the *paths* rather than only a verdict,
+ * because the failure it exists for is a file that is not where the app looked:
+ * "the built-in model is not installed" is a complaint about nothing until it
+ * says which file it wanted. `command` is the same fact for a power user — the
+ * exact argv the app hands the engine, so it can be run by hand and compared
+ * against whatever the user's own server does.
+ */
+export interface LocalModelStatus {
+  state: 'off' | 'starting' | 'ready' | 'failed';
+  /** Where requests go, once it is up. Absent before that, and after a stop. */
+  baseUrl?: string;
+  /** Why it is not ready, in a sentence somebody can act on. */
+  detail?: string;
+  /** Whether the weights are where the app looks for them. */
+  modelPresent: boolean;
+  /** Whether the engine binary is. Reported apart from the weights because
+   *  they come from different places and are fixed in different ways. */
+  enginePresent: boolean;
+  /** The file the engine would be given. */
+  modelPath: string;
+  /** The engine binary. */
+  enginePath: string;
+  /** Exactly what the app runs to start it. */
+  command: string[];
+  /** The last lines the engine printed, oldest first. */
+  log: string[];
+}
+
+/**
  * What the renderer is allowed to see. The API key itself never crosses the
  * IPC boundary; `hasApiKey` and `encryptionAvailable` are the only facts the
  * settings screen needs to describe its own state.
@@ -1124,6 +1288,28 @@ export type PublicSettings = Settings & {
    * turns into "add a key" copy, so it follows the picker rather than DeepSeek.
    */
   hasApiKey: boolean;
+  /**
+   * Whether the app can answer at all, right now.
+   *
+   * Deliberately not the same question as `hasApiKey` above, and the reason this
+   * field exists: the built-in model needs no key, so every install has one —
+   * what it needs is a file on disk and an engine that started. A window that
+   * asked "is there a key?" would open the chat on a machine that cannot answer
+   * and ask for a key nobody needs.
+   *
+   * So this is the fact the welcome screen turns into either a chat or a
+   * question, whichever provider is active.
+   */
+  providerReady: boolean;
+  /**
+   * Why not, when it is not — the sentence the welcome screen shows.
+   *
+   * A reason rather than a boolean, because the two failures have nothing in
+   * common: "add a key" and "the model file is not where the app looked" are
+   * fixed in different places, and a screen that said "not ready" for both would
+   * be a dead end for one of them.
+   */
+  providerProblem?: string;
   /**
    * Which providers have a key on file. One file per provider in the keychain,
    * so switching provider does not mean re-entering the previous key.
@@ -2182,6 +2368,19 @@ export const agentCallSchemas = {
   'service.enable': z.object({}),
   'service.disable': z.object({}),
 
+  /*
+   * The model the app runs itself.
+   *
+   * `status` is a read — the card asks again every time it is drawn — and the
+   * other two are the buttons beside it. They are calls rather than a settings
+   * write because they start and stop a process: a settings patch that quietly
+   * spawned an engine would report success for something that had not happened,
+   * which is the same reason `models.fetch` is a call of its own.
+   */
+  'localModel.status': z.object({}),
+  'localModel.start': z.object({}),
+  'localModel.stop': z.object({}),
+
   /* What this agent is allowed to do, and what it is. */
   'profiles.catalog': z.object({}),
   'profiles.update': z.object({
@@ -2265,6 +2464,9 @@ export interface AgentCallResults {
   'service.status': ServiceStatus;
   'service.enable': ServiceChange;
   'service.disable': ServiceChange;
+  'localModel.status': LocalModelStatus;
+  'localModel.start': LocalModelStatus;
+  'localModel.stop': LocalModelStatus;
   'profiles.catalog': ProfileCatalog;
   'profiles.update': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.create': {profiles: AgentProfile[]; activeProfileId: string};

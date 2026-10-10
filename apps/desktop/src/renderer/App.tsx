@@ -315,14 +315,22 @@ export function App(): React.JSX.Element {
 
         {!agent.ready ? (
           <p className="loading">Starting…</p>
-        ) : settings !== null && !settings.hasApiKey ? (
+        ) : settings !== null && !settings.providerReady ? (
           /*
            * Asked before it is needed, rather than after. The refusal a turn
            * gives is honest and in the right place — but it is the *second*
-           * thing a new user learns, and the first should have been the
-           * question.
+           * thing a new user learns, and the first should have been the reason.
+           *
+           * Gated on readiness rather than on a key, because the model the app
+           * carries needs none: what can stop this install answering is a file
+           * that is not where the app looked, and the sentence saying so is
+           * written by the process that looked.
            */
           <Onboarding
+            problem={
+              settings.providerProblem ??
+              'The app has no way to answer yet. Settings will say what is missing.'
+            }
             onOpenSettings={() => {
               setShowSettings(true);
             }}

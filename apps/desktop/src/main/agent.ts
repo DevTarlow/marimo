@@ -49,6 +49,7 @@ import type {JobService} from '@marimo/agent';
 
 import {safeStorageCipher, secretStore} from './secrets.js';
 import {BrowserSearchProvider} from './search/search-window.js';
+import {LocalModelHost} from './local-model.js';
 
 /**
  * How often a dropped MCP server is considered for a reconnect.
@@ -104,6 +105,15 @@ export class AgentService {
    */
   private readonly jobsStore: JobStore;
   private readonly scheduler: JobScheduler;
+  /**
+   * The engine behind the model the app carries.
+   *
+   * Owned here rather than by the runtime, because starting a process is not
+   * something the shared package does — it asks whoever has one. This process
+   * has Electron, so it also has `process.resourcesPath`, which is where the
+   * shipped weights are.
+   */
+  private readonly localModel: LocalModelHost;
   /** Held for as long as this process is: "the app is running the jobs". */
   private appLock: ProcessLock | undefined;
   private reconcile: NodeJS.Timeout | undefined;
@@ -117,6 +127,11 @@ export class AgentService {
 
   constructor(private readonly options: AgentServiceOptions) {
     const {paths} = options;
+
+    this.localModel = new LocalModelHost({
+      paths,
+      readSettings: async () => await this.runtime.settings(),
+    });
 
     this.mcp = new McpManager({
       readSecrets: secretReaderFor(paths, (file, label) =>
@@ -149,6 +164,12 @@ export class AgentService {
         return await store.read();
       },
       webSearch: this.search,
+      /*
+       * The engine, so a managed provider can be started before its address is
+       * asked for. The runtime does the asking; this is the only process that
+       * knows how to answer it.
+       */
+      localModel: this.localModel,
       mcpServers: () => this.mcp.toolsets(),
       services: () => ({jobService: this.jobService()}),
       /*
@@ -305,6 +326,41 @@ export class AgentService {
     // when it quits, and an interval holding the loop open would turn a quit
     // into a hang.
     this.reconcile.unref?.();
+    this.warmLocalModel();
+  }
+
+  /**
+   * Loads the model in the background, so the first question is not the one that
+   * pays for it.
+   *
+   * Deliberately not awaited: mapping a gigabyte of weights takes seconds, and
+   * the window has to open and paint while that happens. Nor is the answer
+   * reported from here — a failure is a sentence in the Model card and in the
+   * conversation, both of which ask again when they are drawn.
+   *
+   * Started rather than left to the first turn because the alternative is a
+   * first answer that takes five seconds longer than every answer after it,
+   * which reads as the app being slow rather than as a model being loaded.
+   */
+  private warmLocalModel(): void {
+    void this.localModel
+      .ensureRunning()
+      .then((started) => {
+        if (!started.ok) {
+          /*
+           * Logged rather than shown. A machine with no model installed is a
+           * state the Model card explains properly, and an error banner over the
+           * conversation on every launch — for something the user may not have
+           * asked for yet — is noise.
+           */
+          console.log(
+            `[marimo] the built-in model is not ready: ${started.problem}`,
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        console.log('[marimo] the built-in model could not be started:', error);
+      });
   }
 
   async stop(): Promise<void> {
@@ -319,8 +375,16 @@ export class AgentService {
     await this.appLock?.release();
     this.appLock = undefined;
     await this.mcp.stop();
-    this.runtime.dispose();
+    // Stops the engine too, through the runner the runtime was given: a child
+    // still loading weights when its parent exits is a gigabyte of memory and a
+    // spinning fan with no window left to explain it.
+    await this.runtime.dispose();
     this.search.dispose();
+  }
+
+  /** The engine, for the calls that describe and drive it. */
+  get model(): LocalModelHost {
+    return this.localModel;
   }
 
   /**
@@ -690,6 +754,22 @@ export class AgentService {
     patch: Parameters<AgentRuntime['updateSettings']>[0],
   ): Promise<void> {
     await this.runtime.updateSettings(patch);
+    /*
+     * Switching away from the model the app runs leaves an engine behind.
+     *
+     * A gigabyte of memory and a spinning fan for a provider that is no longer
+     * being used, with nothing on screen to connect the two — so the switch that
+     * moves the app off it also puts it down. Switching *to* it is not started
+     * here: the next turn asks for an address, which is what starts it, and
+     * pre-warming from a settings write would load a model for somebody who was
+     * only passing through the picker.
+     */
+    if (patch.providers?.active !== undefined) {
+      const {providers} = await this.runtime.settings();
+      if (!PROVIDERS[providers.active].managed) {
+        await this.localModel.stop();
+      }
+    }
   }
 
   async listSessions(profileId?: string): Promise<SessionSummary[]> {

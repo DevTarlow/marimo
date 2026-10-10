@@ -52,6 +52,7 @@ import {chosenPreset} from '../capabilities.js';
 import {describe} from '../describe.js';
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
+import {Model} from './Model.js';
 import {ModelPicker} from './ModelPicker.js';
 import {SettingsSection} from './SettingsSection.js';
 
@@ -846,6 +847,27 @@ export function Settings({
           </SettingsSection>
         )}
 
+        {/*
+          What answers, in both sizes.
+          
+          Simple gets the whole story — the model runs here, nothing to sign up
+          for — plus the one way out, which turns on the power screen and opens
+          the card that has the addresses and keys in it. Power gets the file,
+          the context window, the command line and the engine's own log.
+        */}
+        <Model
+          opened={opened}
+          onToggle={fold}
+          power={power}
+          onChooseService={() => {
+            setExperienceMode('power');
+            fold('Provider', true);
+          }}
+          onChange={() => {
+            void load();
+          }}
+        />
+
         {power && (
           <ProviderSection
             opened={opened}
@@ -1060,6 +1082,22 @@ function ProviderSection({
     save({temperature: next});
   };
 
+  /*
+   * A provider this app runs itself has no address, no key and no model list to
+   * fetch, and its controls are therefore not drawn.
+   *
+   * The rule behind that is the one the whole capability model rests on: a
+   * control that does nothing is worse than a missing one, because it looks like
+   * a working feature. The built-in model's `baseUrl` in the settings file is a
+   * placeholder the app never sends — a box for editing it would be a box whose
+   * contents went nowhere, and Fetch Models would ask an engine this app started
+   * to list the one model it knows.
+   *
+   * What it *does* have is a shape of its own, and the card says where it is
+   * set: the Model card, which is the same card a simple-mode user sees.
+   */
+  const managed = descriptor.managed;
+
   return (
     <SettingsSection title="Provider" opened={opened} onToggle={onToggle}>
       <p className="settings-muted">
@@ -1091,140 +1129,155 @@ function ProviderSection({
         </select>
       </label>
 
-      <div className="settings-field">
-        <span>API key</span>
+      {managed && (
         <p className="settings-muted">
-          {keyStored
-            ? `A key for ${descriptor.label} is stored. It is kept on this machine and never sent back to this window.`
-            : descriptor.requiresApiKey
-              ? `No ${descriptor.label} key yet — the agent cannot answer, and its models cannot be fetched, until there is one.`
-              : `${descriptor.label} needs no key. Anything pasted here is sent as one.`}
+          The app runs this one itself, on this computer. Its file, how much
+          context it may use and whether it thinks before answering are on the{' '}
+          <strong>Model</strong> card above, which is also where it says whether
+          it is running.
         </p>
-        <div className="settings-row">
+      )}
+
+      {!managed && (
+        <div className="settings-field">
+          <span>API key</span>
+          <p className="settings-muted">
+            {keyStored
+              ? `A key for ${descriptor.label} is stored. It is kept on this machine and never sent back to this window.`
+              : descriptor.requiresApiKey
+                ? `No ${descriptor.label} key yet — the agent cannot answer, and its models cannot be fetched, until there is one.`
+                : `${descriptor.label} needs no key. Anything pasted here is sent as one.`}
+          </p>
+          <div className="settings-row">
+            <input
+              className="settings-input"
+              type="password"
+              value={apiKey}
+              placeholder={descriptor.keyPlaceholder}
+              aria-label={`${descriptor.label} API key`}
+              disabled={saving}
+              onChange={(event) => {
+                setApiKey(event.target.value);
+              }}
+            />
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={saving || apiKey.trim().length === 0}
+              onClick={saveKey}
+            >
+              Save key
+            </button>
+          </div>
+          <p className="settings-muted">{descriptor.keyHelp}</p>
+
+          <label className="settings-check">
+            <input
+              type="checkbox"
+              checked={settings.allowPlaintextApiKey}
+              disabled={saving}
+              onChange={(event) => {
+                save({allowPlaintextApiKey: event.target.checked});
+              }}
+            />
+            <span>
+              Store secrets as plain text
+              <em className="settings-why">
+                {settings.encryptionAvailable
+                  ? 'Your key will be readable by anything that can read the file. ' +
+                    'Needed only if you want scheduled jobs to run while the app is ' +
+                    'closed — the background runner has no keychain to unlock it. ' +
+                    'Re-save the key after changing this.'
+                  : 'This machine has no keychain, so a key cannot be encrypted ' +
+                    'either way. Turning this on is what lets scheduled jobs run ' +
+                    'while the app is closed.'}
+              </em>
+            </span>
+          </label>
+        </div>
+      )}
+
+      {!managed && (
+        <label className="settings-field">
+          <span>Base URL</span>
+          <em className="settings-why">
+            Where requests for {descriptor.label} go. The usual address is{' '}
+            <code>{descriptor.defaultBaseUrl}</code>; change it to point at a
+            server of your own.
+          </em>
           <input
             className="settings-input"
-            type="password"
-            value={apiKey}
-            placeholder={descriptor.keyPlaceholder}
-            aria-label={`${descriptor.label} API key`}
+            type="text"
+            value={baseUrl}
             disabled={saving}
+            spellCheck={false}
             onChange={(event) => {
-              setApiKey(event.target.value);
+              setBaseUrlDraft(event.target.value);
+            }}
+            onBlur={() => {
+              const next = baseUrl.trim();
+              // An empty box is not an address: fall back to what is stored rather
+              // than writing a value the schema refuses and the user cannot see.
+              if (next.length === 0 || next === config.baseUrl) {
+                setBaseUrlDraft(null);
+                return;
+              }
+              save({providers: {configs: {[active]: {baseUrl: next}}}});
             }}
           />
-          <button
-            type="button"
-            className="button button-primary"
-            disabled={saving || apiKey.trim().length === 0}
-            onClick={saveKey}
-          >
-            Save key
-          </button>
-        </div>
-        <p className="settings-muted">{descriptor.keyHelp}</p>
-
-        <label className="settings-check">
-          <input
-            type="checkbox"
-            checked={settings.allowPlaintextApiKey}
-            disabled={saving}
-            onChange={(event) => {
-              save({allowPlaintextApiKey: event.target.checked});
-            }}
-          />
-          <span>
-            Store secrets as plain text
-            <em className="settings-why">
-              {settings.encryptionAvailable
-                ? 'Your key will be readable by anything that can read the file. ' +
-                  'Needed only if you want scheduled jobs to run while the app is ' +
-                  'closed — the background runner has no keychain to unlock it. ' +
-                  'Re-save the key after changing this.'
-                : 'This machine has no keychain, so a key cannot be encrypted ' +
-                  'either way. Turning this on is what lets scheduled jobs run ' +
-                  'while the app is closed.'}
-            </em>
-          </span>
         </label>
-      </div>
+      )}
 
-      <label className="settings-field">
-        <span>Base URL</span>
-        <em className="settings-why">
-          Where requests for {descriptor.label} go. The usual address is{' '}
-          <code>{descriptor.defaultBaseUrl}</code>; change it to point at a
-          server of your own.
-        </em>
-        <input
-          className="settings-input"
-          type="text"
-          value={baseUrl}
-          disabled={saving}
-          spellCheck={false}
-          onChange={(event) => {
-            setBaseUrlDraft(event.target.value);
-          }}
-          onBlur={() => {
-            const next = baseUrl.trim();
-            // An empty box is not an address: fall back to what is stored rather
-            // than writing a value the schema refuses and the user cannot see.
-            if (next.length === 0 || next === config.baseUrl) {
-              setBaseUrlDraft(null);
-              return;
-            }
-            save({providers: {configs: {[active]: {baseUrl: next}}}});
-          }}
-        />
-      </label>
-
-      <div className="settings-field">
-        <span>Model</span>
-        <em className="settings-why">
-          Cheaper models are fine for reading and summarising; harder questions
-          want a bigger one.
-        </em>
-        <div className="settings-row">
-          {models.length > SEARCHABLE_MODEL_THRESHOLD ? (
-            <ModelPicker
-              models={models}
-              value={config.model}
-              disabled={saving || fetching}
-              onChange={chooseModel}
-            />
-          ) : (
-            <select
-              className="settings-input"
-              aria-label="Model"
-              value={config.model}
-              disabled={saving || fetching}
-              onChange={(event) => {
-                chooseModel(event.target.value);
-              }}
+      {!managed && (
+        <div className="settings-field">
+          <span>Model</span>
+          <em className="settings-why">
+            Cheaper models are fine for reading and summarising; harder
+            questions want a bigger one.
+          </em>
+          <div className="settings-row">
+            {models.length > SEARCHABLE_MODEL_THRESHOLD ? (
+              <ModelPicker
+                models={models}
+                value={config.model}
+                disabled={saving || fetching}
+                onChange={chooseModel}
+              />
+            ) : (
+              <select
+                className="settings-input"
+                aria-label="Model"
+                value={config.model}
+                disabled={saving || fetching}
+                onChange={(event) => {
+                  chooseModel(event.target.value);
+                }}
+              >
+                {models.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              type="button"
+              className="button button-quiet"
+              disabled={!canFetch}
+              title={
+                descriptor.requiresApiKey && !keyStored
+                  ? `Save a ${descriptor.label} key first`
+                  : undefined
+              }
+              onClick={fetchModels}
             >
-              {models.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            type="button"
-            className="button button-quiet"
-            disabled={!canFetch}
-            title={
-              descriptor.requiresApiKey && !keyStored
-                ? `Save a ${descriptor.label} key first`
-                : undefined
-            }
-            onClick={fetchModels}
-          >
-            {fetching ? 'Fetching…' : 'Fetch Models'}
-          </button>
+              {fetching ? 'Fetching…' : 'Fetch Models'}
+            </button>
+          </div>
+          {note !== null && <p className="settings-muted">{note}</p>}
+          {problem !== null && <p className="settings-problem">{problem}</p>}
         </div>
-        {note !== null && <p className="settings-muted">{note}</p>}
-        {problem !== null && <p className="settings-problem">{problem}</p>}
-      </div>
+      )}
 
       {/*
         The one knob the settings file has always held and no screen ever drew.

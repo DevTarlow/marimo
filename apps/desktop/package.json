@@ -13,12 +13,14 @@
     "run-due": "node dist/runner/run-due.js --run-due",
     "typecheck": "tsc -b tsconfig.runner.json && tsc -p tsconfig.renderer.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.test.json",
     "test": "vitest run",
+    "model:fetch": "node scripts/local-model.mjs fetch",
+    "model:verify": "node scripts/local-model.mjs verify",
     "smoke": "node scripts/smoke.mjs",
     "jobs-check": "node scripts/jobs-check.mjs",
-    "package": "pnpm build && electron-builder --linux AppImage",
+    "package": "pnpm build && pnpm model:fetch && electron-builder --linux AppImage",
     "package:dir": "pnpm build && electron-builder --dir",
-    "package:win": "pnpm build && electron-builder --win nsis",
-    "package:mac": "pnpm build && electron-builder --mac dmg"
+    "package:win": "pnpm build && pnpm model:fetch && electron-builder --win nsis",
+    "package:mac": "pnpm build && pnpm model:fetch && electron-builder --mac dmg"
   },
   "dependencies": {
     "@marimo/agent": "workspace:*",
@@ -54,6 +56,13 @@
       "!dist/**/*.map",
       "package.json"
     ],
+    "//extraResources": "The model the app carries, put in the app's own resources rather than in the user-data directory: it is part of the install, it is replaced by installing a newer build, and it is read-only. `scripts/local-model.mjs fetch` is what puts it there, and MARIMO_SKIP_MODEL=1 packages without it — which the app has to handle anyway, because a checkout has no weights in it either.",
+    "extraResources": [
+      {
+        "from": ".model-cache/local-model",
+        "to": "local-model"
+      }
+    ],
     "extraMetadata": {
       "main": "dist/main/main.js"
     },
@@ -84,7 +93,11 @@
         "dmg"
       ],
       "category": "public.app-category.utilities",
-      "icon": "assets/marimo-logo.png"
+      "icon": "assets/marimo-logo.png",
+      "//binaries": "The engine is a native executable inside the bundle, and a hardened runtime refuses to exec one that is not signed. electron-builder signs what this lists, so the model runs from a released build rather than only from a build made on the machine that made it.",
+      "binaries": [
+        "Contents/Resources/local-model/engine/llama-server"
+      ]
     }
   },
   "//": "asar is off deliberately. The job runner is this same binary started with ELECTRON_RUN_AS_NODE=1, and in that mode Electron does not patch `fs` to read inside an asar archive \u2014 reading one fails with \"Invalid package\". So a packaged app with asar on has a runner that cannot start, which is the whole of \"jobs run while the app is closed\" broken in every release and working perfectly in development."

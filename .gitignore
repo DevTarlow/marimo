@@ -24,6 +24,13 @@ dist/
 apps/desktop/release/
 .electron-builder-cache/
 
+# The model the app carries, as fetched at package time: the llama.cpp build for
+# this platform and a 1.1 GB of weights. `apps/desktop/scripts/local-model.mjs`
+# puts them here, `electron-builder` copies them into the app from here, and
+# `local-model.json` is what pins the two by digest — so this directory is a
+# cache of something reproducible, not something to commit.
+apps/desktop/.model-cache/
+
 # Local runtime state produced when running the app outside Electron's
 # userData directory. Every dev, smoke and test run uses a throwaway directory
 # under this pattern — and so does anything scratch, including screenshots.

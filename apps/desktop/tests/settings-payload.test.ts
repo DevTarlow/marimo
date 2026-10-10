@@ -64,7 +64,9 @@ describe('a settings payload', () => {
         disabledCommands: [],
       },
       hasApiKey: true,
+      providerReady: true,
       providerKeys: {
+        builtin: false,
         deepseek: true,
         gemini: false,
         llamacpp: false,

@@ -40,7 +40,11 @@ import {
   isProcessHeld,
   JobScheduler,
   JobStore,
+  LocalModelService,
+  localModelPidFile,
+  localModelSpec,
   resolveAppPaths,
+  SettingsStore,
 } from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
 
@@ -74,7 +78,9 @@ export interface RunDueReport {
  * rules with the product name appended — the value Electron would have chosen,
  * worked out without an `app` object to ask.
  */
-export function resolveRunnerPaths(env: NodeJS.ProcessEnv = process.env): AppPaths {
+export function resolveRunnerPaths(
+  env: NodeJS.ProcessEnv = process.env,
+): AppPaths {
   const override = env[USER_DATA_ENV];
   const userData =
     override !== undefined && override.length > 0
@@ -143,10 +149,37 @@ export async function runDue(options: {
     };
   }
 
+  /*
+   * The model the app carries, started only if a job actually needs it.
+   *
+   * `spec` reads the settings from a store of its own rather than from the
+   * runtime it is handed to — the runtime needs the engine in order to resolve a
+   * provider, so asking the runtime for the settings first would be a circle.
+   * Both read the same file with the same reader, which is what makes them
+   * agree.
+   *
+   * The path is derived from this process's own executable because there is no
+   * `app` here: the same function the window calls, with Electron's answer left
+   * out. Getting that wrong is the silent kind of failure — the window answers
+   * questions and a scheduled job reports the model as not installed.
+   */
+  const settingsStore = new SettingsStore(paths.settings);
+  const localModel = new LocalModelService({
+    spec: async () =>
+      localModelSpec(await settingsStore.load(), {
+        execPath: process.execPath,
+      }),
+    pidFile: localModelPidFile(paths.userData),
+    log: (line) => {
+      process.stdout.write(`${line}\n`);
+    },
+  });
+
   const runtime = new AgentRuntime({
     paths,
     readSecret: readSecretWithoutKeychain(paths),
     appName: PRODUCT_NAME,
+    localModel,
   });
 
   /*
@@ -162,7 +195,7 @@ export async function runDue(options: {
   const lock = await holdProcessLock(paths.appLock);
   if (lock === undefined) {
     // Somebody took it between the check above and here. Theirs.
-    runtime.dispose();
+    await runtime.dispose();
     return {
       userData: paths.userData,
       appIsRunning: true,
@@ -197,7 +230,7 @@ export async function runDue(options: {
     await scheduler.runOnce();
   } finally {
     await lock.release();
-    runtime.dispose();
+    await runtime.dispose();
   }
 
   const after = await jobs.load();
@@ -232,7 +265,9 @@ export function describeReport(report: RunDueReport): string[] {
 
   lines.push(`  data directory: ${report.userData}`);
   if (report.ran.length === 0) {
-    lines.push(`  jobs: ${report.total} (${report.enabled} enabled), none due.`);
+    lines.push(
+      `  jobs: ${report.total} (${report.enabled} enabled), none due.`,
+    );
     return lines;
   }
 
@@ -281,7 +316,9 @@ export async function main(
      * is the ordinary case for a timer that fires every minute.
      */
     const detail = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`[marimo] the job runner could not start: ${detail}\n`);
+    process.stderr.write(
+      `[marimo] the job runner could not start: ${detail}\n`,
+    );
     return 1;
   }
 }

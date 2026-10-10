@@ -56,6 +56,17 @@ export interface ResolveAgentOptions {
    * work in at all, which is a refusal rather than a default.
    */
   workspaceRoot?: string;
+  /**
+   * Where the app's own engine is listening, when it is running.
+   *
+   * The one address in the settings file that is not an answer: a managed
+   * provider's `baseUrl` is a placeholder, because the port is whatever was free
+   * when the engine started. So the live one arrives from the caller — the
+   * process that started it — and its absence is a refusal rather than a
+   * fallback to the placeholder. Falling back would mean a turn that sends a
+   * conversation to whatever happens to be on port 8137.
+   */
+  managedBaseUrl?: string;
 }
 
 export async function resolveAgentConfig(
@@ -97,12 +108,41 @@ export async function resolveAgentConfig(
     };
   }
 
+  /*
+   * A provider this app runs itself, with no engine behind it.
+   *
+   * Refused here rather than at the first request, like the missing key above:
+   * the caller starts the engine before it calls this, so getting here without
+   * one means it did not start — and the sentence says where to look rather than
+   * describing the state it is in.
+   */
+  if (provider.managed && options.managedBaseUrl === undefined) {
+    return {
+      ok: false,
+      problem:
+        `The ${provider.label.toLowerCase()} is not running. Open Settings → ` +
+        'Model and press Start, or choose another service.',
+    };
+  }
+
   return {
     ok: true,
     profile,
     config: {
       apiKey,
-      baseUrl: providerConfig.baseUrl,
+      /*
+       * The live address, but only for the provider this app runs itself.
+       *
+       * Guarded by `managed` as well as by presence: a caller that handed this a
+       * managed address while the user had switched to DeepSeek would otherwise
+       * have their conversation sent to a port on this machine. The one wrong
+       * base URL here is not a broken turn, it is a turn that reaches somewhere
+       * the user did not choose.
+       */
+      baseUrl:
+        provider.managed && options.managedBaseUrl !== undefined
+          ? options.managedBaseUrl
+          : providerConfig.baseUrl,
       model: providerConfig.model,
       provider: providerId,
       temperature: settings.temperature,

@@ -25,10 +25,27 @@ import {resolveAppPaths} from '../paths.js';
 import type {AppPaths} from '../paths.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
 import {ProfileStore} from '../profiles.js';
+import {SettingsStore} from '../settings.js';
 import {WorkspaceStore} from '../workspaces.js';
 import {AgentRuntime} from './runtime.js';
-import type {AgentRuntimeOptions} from './runtime.js';
+import type {AgentRuntimeOptions, LocalModelRunner} from './runtime.js';
 import type {SecretRead} from '../secrets.js';
+
+/**
+ * Points an install at a provider that needs a key.
+ *
+ * The build's default is now the model the app carries, which needs none — so a
+ * test about keys, or about a turn that actually starts, has to say which
+ * provider it means. Seeded through the store rather than passed into the
+ * runtime, because which provider answers *is* a settings fact: a runtime that
+ * took it as an argument would be one whose settings file disagreed with its
+ * behaviour.
+ */
+async function seedKeyedProvider(paths: AppPaths): Promise<void> {
+  await new SettingsStore(paths.settings).patch({
+    providers: {active: 'deepseek'},
+  });
+}
 
 /**
  * Gives the install a folder to work in.
@@ -64,6 +81,8 @@ describe('AgentRuntime', () => {
     });
     await profiles.load();
     profileId = (await profiles.activeProfile()).id;
+    // Most of this file is about keys, and a key belongs to a provider.
+    await seedKeyedProvider(paths);
   });
 
   afterEach(async () => {
@@ -269,10 +288,8 @@ describe('AgentRuntime', () => {
       expect(await agent.listSessions(profileId)).toHaveLength(2);
     });
 
-    it('disposes without error when nothing was ever started', () => {
-      expect(() => {
-        runtime(noKey).dispose();
-      }).not.toThrow();
+    it('disposes without error when nothing was ever started', async () => {
+      await expect(runtime(noKey).dispose()).resolves.toBeUndefined();
     });
   });
 
@@ -591,6 +608,8 @@ describe('reading a conversation without a working provider', () => {
     });
     await profiles.load();
     profileId = (await profiles.activeProfile()).id;
+    // The refusal under test is about a key, so the install has a keyed provider.
+    await seedKeyedProvider(paths);
 
     await mkdir(paths.sessions, {recursive: true});
     await writeFile(
@@ -697,6 +716,8 @@ describe('folders and filing', () => {
     });
     await profiles.load();
     profileId = (await profiles.activeProfile()).id;
+    // These turns actually run, so the install needs a provider that answers.
+    await seedKeyedProvider(paths);
   });
 
   afterEach(async () => {
@@ -936,5 +957,147 @@ describe('folders and filing', () => {
     await expect(
       readFile(resolveMemoryFile(join(dir, 'beta'), profileId), 'utf8'),
     ).rejects.toThrow();
+  });
+});
+
+/*
+ * The model the app runs itself.
+ *
+ * The runtime is the one place both processes pass through, so it is where
+ * "start the engine before asking it for an address" has to be true — and the
+ * failure this guards against is the quiet one: resolving against the stored
+ * placeholder address would send a conversation to whatever happens to be
+ * listening on that port rather than to refuse.
+ *
+ * A stub stands in for the engine. Nothing here loads a model, and the stub is
+ * also how each refusal is produced on demand.
+ */
+describe('the built-in model', () => {
+  let dir: string;
+  let paths: AppPaths;
+  let profileId: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-builtin-'));
+    paths = resolveAppPaths(dir);
+    await seedWorkspaces(paths, dir);
+    const profiles = new ProfileStore({
+      file: paths.profiles,
+      defaultIdentity: '',
+      defaultTools: [],
+      defaultSkills: [],
+    });
+    await profiles.load();
+    profileId = (await profiles.activeProfile()).id;
+    // No seeding: a fresh install is pointed at the built-in model, and that is
+    // the state these tests are about.
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  /** An engine that answers, and remembers whether it was asked. */
+  function engine(options: {problem?: string} = {}): LocalModelRunner & {
+    starts: number;
+    stops: number;
+  } {
+    const runner = {
+      starts: 0,
+      stops: 0,
+      async ensureRunning() {
+        runner.starts += 1;
+        return options.problem === undefined
+          ? {ok: true as const, baseUrl: 'http://127.0.0.1:49500/v1'}
+          : {ok: false as const, problem: options.problem};
+      },
+      async stop() {
+        runner.stops += 1;
+      },
+    };
+    return runner;
+  }
+
+  function runtime(localModel?: LocalModelRunner): AgentRuntime {
+    return new AgentRuntime({
+      paths,
+      readSecret: async () => ({state: 'absent'}),
+      ...(localModel === undefined ? {} : {localModel}),
+    });
+  }
+
+  it('starts the engine before it resolves the turn', async () => {
+    const model = engine();
+    const result = await runtime(model).host(profileId);
+
+    /*
+     * Called once, and the host came back — which is the observable half of "the
+     * address in the configuration is the live one". The resolver's own test
+     * holds the other half, because the host does not hand its configuration out.
+     */
+    expect(model.starts).toBe(1);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.profile.id).toBe(profileId);
+  });
+
+  /*
+   * A provider that is somebody else's service must not be started. This is also
+   * what keeps the check cheap enough to sit in front of every turn: one lookup
+   * and no work at all.
+   */
+  it('leaves a provider the app does not run alone', async () => {
+    await seedKeyedProvider(paths);
+    const model = engine();
+    const result = await runtime(model).host(profileId);
+
+    expect(model.starts).toBe(0);
+    // No key is stored, so the refusal is the key's rather than the engine's.
+    expect(result.ok).toBe(false);
+    expect(result.ok ? '' : result.problem).toMatch(/API key/u);
+  });
+
+  it('hands the engine’s own sentence to the user when it will not start', async () => {
+    const result = await runtime(
+      engine({
+        problem: 'The model file is not installed. It should be at /x.gguf.',
+      }),
+    ).host(profileId);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problem).toContain('/x.gguf');
+    }
+  });
+
+  /*
+   * The caller with no engine — a test, a future headless command pointed
+   * elsewhere. The refusal names the situation rather than resolving against the
+   * placeholder, which is the difference between a sentence and a conversation
+   * sent to a stranger on port 8137.
+   */
+  it('refuses rather than guessing when no engine can be started', async () => {
+    const result = await runtime().host(profileId);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problem).toContain('no engine');
+      expect(result.problem).toContain('Settings');
+    }
+  });
+
+  /*
+   * The engine is a process, and the process outliving the app is the failure
+   * nobody can explain: a gigabyte of memory and a spinning fan with no window
+   * attached. Disposal is where it is stopped, and disposal is awaited by both
+   * callers on their way out.
+   */
+  it('stops the engine when the runtime is disposed', async () => {
+    const model = engine();
+    const agent = runtime(model);
+    await agent.host(profileId);
+    expect(model.stops).toBe(0);
+
+    await agent.dispose();
+    expect(model.stops).toBe(1);
   });
 });

@@ -54,6 +54,12 @@ jobs:
       # be broken by packaging alone: `ELECTRON_RUN_AS_NODE=1` has no asar
       # support, so an archive it cannot read leaves the background service
       # silently unable to start.
+      #
+      # `MARIMO_SKIP_MODEL` is what keeps this step about that claim: with the
+      # model it would download 1.1 GB of weights on every push to prove
+      # something else. What CI therefore does *not* cover is a release with the
+      # model inside it, which is why the two packaging runs differ by one
+      # variable and both are worth having.
       - name: Package, and prove the runner still starts
         run: |
           pnpm --filter @marimo/desktop package
@@ -62,3 +68,4 @@ jobs:
             "$PWD/$APP/resources/app/dist/runner/run-due.js" --json
         env:
           MARIMO_USER_DATA_DIR: ${{ runner.temp }}/marimo-ci
+          MARIMO_SKIP_MODEL: '1'

@@ -133,11 +133,28 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     }
 
     const profiles = await service.profiles();
+    const descriptor = PROVIDERS[settings.providers.active];
+    const hasApiKey =
+      !descriptor.requiresApiKey || providerKeys[settings.providers.active];
+    /*
+     * Whether this install can answer at all, which is a different question from
+     * whether it has a key.
+     *
+     * The built-in model needs no credential and no address — what it needs is a
+     * file on disk and an engine that started, and that is a fact only this
+     * process has. So the answer is assembled here rather than derived in the
+     * window from the key it can see, which for a managed provider is always
+     * "yes" and would open the chat on a machine that cannot reply.
+     */
+    const readiness = await providerReadiness(service, descriptor, hasApiKey);
+
     return {
       ...settings,
-      hasApiKey:
-        !PROVIDERS[settings.providers.active].requiresApiKey ||
-        providerKeys[settings.providers.active],
+      hasApiKey,
+      providerReady: readiness.ok,
+      ...(readiness.problem === undefined
+        ? {}
+        : {providerProblem: readiness.problem}),
       providerKeys,
       encryptionAvailable: safeStorageCipher.available(),
       /*
@@ -150,6 +167,49 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       profiles: profiles.profiles,
       activeProfileId: profiles.activeProfileId,
     };
+  }
+
+  /**
+   * Whether the active provider could answer a question right now.
+   *
+   * Two shapes of answer, because the two failures are fixed in different
+   * places: a key that is missing is added in the Provider card, and a model
+   * that is not installed is fixed in the Model card or by pointing at a file.
+   * A single "not ready" for both would be a dead end for one of them.
+   *
+   * A managed provider is *not* started to answer this: the question is asked
+   * every time the settings are read, and loading a gigabyte of weights to
+   * report on them would be a spinner on every turn.
+   */
+  async function providerReadiness(
+    service: AgentService,
+    descriptor: (typeof PROVIDERS)[ProviderId],
+    hasApiKey: boolean,
+  ): Promise<{ok: boolean; problem?: string}> {
+    if (descriptor.requiresApiKey && !hasApiKey) {
+      return {ok: false, problem: `${descriptor.label} needs an API key.`};
+    }
+    if (!descriptor.managed) {
+      return {ok: true};
+    }
+
+    const status = await service.model.status();
+    if (status.state === 'failed') {
+      return {ok: false, problem: status.detail ?? 'The model did not start.'};
+    }
+    if (!status.modelPresent) {
+      return {
+        ok: false,
+        problem: `The model file is not where the app looks for it: ${status.modelPath}`,
+      };
+    }
+    if (!status.enginePresent) {
+      return {
+        ok: false,
+        problem: `The model engine is not where the app looks for it: ${status.enginePath}`,
+      };
+    }
+    return {ok: true};
   }
 
   /** Both halves of what the window needs after an agent changes. */
@@ -392,6 +452,33 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       dependencies.service === undefined
         ? {installed: false, notes: [], failures: []}
         : await disable(dependencies.service),
+
+    /*
+     * The model the app runs itself.
+     *
+     * A read and two buttons, rather than a settings patch that starts
+     * something: a write that quietly spawned an engine would report success for
+     * work it had not done, which is the same reason `models.fetch` is a call of
+     * its own. The status is asked for every time the card is drawn, so a
+     * failure that has since been fixed stops being reported.
+     */
+    'localModel.status': async () => await agent().model.status(),
+
+    /*
+     * Started and stopped explicitly, which is what the buttons are for. Neither
+     * is awaited into a timeout: a start loads a gigabyte of weights, and the
+     * card shows what the supervisor is doing while it does — `starting` is one
+     * of its states for exactly this reason.
+     */
+    'localModel.start': async () => {
+      await agent().model.ensureRunning();
+      return await agent().model.status();
+    },
+
+    'localModel.stop': async () => {
+      await agent().model.stop();
+      return await agent().model.status();
+    },
 
     'profiles.list': async () => await agent().profiles(),
 

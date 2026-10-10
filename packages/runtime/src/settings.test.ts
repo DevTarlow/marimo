@@ -246,9 +246,17 @@ describe('SettingsStore providers', () => {
     );
   }
 
-  it('starts on DeepSeek with every provider address ready', async () => {
+  /*
+   * The default a first run gets, which is now the model the app carries rather
+   * than a service that needs an account. It is the whole of "it works when you
+   * install it": a fresh install has no key, no address and nobody to ask, and a
+   * default that refused the first question until all three existed would be an
+   * app asking a stranger to configure it before it said anything.
+   */
+  it('starts on the built-in model, with every other address ready', async () => {
     const settings = await store().load();
-    expect(settings.providers.active).toBe('deepseek');
+    expect(settings.providers.active).toBe('builtin');
+    expect(settings.providers.configs.builtin.model).toBe('qwen3-1.7b');
     expect(settings.providers.configs.llamacpp.baseUrl).toContain('127.0.0.1');
     expect(settings.providers.configs.gemini.baseUrl).toContain(
       'generativelanguage.googleapis.com',
@@ -362,8 +370,27 @@ describe('SettingsStore providers', () => {
       model: 'deepseek-v4-pro',
       baseUrl: 'http://box.local:11434/v1',
     });
+    /*
+     * Pointed at DeepSeek as well as filled in with it. The fields being
+     * DeepSeek's is what says this file came from before the picker existed —
+     * and leaving `active` at the build's default would have quietly moved a
+     * DeepSeek user onto the model the app carries, with their own address and
+     * model sitting in a config nothing points at.
+     */
     expect(settings.providers.active).toBe('deepseek');
     expect(settings.temperature).toBe(0.3);
+  });
+
+  /*
+   * The case with no evidence either way: a file that names no provider and
+   * holds none of the legacy fields. Nothing was ever chosen, so the choice is
+   * the one a fresh install gets.
+   */
+  it('points a file with no provider history at the built-in model', async () => {
+    await write({sidebarWidth: 300});
+    const settings = await store().load();
+
+    expect(settings.providers.active).toBe('builtin');
   });
 
   it('prefers the block over the legacy fields when both are present', async () => {

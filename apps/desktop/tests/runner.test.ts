@@ -7,20 +7,30 @@
  * one is a background service that looks healthy for a week and never runs
  * anything.
  *
- * The run itself is exercised against real stores and real files, with no
- * provider configured — which is the ordinary state of a fresh install, and
- * produces the designed outcome: the job runs, is refused for want of a key, and
- * records that as its result.
+ * The run itself is exercised against real stores and real files, with a keyed
+ * provider and no key — the state an install that never signed in to anything is
+ * in, and one that produces the designed outcome: the job runs, is refused for
+ * want of a key, and records that as its result rather than failing silently.
  */
 import {mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
-import {ProfileStore, WorkspaceStore, resolveAppPaths} from '@marimo/runtime';
+import {
+  ProfileStore,
+  SettingsStore,
+  WorkspaceStore,
+  resolveAppPaths,
+} from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
 
-import {describeReport, main, resolveRunnerPaths, runDue} from '../src/runner/run-due.js';
+import {
+  describeReport,
+  main,
+  resolveRunnerPaths,
+  runDue,
+} from '../src/runner/run-due.js';
 import {PRODUCT_NAME, USER_DATA_ENV} from '../src/shared/product.js';
 
 describe('resolveRunnerPaths', () => {
@@ -68,6 +78,16 @@ describe('runDue', () => {
     });
     await profiles.load();
     const profile = await profiles.activeProfile();
+
+    /*
+     * Pointed at a provider that needs a key, so the outcome recorded below is
+     * the designed one for an install with a keyed provider and no key. A fresh
+     * install now defaults to the model the app carries, which refuses for a
+     * different reason — and that reason has a test of its own below.
+     */
+    await new SettingsStore(paths.settings).patch({
+      providers: {active: 'deepseek'},
+    });
 
     await writeFile(
       paths.jobs,
@@ -125,11 +145,43 @@ describe('runDue', () => {
 
     const after = JSON.parse(await readFile(paths.jobs, 'utf8'));
     const job = after.jobs.jobs[0];
-    // No provider is configured, so the designed outcome is a recorded refusal
-    // rather than silence — and the marker has moved, so it will not fire again.
+    // No key is stored, so the designed outcome is a recorded refusal rather
+    // than silence — and the marker has moved, so it will not fire again.
     expect(job.lastStatus).toBe('error');
     expect(job.lastError).toMatch(/API key/u);
     expect(job.sessionId).toBeTruthy();
+  });
+
+  /*
+   * The built-in model, from the runner's side.
+   *
+   * This is the part that cannot be shared with the window and so has to be
+   * checked here: the runner has no `app`, derives the model directory from its
+   * own executable, and is the only process that has to work while the window is
+   * closed. What it must never do is *pretend* — an install whose weights are not
+   * where the runner looks has to record that against the job, with the path, so
+   * the person reading the jobs file can see which file was wanted.
+   *
+   * No engine is started: the files are not there, which is checked before
+   * anything is spawned.
+   */
+  it('records that the built-in model is missing, and where it looked', async () => {
+    await seedDueJob();
+    // A fresh install is pointed at the built-in model; this is the state a
+    // checkout with no weights in it is in.
+    await new SettingsStore(paths.settings).patch({
+      providers: {active: 'builtin'},
+    });
+
+    const report = await runDue({paths});
+
+    expect(report.problem).toBeUndefined();
+    const after = JSON.parse(await readFile(paths.jobs, 'utf8'));
+    const job = after.jobs.jobs[0];
+    expect(job.lastStatus).toBe('error');
+    expect(job.lastError).toContain('model engine');
+    // The path, because a complaint about a missing file is useless without it.
+    expect(job.lastError).toContain('resources');
   });
 
   /*
@@ -242,8 +294,12 @@ describe('main', () => {
 
   /** Runs `main` without printing, and answers its exit code. */
   async function quietly(argv: string[] = []): Promise<number> {
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdout = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation(() => true);
+    const stderr = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
     try {
       return await main(argv);
     } finally {
@@ -262,7 +318,9 @@ describe('main', () => {
   });
 
   it('answers in JSON when asked, for a service log', async () => {
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stdout = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation(() => true);
     try {
       await main(['--json']);
       const printed = stdout.mock.calls.map((call) => String(call[0])).join('');

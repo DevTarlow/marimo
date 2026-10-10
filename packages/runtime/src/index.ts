@@ -24,11 +24,7 @@ export type {AppPaths} from './paths.js';
 
 /* Secrets, with the cipher injected. */
 export {FileSecretStore} from './secrets.js';
-export type {
-  SecretCipher,
-  SecretRead,
-  SecretWriterOptions,
-} from './secrets.js';
+export type {SecretCipher, SecretRead, SecretWriterOptions} from './secrets.js';
 
 /* The agent's memory suggestions, waiting for an answer. */
 export {
@@ -77,11 +73,34 @@ export {
   processIsAlive,
   withFileLock,
 } from './lock.js';
+export type {FileLockOptions, ProcessLock, ProcessLockOptions} from './lock.js';
+
+/*
+ * The model the app runs itself.
+ *
+ * Here rather than in the desktop app because both halves of the app need it —
+ * the window to answer a question, the headless runner to run a job with the
+ * window closed — and this is the package both of them already share.
+ */
+export {
+  bundledModelDir,
+  defaultGpuLayers,
+  engineArgs,
+  freePort,
+  LocalModelService,
+  localModelPidFile,
+  localModelSpec,
+  MODEL_ALIAS,
+  MODEL_DIR_ENV,
+  MODEL_FILE_NAME,
+  resolveLocalModelFiles,
+} from './local-model/index.js';
 export type {
-  FileLockOptions,
-  ProcessLock,
-  ProcessLockOptions,
-} from './lock.js';
+  EngineSpec,
+  LocalModelFiles,
+  LocalModelOptions,
+  LocalModelSpec,
+} from './local-model/index.js';
 
 /*
  * Format versions, and refusing to overwrite a document we cannot read.
@@ -140,11 +159,7 @@ export type {
 } from './agent/mcp-manager.js';
 
 /* Scheduled jobs. */
-export {
-  DEFAULT_SCHEDULE,
-  isPlaceholder,
-  JobStore,
-} from './jobs.js';
+export {DEFAULT_SCHEDULE, isPlaceholder, JobStore} from './jobs.js';
 export type {JobRunRecord, JobStoreOptions, NewJob} from './jobs.js';
 
 /* The thing that runs them. */
@@ -177,11 +192,12 @@ export type {
 } from './profiles.js';
 
 /* The folders every agent works in. */
-export {WorkspaceStore, workspaceLabel, workspaceRootFor} from './workspaces.js';
-export type {
-  LegacyWorkspaces,
-  WorkspaceStoreOptions,
+export {
+  WorkspaceStore,
+  workspaceLabel,
+  workspaceRootFor,
 } from './workspaces.js';
+export type {LegacyWorkspaces, WorkspaceStoreOptions} from './workspaces.js';
 
 /* Preferences. */
 export {

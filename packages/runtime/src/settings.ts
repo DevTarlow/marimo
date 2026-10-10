@@ -21,6 +21,8 @@ import {
 import {
   appearanceSchema,
   companionSettingsSchema,
+  defaultLocalModelSettings,
+  localModelSettingsSchema,
   defaultAppearance,
   defaultCompanionSettings,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
@@ -87,6 +89,15 @@ export function defaultStoredSettings(): StoredSettings {
     // told and a default the renderer owned would be a default the agent could
     // not see.
     companion: defaultCompanionSettings(),
+    /*
+     * The model the app runs itself: the copy that shipped, and a context window
+     * that fits on a laptop.
+     *
+     * A default here rather than in the engine, because these are the two things
+     * the status command has to answer before anything has been started — and
+     * "not started yet" should not read as "not configured".
+     */
+    localModel: defaultLocalModelSettings(),
     // Match the design tokens, so the first launch looks like the stylesheet says
     // it should, and a later drag starts from wherever the user left it.
     sidebarWidth: 272,
@@ -248,6 +259,17 @@ export class SettingsStore {
             defaults.companion,
             rawObject['companion'],
           ),
+          /*
+           * The local model block, filled the same way. It matters more here
+           * than for most blocks: a hand-edited context size would otherwise
+           * take the provider choice, the connectors and every layout width
+           * with it, and the user would have no idea which field did it.
+           */
+          localModel: fillBlock(
+            localModelSettingsSchema,
+            defaults.localModel,
+            rawObject['localModel'],
+          ),
           providers: fillProviders(rawObject),
           appearance: fillBlock(
             appearanceSchema,
@@ -302,6 +324,9 @@ export class SettingsStore {
       const companion = defined.companion
         ? {...current.companion, ...definedOnly(defined.companion)}
         : current.companion;
+      const localModel = defined.localModel
+        ? {...current.localModel, ...definedOnly(defined.localModel)}
+        : current.localModel;
       const providers = defined.providers
         ? mergeProviders(current.providers, defined.providers)
         : current.providers;
@@ -313,6 +338,7 @@ export class SettingsStore {
         ...defined,
         discord,
         companion,
+        localModel,
         providers,
         appearance,
       });
@@ -465,7 +491,9 @@ function fillBlock<T extends object>(
  * belonged to: that file holds `model` and `baseUrl` at the top level, which the
  * schema now strips. They were DeepSeek's — it was the only provider then — so
  * they become DeepSeek's entry in the new block, and the user's model and
- * (possibly local) base URL survive the upgrade.
+ * (possibly local) base URL survive the upgrade. Those same fields are what says
+ * such a file is *pointed* at DeepSeek, which is the other half of the same
+ * thought and is decided below.
  */
 function fillProviders(raw: Record<string, unknown>): Providers {
   const defaults = defaultProviders();
@@ -491,7 +519,25 @@ function fillProviders(raw: Record<string, unknown>): Providers {
     );
   }
   return {
-    active: active.success ? active.data : defaults.active,
+    /*
+     * Which provider a file is pointed at, in the order the evidence is good.
+     *
+     * The file's own answer first, obviously. Then the legacy fields: a file
+     * holding a top-level `model` or `baseUrl` is a file from before the picker
+     * existed, it was DeepSeek's — the only provider then — and calling it
+     * active is how the user's model and address go on being used rather than
+     * sitting in a config nothing points at.
+     *
+     * Only a file with no evidence either way gets the build's default, which is
+     * the model the app carries. A file written by any build that had the picker
+     * always names its provider, because the whole document is written on every
+     * save.
+     */
+    active: active.success
+      ? active.data
+      : Object.keys(legacy).length > 0
+        ? 'deepseek'
+        : defaults.active,
     configs,
   };
 }

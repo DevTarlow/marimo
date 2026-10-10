@@ -1,26 +1,27 @@
 /**
  * The first thing a new install should say.
  *
- * A fresh app with no key currently shows an ordinary chat, and the user finds
- * out something is missing only by typing and being refused. That refusal is
- * honest and it is in the right place — but it is the *second* thing they learn,
- * and the first should have been the question.
+ * It used to be a screen that asked for an API key, which was the honest answer
+ * when every provider was somebody else's service. It is not any more: the app
+ * carries a model, so a fresh install can answer the first question without an
+ * account, a key or an address — and a welcome screen that asked for one anyway
+ * would be the app describing a requirement it does not have.
  *
- * So this says what is missing and where to fix it, and gets out of the way. It
- * deliberately does not collect the key itself. Settings already owns picking a
- * provider, entering its key, choosing a model, pointing at a server and the
- * plain-text choice that comes with storing a secret; a second, smaller copy of
- * that form here would be two places to keep in step, and a key box that cannot
- * say which provider it belongs to. The screen explains, the panel does the
- * work.
+ * So this says what is ready, and gets out of the way. What it is *gated* on is
+ * `providerReady` rather than `hasApiKey`: the built-in model needs no
+ * credential, and what can stop it working is a file that is not where the app
+ * looked — a different problem, fixed in a different place, and the reason the
+ * readiness answer carries a sentence with it.
  *
- * Nothing here decides whether a key exists. `hasApiKey` does, before this is
- * ever rendered: a stored key, or a provider that needs none, means the app
- * opens on a normal chat instead.
+ * Nothing here decides whether the app can answer. The main process does, before
+ * this is ever rendered: a working provider means the app opens on a normal chat.
  */
 export function Onboarding({
+  problem,
   onOpenSettings,
 }: {
+  /** Why it cannot answer yet, in the words of whoever knew. */
+  problem: string;
   onOpenSettings: () => void;
 }): React.JSX.Element {
   return (
@@ -29,9 +30,11 @@ export function Onboarding({
       <h2>Welcome to Marimo Agent</h2>
 
       <p className="onboarding-lead">
-        Marimo Agent works with any model. Choose a provider and add its API key
-        in Settings — the key stays on this computer.
+        Something is not ready yet — the agent has nothing to think with until
+        it is.
       </p>
+      <p className="onboarding-note">{problem}</p>
+
       <button
         type="button"
         className="button button-primary"

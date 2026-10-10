@@ -869,12 +869,17 @@ async function main() {
       /*
        * The compact command, run the way a person runs it.
        *
-       * On this machine there is no key, so what it *must* do is say so: a command
-       * that reported success, or said nothing at all, would be worse than one that
-       * fails. That makes the assertion here the honest one for a fresh install —
-       * and it still proves the whole path, because the sentence comes from the
-       * provider configuration at the far end of it. A missing IPC handler would
-       * arrive as "unknown method" instead.
+       * On this machine the app carries a model and the weights are not in the
+       * checkout it was built from, so what the command *must* do is say so: a
+       * command that reported success, or said nothing at all, would be worse
+       * than one that fails. That makes the assertion here the honest one for
+       * this install — and it still proves the whole path, because the sentence
+       * comes from the provider configuration at the far end of it. A missing
+       * IPC handler would arrive as "unknown method" instead.
+       *
+       * The check is that it names the *problem*, not the exact wording: one of
+       * the two messages is right depending on whether this run has weights, and
+       * both are refusals that mention what is missing.
        */
       await evaluate(`document.querySelector('.composer-add')?.click()`);
       await until(
@@ -887,7 +892,7 @@ async function main() {
         .find((item) => item.textContent.trim() === 'Compact history')?.click()`,
       );
       const refusal = await until(
-        'the complaint about the missing key',
+        'the complaint about the missing model',
         async () => {
           const text = await evaluate(
             `document.querySelector('.composer-hint.is-failure')?.textContent ?? null`,
@@ -895,11 +900,11 @@ async function main() {
           return typeof text === 'string' ? text : undefined;
         },
       );
-      if (!/API key/u.test(refusal)) {
-        fail(`compacting without a key said the wrong thing: ${refusal}`);
+      if (!/not installed|not running|API key/u.test(refusal)) {
+        fail(`compacting without a model said the wrong thing: ${refusal}`);
       } else {
         ok(
-          'the compact command reached the agent and reported the missing key',
+          `the compact command reached the agent and reported: ${refusal.trim()}`,
         );
       }
 
@@ -1141,57 +1146,62 @@ async function main() {
       };
 
       await openSection('Provider');
-      const picker = await until('the provider picker to appear', async () => {
-        const {result} = await send('Runtime.evaluate', {
-          expression: `(() => {
-          const section = [...document.querySelectorAll('.settings-section')]
-            .find((entry) => entry.querySelector('h3')?.textContent === 'Provider');
-          if (section === undefined) return undefined;
-          const [providers, models] = section.querySelectorAll('select');
-          const baseUrl = section.querySelector('input[type="text"]');
-          if (providers === undefined || models === undefined || baseUrl === null) {
-            return JSON.stringify({incomplete: true});
-          }
-          /*
-           * The key box and the Fetch button are asserted *in this section*:
-           * they were moved here from a separate API key card, and a section
-           * that lost them would still pass every check above.
-           */
-          const keyInput = section.querySelector('input[type="password"]');
-          const fetchButton = [...section.querySelectorAll('button')]
-            .find((entry) => entry.textContent.trim() === 'Fetch Models');
-          /*
-           * The temperature slider is here too, and it is the older kind of
-           * check: the settings file has always held this number and no screen
-           * ever drew it, so a control that quietly stops being drawn takes a
-           * setting nothing can reach with it.
-           */
-          const temperature = section.querySelector('input[type="range"]');
-          return JSON.stringify({
-            labels: [...providers.options].map((option) => option.textContent),
-            active: providers.value,
-            models: [...models.options].map((option) => option.textContent),
-            baseUrl: baseUrl.value,
-            hasKeyInput: keyInput !== null,
-            hasFetchButton: fetchButton !== undefined,
-            fetchDisabled: fetchButton?.disabled ?? null,
-            temperature: temperature?.value ?? null,
-          });
-        })()`,
-          returnByValue: true,
-        });
-        return typeof result?.value === 'string'
-          ? JSON.parse(result.value)
-          : undefined;
-      });
 
-      const providerLabels = picker.labels ?? [];
+      /**
+       * Reads the Provider card as it stands.
+       *
+       * One probe for both shapes of it, because the card has two: a service the
+       * user reaches has an address, a key and a model list to fetch, and the
+       * model the app carries has none of those — its address is a placeholder
+       * the app never sends and its one model is not something to ask an
+       * endpoint for. A control that does nothing is the failure this catches.
+       */
+      const readProviderCard = async () =>
+        await until('the provider picker to appear', async () => {
+          const {result} = await send('Runtime.evaluate', {
+            expression: `(() => {
+            const section = [...document.querySelectorAll('.settings-section')]
+              .find((entry) => entry.querySelector('h3')?.textContent === 'Provider');
+            if (section === undefined) return undefined;
+            const providers = section.querySelector('select');
+            if (providers === null) return undefined;
+            const models = section.querySelectorAll('select')[1];
+            const baseUrl = section.querySelector('input[type="text"]');
+            const keyInput = section.querySelector('input[type="password"]');
+            const fetchButton = [...section.querySelectorAll('button')]
+              .find((entry) => entry.textContent.trim() === 'Fetch Models');
+            /*
+             * The temperature slider is asserted in both shapes, and it is the
+             * older kind of check: the settings file has always held this number
+             * and no screen ever drew it, so a control that quietly stops being
+             * drawn takes a setting nothing can reach with it.
+             */
+            const temperature = section.querySelector('input[type="range"]');
+            return JSON.stringify({
+              labels: [...providers.options].map((option) => option.textContent),
+              active: providers.value,
+              models: models ? [...models.options].map((o) => o.textContent) : [],
+              baseUrl: baseUrl?.value ?? null,
+              hasKeyInput: keyInput !== null,
+              hasFetchButton: fetchButton !== undefined,
+              fetchDisabled: fetchButton?.disabled ?? null,
+              temperature: temperature?.value ?? null,
+            });
+          })()`,
+            returnByValue: true,
+          });
+          return typeof result?.value === 'string'
+            ? JSON.parse(result.value)
+            : undefined;
+        });
+
+      const builtin = await readProviderCard();
+      const providerLabels = builtin.labels ?? [];
       const sortedLabels = [...providerLabels].sort((a, b) =>
         a.localeCompare(b),
       );
-      if (picker.incomplete === true) {
-        fail('the provider section is missing one of its controls');
-      } else if (providerLabels.length < 2) {
+
+      if (providerLabels.length < 2) {
         fail(`the provider picker offers ${providerLabels.length} provider(s)`);
       } else if (
         providerLabels.join('\u0000') !== sortedLabels.join('\u0000')
@@ -1199,22 +1209,27 @@ async function main() {
         fail(
           `the provider picker is out of alphabetical order: ${providerLabels.join(', ')}`,
         );
-      } else if (!Array.isArray(picker.models) || picker.models.length === 0) {
-        fail(`the model picker is empty for "${picker.active}"`);
-      } else if (!/^https?:\/\//u.test(picker.baseUrl ?? '')) {
-        fail(`the base URL box holds "${picker.baseUrl}"`);
-      } else if (picker.hasKeyInput !== true) {
-        fail('the API key box is not in the provider section');
-      } else if (picker.hasFetchButton !== true) {
-        fail('the provider section has no Fetch Models button');
-      } else if (picker.fetchDisabled !== true) {
-        // A fresh install has no key stored, so there is nothing to ask the
-        // endpoint yet — the button is present but refused.
-        fail('Fetch Models is offered before a key is stored');
-      } else if (picker.temperature !== '0.7') {
+      } else if (builtin.active !== 'builtin') {
+        fail(`a fresh install answers with "${builtin.active}"`);
+      } else if (
+        builtin.hasKeyInput ||
+        builtin.hasFetchButton ||
+        builtin.baseUrl !== null
+      ) {
+        /*
+         * The heart of it: the app's own model must not offer a key box, a Fetch
+         * button or an editable address. All three would be controls that write
+         * to a file the resolver never reads, which is a working-looking feature
+         * that is not one.
+         */
         fail(
-          `the temperature slider opens at ${String(picker.temperature)}, not the ` +
-            '0.7 the settings file defaults to',
+          'the built-in model was offered a key, an address or a model list to ' +
+            `fetch: ${JSON.stringify(builtin)}`,
+        );
+      } else if (builtin.temperature !== '0.7') {
+        fail(
+          `the temperature slider opens at ${String(builtin.temperature)}, not ` +
+            'the 0.7 the settings file defaults to',
         );
       } else {
         ok(
@@ -1222,10 +1237,97 @@ async function main() {
             `alphabetically: ${providerLabels.join(', ')}`,
         );
         ok(
-          'the provider section carries the key box and a key-gated Fetch Models ' +
-            'button',
+          'the built-in model offers no key, address or fetch button, and the ' +
+            'temperature slider is drawn',
         );
-        ok(`the temperature slider is drawn, at ${String(picker.temperature)}`);
+      }
+
+      /*
+       * And the other shape, reached the way a person reaches it: by choosing a
+       * service from the picker. This is a real write through IPC, and what it
+       * must produce is a card that now *has* the three controls — which is the
+       * only way to know the two shapes are a choice rather than a missing
+       * feature.
+       */
+      await evaluate(`(() => {
+        const section = [...document.querySelectorAll('.settings-section')]
+          .find((entry) => entry.querySelector('h3')?.textContent === 'Provider');
+        const providers = section?.querySelector('select');
+        if (providers === null || providers === undefined) return;
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLSelectElement.prototype,
+          'value',
+        ).set;
+        setter.call(providers, 'deepseek');
+        providers.dispatchEvent(new Event('change', {bubbles: true}));
+      })()`);
+
+      const keyed = await until('the keyed provider card', async () => {
+        const card = await readProviderCard();
+        return card.active === 'deepseek' && card.hasKeyInput
+          ? card
+          : undefined;
+      });
+
+      if (!/^https?:\/\//u.test(keyed.baseUrl ?? '')) {
+        fail(`the base URL box holds "${keyed.baseUrl}"`);
+      } else if (keyed.hasFetchButton !== true) {
+        fail('the provider section has no Fetch Models button');
+      } else if (keyed.fetchDisabled !== true) {
+        // No key is stored for this provider yet, so there is nothing to ask the
+        // endpoint — the button is present but refused.
+        fail('Fetch Models is offered before a key is stored');
+      } else if (keyed.temperature !== '0.7') {
+        fail(`the temperature slider moved: ${String(keyed.temperature)}`);
+      } else {
+        ok(
+          'choosing a service gives the card its address, key box and key-gated ' +
+            'Fetch Models button',
+        );
+      }
+
+      /*
+       * The model card, which is the one thing on this screen that decides
+       * whether the app can answer at all.
+       *
+       * What it must do here is tell the truth about this install: a checkout is
+       * built without the weights, so the card says so — and it says *which file*
+       * it wanted, because "the model is not installed" without a path is a
+       * complaint nobody can act on. The command line is asserted too: it is the
+       * whole point of the power screen's version of this card, and a card whose
+       * command was empty would still pass every wording check above.
+       */
+      await openSection('Model');
+      const modelCard = await until('the Model section to answer', async () => {
+        const state = await evaluate(`(() => {
+          const section = [...document.querySelectorAll('.settings-section')]
+            .find((entry) => entry.querySelector('h3')?.textContent === 'Model');
+          if (section === undefined) return undefined;
+          return JSON.stringify({
+            text: section.textContent ?? '',
+            command: section.querySelector('.model-command')?.textContent ?? '',
+          });
+        })()`);
+        return state === undefined ? undefined : JSON.parse(state);
+      });
+
+      if (!/not installed|Not running|Loading|Ready/u.test(modelCard.text)) {
+        fail(`the Model card says nothing about the model: ${modelCard.text}`);
+      } else if (!modelCard.command.includes('llama-server')) {
+        fail(
+          `the Model card shows no command: ${JSON.stringify(modelCard.command)}`,
+        );
+      } else if (!modelCard.command.includes('--jinja')) {
+        // The flag the whole feature rests on, checked where a person can see it.
+        fail(
+          'the command the Model card shows does not ask for the model template',
+        );
+      } else if (!modelCard.command.includes('127.0.0.1')) {
+        fail('the command the Model card shows does not bind to loopback');
+      } else {
+        ok(
+          'the Model card reports the state of the model and the command that runs it',
+        );
       }
 
       /*

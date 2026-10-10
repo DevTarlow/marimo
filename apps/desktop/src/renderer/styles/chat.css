@@ -1261,6 +1261,82 @@
   margin-top: var(--space-2);
 }
 
+/*
+ * How much of the app to show.
+ *
+ * A card like the sections below it, but not one that folds: this is the control
+ * that decides which of *those* exist, and a switch hidden inside a panel it also
+ * governs is one nobody finds. It sits above them all and stays there.
+ */
+.settings-mode {
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/*
+ * The three choices on the simple screen, as cards rather than switches.
+ *
+ * A checkbox is the right control for "may it read my files", one capability at a
+ * time. It is the wrong one for choosing between three whole answers, because
+ * three checkboxes cannot say they are alternatives — each reads as its own
+ * question. A card that lights up says *this is the one*, which is what the
+ * choice actually is.
+ */
+.capability-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+
+.capability-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.capability-card:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.capability-card[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.capability-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font-size: var(--text-base);
+}
+
+.capability-tag {
+  padding: 1px var(--space-2);
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  color: var(--accent-contrast);
+  font-size: var(--text-xs);
+  font-style: normal;
+}
+
+.capability-blurb {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-style: normal;
+}
+
 .settings-group {
   margin: var(--space-3) 0 0;
   font-size: var(--text-xs);
@@ -1521,6 +1597,18 @@
 .settings-field > span {
   font-size: var(--text-sm);
   color: var(--text);
+}
+
+/*
+ * A value shown beside the label of the control that sets it.
+ *
+ * The number a slider is currently on has to be legible while the handle moves,
+ * so it is the one part of the label that is not the same weight as the rest —
+ * a readout you have to squint at is the same as no readout.
+ */
+.settings-value {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
 .settings-identity {

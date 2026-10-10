@@ -13,7 +13,13 @@
 import {useEffect, useState} from 'react';
 
 import {COMMAND_IDS, COMMANDS, THEME_MODES} from '@marimo/protocol';
-import type {AppInfo, PublicSettings, Theme, ThemeMode} from '@marimo/protocol';
+import type {
+  AppInfo,
+  ExperienceMode,
+  PublicSettings,
+  Theme,
+  ThemeMode,
+} from '@marimo/protocol';
 
 import {Composer} from './components/Composer.js';
 import {Onboarding} from './components/Onboarding.js';
@@ -103,6 +109,25 @@ export function App(): React.JSX.Element {
       .catch(() => undefined);
   };
 
+  /*
+   * Which size the app is drawn at.
+   *
+   * `simple` is the everyday screen and gets the roomy one; `power` keeps the
+   * density this app has always had, so somebody who turns the switch on to find
+   * a setting does not also find everything moved. Set on `<html>` beside
+   * `data-theme`, and only on this window: the companion is a fixed 340×460
+   * bubble whose layout is measured in its own test.
+   *
+   * Flipped from Settings rather than from here, which is why the dialog hands
+   * the new value back: the mode is a fact about this window, and the window is
+   * not the dialog.
+   */
+  const experienceMode: ExperienceMode = settings?.experienceMode ?? 'simple';
+  useEffect(() => {
+    document.documentElement.dataset['density'] =
+      experienceMode === 'simple' ? 'comfortable' : 'compact';
+  }, [experienceMode]);
+
   const busy = agent.busy;
   const disabled = agent.profile === undefined;
 
@@ -156,6 +181,17 @@ export function App(): React.JSX.Element {
           void agent.reload();
           loadSettings();
         }}
+        onExperienceModeChange={(mode) => {
+          /*
+           * The density is this window's, and the switch is in the dialog, so
+           * the new value comes back rather than being read again: the redraw
+           * has to happen on the flip, not when the dialog closes — a screen
+           * that re-spaces itself two clicks later reads as a bug.
+           */
+          setSettings((current) =>
+            current === null ? current : {...current, experienceMode: mode},
+          );
+        }}
       />
     );
   }
@@ -204,7 +240,9 @@ export function App(): React.JSX.Element {
         <header className="head">
           <img className="head-mark" src="./marimo-logo.png" alt="" />
           <div className="head-who">
-            <h1 className="head-name">{agent.profile?.name ?? 'Marimo Agent'}</h1>
+            <h1 className="head-name">
+              {agent.profile?.name ?? 'Marimo Agent'}
+            </h1>
             {info !== null && (
               <p className="head-sub">
                 {info.name} v{info.version}

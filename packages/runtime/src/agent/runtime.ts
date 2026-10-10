@@ -22,6 +22,7 @@
  */
 import {
   AgentHost,
+  capabilityPresets,
   describeTools,
   MAX_MEMORY_BYTES,
   MemoryStore,
@@ -224,25 +225,34 @@ export class AgentRuntime {
       workspaceRootFor(await this.workspaceStore.load()) ??
       this.options.paths.defaultWorkspace;
 
+    const tools = describeTools({
+      workspaceRoot,
+      model: activeProvider(settings.providers).model,
+      ...(this.options.webSearch ? {webSearch: this.options.webSearch} : {}),
+      /*
+       * The host always builds the helper tool; the profile decides whether
+       * this agent may use it, which is what the pick-list is for.
+       */
+      subagent: true,
+      /*
+       * And every service this app wires, named explicitly. A tool the host
+       * builds but the catalogue omits can never be granted — the switch for
+       * it does not exist — so the two have to be kept in step, and the test
+       * beside this file compares them.
+       */
+      jobs: true,
+    });
+
     return {
-      tools: describeTools({
-        workspaceRoot,
-        model: activeProvider(settings.providers).model,
-        ...(this.options.webSearch ? {webSearch: this.options.webSearch} : {}),
-        /*
-         * The host always builds the helper tool; the profile decides whether
-         * this agent may use it, which is what the pick-list is for.
-         */
-        subagent: true,
-        /*
-         * And every service this app wires, named explicitly. A tool the host
-         * builds but the catalogue omits can never be granted — the switch for
-         * it does not exist — so the two have to be kept in step, and the test
-         * beside this file compares them.
-         */
-        jobs: true,
-      }),
+      tools,
       skills: await this.skillCatalog(),
+      /*
+       * The same tools in three sizes, narrowed to the ones this install has.
+       * The narrowing happens here rather than in the window so that whichever
+       * screen offers a preset can write the list it was handed, and a name no
+       * tool answers to never reaches a profile.
+       */
+      presets: capabilityPresets(tools.map((tool) => tool.name)),
     };
   }
 
@@ -619,10 +629,7 @@ export class AgentRuntime {
    * back as the sentence the window already knows how to draw rather than as a
    * request to an empty endpoint.
    */
-  async compact(
-    profileId: string,
-    sessionId: string,
-  ): Promise<CompactResult> {
+  async compact(profileId: string, sessionId: string): Promise<CompactResult> {
     const resolved = await this.host(profileId, sessionId);
     if (!resolved.ok) {
       throw new Error(resolved.problem);

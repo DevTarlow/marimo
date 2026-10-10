@@ -12,7 +12,12 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
 import {toOpenAiTools} from '../models/openai-mapping.js';
-import {createTools, describeTools, SAFE_DEFAULT_TOOLS} from './index.js';
+import {
+  CAPABILITY_PRESETS,
+  createTools,
+  describeTools,
+  SAFE_DEFAULT_TOOLS,
+} from './index.js';
 import type {WebSearchProvider} from './web-search-tool.js';
 
 describe('createTools', () => {
@@ -522,6 +527,117 @@ describe('the tool catalogue', () => {
 });
 
 /*
+ * The three choices the simple screen offers.
+ *
+ * The failure this guards against is the one every hand-written list of names
+ * eventually has: a tool renamed in the catalogue and not here grants nothing,
+ * silently, while the card on screen goes on promising it. So the names are
+ * checked against the tools that are actually built — the same comparison the
+ * catalogue test above makes, for the same reason.
+ */
+describe('the capability presets', () => {
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(process.cwd(), '.marimo-presets-'));
+  });
+
+  afterEach(async () => {
+    await rm(workDir, {recursive: true, force: true});
+  });
+
+  /** Every tool the host can build, with nothing optional left out. */
+  function everything(): Set<string> {
+    return new Set(
+      createTools(
+        {
+          apiKey: 'test-key',
+          baseUrl: 'http://127.0.0.1:1',
+          model: 'deepseek-chat',
+          temperature: 0,
+          systemPrompt: 'test',
+          workspaceRoot: workDir,
+          allowPrivateNetworkFetch: false,
+        },
+        {
+          memory: new MemoryStore({workspaceRoot: workDir}),
+          model: 'deepseek-chat',
+          webSearch: {search: async () => []},
+          subagent: {build: () => ({}) as never},
+          jobService: {} as never,
+          skillService: {} as never,
+          discordService: {} as never,
+          deskService: {} as never,
+        },
+      ).map((tool) => tool.name),
+    );
+  }
+
+  it('names only tools that exist', () => {
+    const built = everything();
+    const missing = CAPABILITY_PRESETS.flatMap((preset) =>
+      preset.tools
+        .filter((name) => !built.has(name))
+        .map((name) => `${preset.id}: ${name}`),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  /*
+   * The whole reason the presets are allowed to exist. If the recommended card
+   * and what a brand-new agent is granted were two lists, the first person to
+   * add a tool to one of them would make the card a lie — and the lie would look
+   * like a switch that does nothing.
+   */
+  it('recommends exactly what a brand-new agent is granted', () => {
+    const recommended = CAPABILITY_PRESETS.filter(
+      (preset) => preset.recommended,
+    );
+    expect(recommended).toHaveLength(1);
+    expect(new Set(recommended[0]!.tools)).toEqual(new Set(SAFE_DEFAULT_TOOLS));
+  });
+
+  /*
+   * The tiers are reach, and the line is that none of them runs a command on
+   * somebody's computer. That is the one capability this app does not hand out
+   * as a preset — it lives in the power screen beside the switch that explains
+   * it.
+   */
+  it('never grants a shell, and grows by reach', () => {
+    for (const preset of CAPABILITY_PRESETS) {
+      expect(preset.tools).not.toContain('run_shell');
+    }
+
+    const [chat, assistant, capable] = CAPABILITY_PRESETS;
+    const contains = (outer: string[], inner: string[]): boolean =>
+      inner.every((name) => outer.includes(name));
+    expect(contains(assistant!.tools, chat!.tools)).toBe(true);
+    expect(contains(capable!.tools, assistant!.tools)).toBe(true);
+
+    // And the growth is real: the simplest card is not the whole catalogue.
+    expect(chat!.tools.length).toBeLessThan(capable!.tools.length);
+  });
+
+  /*
+   * Read as a sentence, like a tool's blurb and for the same reason: this is
+   * what somebody deciding has to go on, and "Enable file system access" beside
+   * a button is not a decision anybody can make.
+   */
+  it('describes each choice in words for a person', () => {
+    for (const preset of CAPABILITY_PRESETS) {
+      expect(preset.id.length).toBeGreaterThan(0);
+      expect(preset.label.trim()).toBe(preset.label);
+      expect(preset.blurb.trim()).toBe(preset.blurb);
+      expect(preset.blurb.endsWith('.')).toBe(true);
+      expect(preset.label).not.toBe(preset.blurb);
+    }
+    expect(new Set(CAPABILITY_PRESETS.map((preset) => preset.id)).size).toBe(
+      CAPABILITY_PRESETS.length,
+    );
+  });
+});
+
+/*
  * The helper tool and the profile's selection.
  *
  * It was appended *after* `filterTools`, so it was never filtered: a profile
@@ -598,7 +714,10 @@ describe('the helper tool and the profile filter', () => {
         allowPrivateNetworkFetch: false,
         enabledTools: ['read_file', 'spawn_agent'],
       },
-      {memory: new MemoryStore({workspaceRoot: workDir}), model: 'deepseek-chat'},
+      {
+        memory: new MemoryStore({workspaceRoot: workDir}),
+        model: 'deepseek-chat',
+      },
     ).map((tool) => tool.name);
     expect(names).not.toContain('spawn_agent');
   });

@@ -5,11 +5,21 @@
  * rather than a description of a state nobody can leave. Until this existed the
  * grants were a hardcoded default with no way to change them.
  *
+ * It is drawn in two sizes, and which one is the user's answer rather than the
+ * app's guess. **Simple** is what somebody who wants a companion sees: a name,
+ * one choice about what it may do, and the model. **Power** is everything, down
+ * to the provider, the address and the individual tool switches. The line between
+ * them is *tuning versus repair* — a number to adjust lives in power, a switch
+ * that fixes something the user is looking at stays where they are. Hiding the
+ * escape hatch from the person hitting the problem is how a setting comes to look
+ * like a bug.
+ *
  * The tool list is drawn in two groups, and the grouping is the point. Twenty
  * checkboxes with no distinction between reading a file and running a shell
  * command is a list nobody can make a decision from — so the ones that merely
  * look are separated from the ones that can change something, and the second
- * group says what is at stake.
+ * group says what is at stake. That list is the power screen's; the simple screen
+ * offers the same grants as three cards, which write the same profile field.
  *
  * Saving is immediate per switch rather than behind a Save button. Each toggle
  * is one independent fact, and a form that can be abandoned leaves the screen
@@ -19,8 +29,10 @@ import {useEffect, useState} from 'react';
 
 import type {
   AgentProfile,
+  CapabilityPreset,
   CatalogTool,
   CompanionAnswerLength,
+  ExperienceMode,
   McpStatus,
   ProfileCatalog,
   PublicSettings,
@@ -36,6 +48,7 @@ import {
   PROVIDERS,
 } from '@marimo/protocol';
 
+import {chosenPreset} from '../capabilities.js';
 import {describe} from '../describe.js';
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
@@ -68,6 +81,18 @@ const ANSWER_LENGTH_LABELS: Record<CompanionAnswerLength, string> = {
   detailed: 'Detailed — the full answer here, not deferred to the window',
 };
 
+/**
+ * The two sizes, in the words the person choosing between them is given.
+ *
+ * Written here rather than derived from the enum, for the reason the answer
+ * lengths above are: the value is what the file is keyed by, and this is what
+ * somebody flipping the switch is told they are getting.
+ */
+const EXPERIENCE_LABELS: Record<ExperienceMode, string> = {
+  simple: 'Simple',
+  power: 'Power user',
+};
+
 interface Loaded {
   settings: PublicSettings;
   catalog: ProfileCatalog;
@@ -77,7 +102,21 @@ interface Loaded {
   companionVisible: boolean;
 }
 
-export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
+export function Settings({
+  onClose,
+  onExperienceModeChange,
+}: {
+  onClose: () => void;
+  /**
+   * Told which size the dialog is now drawn at.
+   *
+   * The density of the whole window follows this value, and the window is not
+   * this component — so without saying so, flipping the switch would re-space
+   * everything only when the dialog was closed. A setting whose entire effect is
+   * visible on the screen you are looking at cannot wait for that.
+   */
+  onExperienceModeChange?: (mode: ExperienceMode) => void;
+}): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -145,11 +184,23 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
   }, []);
 
   /** Runs a change, and says so when it fails rather than pretending. */
-  const change = async (work: () => Promise<unknown>): Promise<void> => {
+  const change = async (
+    work: () => Promise<unknown>,
+    /**
+     * Runs after the write landed and before the redraw.
+     *
+     * For the one change whose effect is *outside* this dialog — the size switch,
+     * which re-spaces the window behind it. Deliberately not called on a refusal:
+     * a failed write that had already resized everything would be the screen
+     * agreeing with a file that says otherwise.
+     */
+    after?: () => void,
+  ): Promise<void> => {
     setSaving(true);
     setProblem(null);
     try {
       await work();
+      after?.();
       await load();
     } catch (failure) {
       setProblem(describe(failure));
@@ -200,12 +251,33 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
     } else {
       enabled.delete(tool.name);
     }
+    writeTools(profile.id, [...enabled]);
+  };
+
+  /** Writes a grant, whoever asked for it — a switch or one of the cards. */
+  const writeTools = (profileId: string, enabledTools: string[]): void => {
     void change(async () => {
       await window.marimo.call('profiles.update', {
-        profileId: profile.id,
-        patch: {enabledTools: [...enabled]},
+        profileId,
+        patch: {enabledTools},
       });
     });
+  };
+
+  const setExperienceMode = (mode: ExperienceMode): void => {
+    if (mode === loaded?.settings.experienceMode) {
+      return;
+    }
+    void change(
+      async () => {
+        await window.marimo.call('settings.set', {
+          patch: {experienceMode: mode},
+        });
+      },
+      () => {
+        onExperienceModeChange?.(mode);
+      },
+    );
   };
 
   if (loaded === null) {
@@ -215,7 +287,11 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           <p className="settings-muted">
             {problem ?? 'Reading your settings…'}
           </p>
-          <button type="button" className="button button-quiet" onClick={onClose}>
+          <button
+            type="button"
+            className="button button-quiet"
+            onClick={onClose}
+          >
             Back
           </button>
         </div>
@@ -225,6 +301,12 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
 
   const granted = new Set(loaded.profile?.enabledTools ?? []);
   const opened = new Set(openSections ?? []);
+  /*
+   * Which size this screen is drawn at, read from the file rather than held
+   * here: it is the user's answer about the app, and the window behind this
+   * dialog is drawing itself from the same value.
+   */
+  const power = loaded.settings.experienceMode === 'power';
   /*
    * Reset would be a no-op only when the box already shows the default *and*
    * that is what is stored. A box showing the default it has not saved yet is a
@@ -247,7 +329,11 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
       <div className="settings-inner">
         <header className="settings-head">
           <h2>Settings</h2>
-          <button type="button" className="button button-quiet" onClick={onClose}>
+          <button
+            type="button"
+            className="button button-quiet"
+            onClick={onClose}
+          >
             Back to chat
           </button>
         </header>
@@ -257,6 +343,32 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
             <span>{problem}</span>
           </div>
         )}
+
+        {/*
+          The switch that decides which of the cards below exist. First, and
+          outside the folding list, because a control hidden inside a panel it
+          also governs is one nobody finds.
+        */}
+        <div className="settings-mode">
+          <label className="settings-check">
+            <input
+              type="checkbox"
+              checked={power}
+              disabled={saving}
+              onChange={(event) => {
+                setExperienceMode(event.target.checked ? 'power' : 'simple');
+              }}
+            />
+            <span>
+              {EXPERIENCE_LABELS.power} mode
+              <em className="settings-why">
+                {power
+                  ? 'Everything is on this page: which service answers, where it is reached, which of its models, and every single thing the agent is allowed to do. Turn it off for the everyday settings.'
+                  : 'The everyday settings, with the tuning left out. Turn this on to choose a service and a model of your own, to connect tools from elsewhere, and to see every ability as its own switch.'}
+              </em>
+            </span>
+          </label>
+        </div>
 
         <SettingsSection title="Your agents" opened={opened} onToggle={fold}>
           <p className="settings-muted">
@@ -271,7 +383,9 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
                 type="button"
                 className="settings-agent"
                 aria-current={
-                  entry.id === loaded.settings.activeProfileId ? 'true' : undefined
+                  entry.id === loaded.settings.activeProfileId
+                    ? 'true'
+                    : undefined
                 }
                 disabled={saving}
                 onClick={() => {
@@ -330,65 +444,78 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               />
             </label>
             {/*
-             * Not a `<label>` any more, because it now holds a button: a click
-             * anywhere inside a label focuses its control, so the reset below
-             * would have been a click on the text box. The name is carried by
-             * `aria-label` instead, which is how the other fields that are not
-             * wrapped in a label do it.
+             * The identity is tuning, so it lives in the power screen. It is a
+             * paragraph of instruction addressed to a model, and the app's own
+             * text is a good answer for somebody who has not thought about
+             * prompts at all.
+             *
+             * "How to talk to me" below is the opposite, and stays in both: it
+             * is the user's own voice, and correcting a name or asking not to be
+             * flattered should not require turning on an advanced mode.
              */}
-            <div className="settings-field">
-              <span>Identity</span>
-              <em className="settings-why">
-                Who this agent is and how it should behave. Written as an
-                instruction to it, and sent at the start of every conversation.
-              </em>
-              <textarea
-                className="settings-input settings-identity"
-                rows={6}
-                aria-label="Identity"
-                value={draft.identity}
-                disabled={saving}
-                onChange={(event) => {
-                  setDraft({...draft, identity: event.target.value});
-                }}
-                onBlur={() => {
-                  if (draft.identity === loaded.profile?.identity) {
-                    return;
-                  }
-                  const identity = draft.identity;
-                  void change(async () => {
-                    await window.marimo.call('profiles.update', {
-                      profileId: loaded.profile?.id ?? '',
-                      patch: {identity},
-                    });
-                  });
-                }}
-              />
-              <div className="settings-row">
-                {/*
-                 * Saved in the click rather than left to a blur: the blur fires
-                 * first when the button takes focus, and would write whatever
-                 * the box held *before* the reset. The store serialises the
-                 * two, so the default is what lands.
-                 */}
-                <button
-                  type="button"
-                  className="button button-quiet"
-                  disabled={saving || identityAtDefault}
-                  onClick={() => {
-                    setDraft({...draft, identity: DEFAULT_AGENT_IDENTITY});
+            {power && (
+              /*
+               * Not a `<label>` any more, because it now holds a button: a click
+               * anywhere inside a label focuses its control, so the reset below
+               * would have been a click on the text box. The name is carried by
+               * `aria-label` instead, which is how the other fields that are not
+               * wrapped in a label do it.
+               */
+              <div className="settings-field">
+                <span>Identity</span>
+                <em className="settings-why">
+                  Who this agent is and how it should behave. Written as an
+                  instruction to it, and sent at the start of every
+                  conversation.
+                </em>
+                <textarea
+                  className="settings-input settings-identity"
+                  rows={6}
+                  aria-label="Identity"
+                  value={draft.identity}
+                  disabled={saving}
+                  onChange={(event) => {
+                    setDraft({...draft, identity: event.target.value});
+                  }}
+                  onBlur={() => {
+                    if (draft.identity === loaded.profile?.identity) {
+                      return;
+                    }
+                    const identity = draft.identity;
                     void change(async () => {
                       await window.marimo.call('profiles.update', {
                         profileId: loaded.profile?.id ?? '',
-                        patch: {identity: DEFAULT_AGENT_IDENTITY},
+                        patch: {identity},
                       });
                     });
                   }}
-                >
-                  Reset to default
-                </button>
+                />
+                <div className="settings-row">
+                  {/*
+                   * Saved in the click rather than left to a blur: the blur fires
+                   * first when the button takes focus, and would write whatever
+                   * the box held *before* the reset. The store serialises the
+                   * two, so the default is what lands.
+                   */}
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    disabled={saving || identityAtDefault}
+                    onClick={() => {
+                      setDraft({...draft, identity: DEFAULT_AGENT_IDENTITY});
+                      void change(async () => {
+                        await window.marimo.call('profiles.update', {
+                          profileId: loaded.profile?.id ?? '',
+                          patch: {identity: DEFAULT_AGENT_IDENTITY},
+                        });
+                      });
+                    }}
+                  >
+                    Reset to default
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
             {/*
              * The user's own words, in their own field. Kept out of the identity
              * above deliberately: Reset restores the app's text, and it must not
@@ -398,7 +525,8 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
               <span>How to talk to me</span>
               <em className="settings-why">
                 Your own standing instructions. Sent after the identity, so it
-                wins wherever the two disagree about how you want to be spoken to.
+                wins wherever the two disagree about how you want to be spoken
+                to.
               </em>
               <textarea
                 className="settings-input settings-preferences"
@@ -453,38 +581,66 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           </SettingsSection>
         )}
 
-        <SettingsSection
-          title={`What ${loaded.profile?.name ?? 'this agent'} can do`}
-          opened={opened}
-          onToggle={fold}
-        >
-          <p className="settings-muted">
-            A tool that is switched off is not offered to the model at all — it is
-            not a suggestion it might ignore.
-          </p>
+        {/*
+          What the agent may do, drawn as three cards or as thirty switches.
+          
+          Both write the same profile field, and the card that is lit is worked
+          out from it rather than stored beside it — so ticking a box in the power
+          screen and coming back to the simple one cannot show a choice the profile
+          does not hold.
+        */}
+        {power ? (
+          <SettingsSection
+            title={`What ${loaded.profile?.name ?? 'this agent'} can do`}
+            opened={opened}
+            onToggle={fold}
+          >
+            <p className="settings-muted">
+              A tool that is switched off is not offered to the model at all —
+              it is not a suggestion it might ignore.
+            </p>
 
-          <h4 className="settings-group">On to begin with</h4>
-          {onByDefault.map((tool) => (
-            <ToolRow
-              key={tool.name}
-              tool={tool}
-              on={granted.has(tool.name)}
-              disabled={saving}
-              onChange={toggle}
-            />
-          ))}
+            <h4 className="settings-group">On to begin with</h4>
+            {onByDefault.map((tool) => (
+              <ToolRow
+                key={tool.name}
+                tool={tool}
+                on={granted.has(tool.name)}
+                disabled={saving}
+                onChange={toggle}
+              />
+            ))}
 
-          <h4 className="settings-group">Off until you turn it on</h4>
-          {offByDefault.map((tool) => (
-            <ToolRow
-              key={tool.name}
-              tool={tool}
-              on={granted.has(tool.name)}
+            <h4 className="settings-group">Off until you turn it on</h4>
+            {offByDefault.map((tool) => (
+              <ToolRow
+                key={tool.name}
+                tool={tool}
+                on={granted.has(tool.name)}
+                disabled={saving}
+                onChange={toggle}
+              />
+            ))}
+          </SettingsSection>
+        ) : (
+          <SettingsSection
+            title={`What ${loaded.profile?.name ?? 'this agent'} can do`}
+            opened={opened}
+            onToggle={fold}
+          >
+            <CapabilityChoices
+              presets={loaded.catalog.presets}
+              granted={granted}
               disabled={saving}
-              onChange={toggle}
+              onChoose={(tools) => {
+                const profile = loaded.profile;
+                if (profile !== undefined) {
+                  writeTools(profile.id, tools);
+                }
+              }}
             />
-          ))}
-        </SettingsSection>
+          </SettingsSection>
+        )}
 
         <SettingsSection
           title="Desktop companion"
@@ -544,47 +700,57 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
             ))}
           </select>
 
-          <h4 className="settings-group">How much it shows</h4>
-          <label className="settings-field">
-            <span>
-              Messages above the moss
-              <em className="settings-why">
-                Older ones are always in the main window. Fewer keeps the pet to
-                the answer that just arrived.
-              </em>
-            </span>
-            <input
-              className="settings-input"
-              type="number"
-              min={1}
-              max={20}
-              value={loaded.settings.companion.visibleMessages}
-              disabled={saving}
-              onChange={(event) => {
-                const visibleMessages = Number(event.target.value);
-                /*
-                 * A field being cleared, or a keypress that would leave a 0 or a
-                 * 40 in it, passes through values the schema refuses. Writing one
-                 * would be a failed call and an error line under a spinner, so
-                 * the field is allowed to disagree with the stored number for as
-                 * long as it takes to type a good one — and the stored number is
-                 * what is still in force.
-                 */
-                if (
-                  !Number.isInteger(visibleMessages) ||
-                  visibleMessages < 1 ||
-                  visibleMessages > 20
-                ) {
-                  return;
-                }
-                void change(async () => {
-                  await window.marimo.call('settings.set', {
-                    patch: {companion: {visibleMessages}},
-                  });
-                });
-              }}
-            />
-          </label>
+          {/*
+            A number to tune, so it is power-only. The two switches below are
+            not: they are what somebody reaches for when the moss covers a
+            film or stops answering the mouse, and a repair hidden behind an
+            advanced mode is a repair nobody finds.
+          */}
+          {power && (
+            <>
+              <h4 className="settings-group">How much it shows</h4>
+              <label className="settings-field">
+                <span>
+                  Messages above the moss
+                  <em className="settings-why">
+                    Older ones are always in the main window. Fewer keeps the
+                    pet to the answer that just arrived.
+                  </em>
+                </span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={loaded.settings.companion.visibleMessages}
+                  disabled={saving}
+                  onChange={(event) => {
+                    const visibleMessages = Number(event.target.value);
+                    /*
+                     * A field being cleared, or a keypress that would leave a 0 or a
+                     * 40 in it, passes through values the schema refuses. Writing one
+                     * would be a failed call and an error line under a spinner, so
+                     * the field is allowed to disagree with the stored number for as
+                     * long as it takes to type a good one — and the stored number is
+                     * what is still in force.
+                     */
+                    if (
+                      !Number.isInteger(visibleMessages) ||
+                      visibleMessages < 1 ||
+                      visibleMessages > 20
+                    ) {
+                      return;
+                    }
+                    void change(async () => {
+                      await window.marimo.call('settings.set', {
+                        patch: {companion: {visibleMessages}},
+                      });
+                    });
+                  }}
+                />
+              </label>
+            </>
+          )}
 
           <label className="settings-check">
             <input
@@ -603,9 +769,10 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
             <span>
               Float above other windows
               <em className="settings-why">
-                Turn this off while presenting or watching something full-screen,
-                and the moss stops covering it. It can then go behind the window
-                you are working in, so it may need moving back out.
+                Turn this off while presenting or watching something
+                full-screen, and the moss stops covering it. It can then go
+                behind the window you are working in, so it may need moving back
+                out.
               </em>
             </span>
           </label>
@@ -627,10 +794,10 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
             <span>
               Clicks pass through where there is nothing to click
               <em className="settings-why">
-                On is what makes the moss sit on the desktop rather than in a box
-                over it. Turn it off if the moss ever stops responding to the
-                mouse — the window then keeps the mouse everywhere inside it,
-                including the empty space around the moss.
+                On is what makes the moss sit on the desktop rather than in a
+                box over it. Turn it off if the moss ever stops responding to
+                the mouse — the window then keeps the mouse everywhere inside
+                it, including the empty space around the moss.
               </em>
             </span>
           </label>
@@ -643,59 +810,65 @@ export function Settings({onClose}: {onClose: () => void}): React.JSX.Element {
           protocol's catalogue, so a command added there appears here, in the
           composer's menu, and nowhere else needs to know about it.
         */}
-        <SettingsSection title="Commands" opened={opened} onToggle={fold}>
-          <p className="settings-muted">
-            Commands run against a conversation from the composer&rsquo;s +
-            menu. They are off the model&rsquo;s list entirely when switched off
-            here, rather than merely discouraged.
-          </p>
-          {COMMAND_IDS.map((id) => (
-            <label className="settings-check" key={id}>
-              <input
-                type="checkbox"
-                checked={!loaded.settings.disabledCommands.includes(id)}
-                disabled={saving}
-                onChange={(event) => {
-                  const on = event.target.checked;
-                  const next = COMMAND_IDS.filter((candidate) =>
-                    candidate === id
-                      ? !on
-                      : loaded.settings.disabledCommands.includes(candidate),
-                  );
-                  void change(async () => {
-                    await window.marimo.call('settings.set', {
-                      patch: {disabledCommands: next},
+        {power && (
+          <SettingsSection title="Commands" opened={opened} onToggle={fold}>
+            <p className="settings-muted">
+              Commands run against a conversation from the composer&rsquo;s +
+              menu. They are off the model&rsquo;s list entirely when switched
+              off here, rather than merely discouraged.
+            </p>
+            {COMMAND_IDS.map((id) => (
+              <label className="settings-check" key={id}>
+                <input
+                  type="checkbox"
+                  checked={!loaded.settings.disabledCommands.includes(id)}
+                  disabled={saving}
+                  onChange={(event) => {
+                    const on = event.target.checked;
+                    const next = COMMAND_IDS.filter((candidate) =>
+                      candidate === id
+                        ? !on
+                        : loaded.settings.disabledCommands.includes(candidate),
+                    );
+                    void change(async () => {
+                      await window.marimo.call('settings.set', {
+                        patch: {disabledCommands: next},
+                      });
                     });
-                  });
-                }}
-              />
-              <span>
-                {COMMANDS[id].label}
-                <em className="settings-why">{COMMANDS[id].blurb}</em>
-              </span>
-            </label>
-          ))}
-        </SettingsSection>
+                  }}
+                />
+                <span>
+                  {COMMANDS[id].label}
+                  <em className="settings-why">{COMMANDS[id].blurb}</em>
+                </span>
+              </label>
+            ))}
+          </SettingsSection>
+        )}
 
-        <ProviderSection
-          opened={opened}
-          onToggle={fold}
-          onChange={() => {
-            void load();
-          }}
-        />
+        {power && (
+          <ProviderSection
+            opened={opened}
+            onToggle={fold}
+            onChange={() => {
+              void load();
+            }}
+          />
+        )}
 
         <Memory opened={opened} onToggle={fold} />
 
-        <Connectors
-          servers={loaded.settings.mcpServers}
-          statuses={loaded.statuses}
-          opened={opened}
-          onToggle={fold}
-          onChange={() => {
-            void load();
-          }}
-        />
+        {power && (
+          <Connectors
+            servers={loaded.settings.mcpServers}
+            statuses={loaded.statuses}
+            opened={opened}
+            onToggle={fold}
+            onChange={() => {
+              void load();
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -746,6 +919,14 @@ function ProviderSection({
   const [apiKey, setApiKey] = useState('');
   /** What is in the base URL box, or null while it shows what is stored. */
   const [baseUrlDraft, setBaseUrlDraft] = useState<string | null>(null);
+  /**
+   * The temperature while the slider is being dragged.
+   *
+   * Held apart from the stored value for the same reason the base URL box is:
+   * the write happens when the gesture ends, and a slider whose handle snapped
+   * back to the stored number between steps would be unusable.
+   */
+  const [temperatureDraft, setTemperatureDraft] = useState<number | null>(null);
   /** What went wrong, shown in this section rather than only in the banner. */
   const [problem, setProblem] = useState<string | null>(null);
   /** What a good fetch found, so the button's effect is visible. */
@@ -867,6 +1048,16 @@ function ProviderSection({
 
   const chooseModel = (model: string): void => {
     save({providers: {configs: {[active]: {model}}}});
+  };
+
+  /** Saves the dragged temperature, and only when it moved. */
+  const commitTemperature = (): void => {
+    const next = temperatureDraft;
+    setTemperatureDraft(null);
+    if (next === null || next === settings.temperature) {
+      return;
+    }
+    save({temperature: next});
   };
 
   return (
@@ -1034,6 +1225,51 @@ function ProviderSection({
         {note !== null && <p className="settings-muted">{note}</p>}
         {problem !== null && <p className="settings-problem">{problem}</p>}
       </div>
+
+      {/*
+        The one knob the settings file has always held and no screen ever drew.
+
+        It belongs here rather than with the appearance settings: it is a
+        property of the model — how literal or how inventive its wording is — and
+        it is worth more on a small local model than on any of the hosted ones,
+        which is why it is only now worth a control.
+
+        A range rather than a number box, like the memory limit, and saved when
+        the pointer comes up: a slider fires per pixel, and a settings write per
+        pixel is a burst of disk writes for one decision.
+      */}
+      <label className="settings-field">
+        <span>
+          Temperature{' '}
+          <strong className="settings-value">
+            {(temperatureDraft ?? settings.temperature).toFixed(1)}
+          </strong>
+        </span>
+        <em className="settings-why">
+          How much it varies its wording. Low is literal and repeatable, high is
+          more inventive and more likely to wander. 0.7 is the default; below
+          0.3 a small model starts repeating itself.
+        </em>
+        <input
+          className="settings-input"
+          type="range"
+          min={0}
+          max={2}
+          step={0.1}
+          value={temperatureDraft ?? settings.temperature}
+          disabled={saving}
+          aria-label="Temperature"
+          onChange={(event) => {
+            setTemperatureDraft(Number(event.target.value));
+          }}
+          onPointerUp={() => {
+            commitTemperature();
+          }}
+          onKeyUp={() => {
+            commitTemperature();
+          }}
+        />
+      </label>
     </SettingsSection>
   );
 }
@@ -1067,3 +1303,81 @@ function ToolRow({
   );
 }
 
+/**
+ * The same grants as three cards, for somebody who has never seen a tool list.
+ *
+ * The cards come from the catalogue rather than from a list here, so a tool
+ * renamed in the agent package cannot leave a card promising something that no
+ * longer exists — and a card the install cannot honour has already had the
+ * missing names taken out of it before it arrived.
+ *
+ * Which one is lit is worked out from the grant, never stored. That is what makes
+ * the two screens one setting: tick a box in the power list, come back here, and
+ * the card has gone dark because the profile no longer holds exactly that set.
+ * The line under the cards says so rather than leaving the user to wonder why
+ * none of them is lit.
+ */
+function CapabilityChoices({
+  presets,
+  granted,
+  disabled,
+  onChoose,
+}: {
+  presets: readonly CapabilityPreset[];
+  granted: ReadonlySet<string>;
+  disabled: boolean;
+  onChoose: (tools: string[]) => void;
+}): React.JSX.Element {
+  const chosen = chosenPreset(presets, [...granted]);
+
+  return (
+    <>
+      <p className="settings-muted">
+        Everything here is something you chose, and anything that changes a file
+        asks you before it does.
+      </p>
+
+      <div className="capability-cards">
+        {presets.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            className="capability-card"
+            aria-pressed={chosen?.id === preset.id}
+            disabled={disabled}
+            onClick={() => {
+              onChoose(preset.tools);
+            }}
+          >
+            <span className="capability-label">
+              {preset.label}
+              {/*
+                A real space before the tag. Flexbox drops a whitespace-only text
+                node from the layout, but `textContent` keeps it — and without it
+                a screen reader reads this card as "computerRecommended".
+              */}
+              {preset.recommended && (
+                <>
+                  {' '}
+                  <em className="capability-tag">Recommended</em>
+                </>
+              )}
+            </span>
+            <em className="capability-blurb">{preset.blurb}</em>
+          </button>
+        ))}
+      </div>
+
+      {chosen === undefined && (
+        <p className="settings-muted">
+          {granted.size === 0
+            ? 'This agent is not allowed to do anything at all yet — not even ' +
+              'read a file. Choosing one of the three above is how you change ' +
+              'that.'
+            : 'This agent has a set of abilities put together in Power user ' +
+              'mode. Choosing one of the three above replaces it with that one.'}
+        </p>
+      )}
+    </>
+  );
+}

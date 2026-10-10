@@ -52,7 +52,7 @@ import type {SkillService} from './skill-tools.js';
 import {createHttpFetchTool} from './web-tools.js';
 import {createWebSearchTool} from './web-search-tool.js';
 import type {WebSearchProvider} from './web-search-tool.js';
-import type {CatalogTool} from '@marimo/protocol';
+import type {CatalogTool, CapabilityPreset} from '@marimo/protocol';
 
 import {buildMcpTools} from '../mcp/tools.js';
 import type {McpServerConnection, McpToolInfo} from '../mcp/client.js';
@@ -83,6 +83,88 @@ export const SAFE_DEFAULT_TOOLS = [
   'prune_memory',
   'web_search',
 ] as const;
+
+/**
+ * The same grants, in the three sizes a person who has never seen a tool list
+ * can choose between.
+ *
+ * The tiers are *reach*, not harmlessness, and the third stops short of
+ * `run_shell` on purpose: every preset here is something somebody could hand to
+ * a friend without a paragraph of warning, and running commands on their
+ * computer is not. It is one switch away in the power screen, beside the tool
+ * list that explains what it does.
+ *
+ * The middle tier is `SAFE_DEFAULT_TOOLS` itself rather than a copy of it, so
+ * the recommended choice and what a brand-new agent is granted cannot drift —
+ * and a tool added there appears in the card without anybody remembering to.
+ */
+export const CAPABILITY_PRESETS: readonly CapabilityPreset[] = [
+  {
+    id: 'chat',
+    label: 'Just chat',
+    blurb:
+      'It answers questions and remembers what you tell it. It cannot open ' +
+      'your files.',
+    tools: ['current_time', 'read_memory', 'update_memory', 'prune_memory'],
+    recommended: false,
+  },
+  {
+    id: 'assistant',
+    label: 'Help around my computer',
+    blurb:
+      'It can read files in the folder you load, search the web, and note ' +
+      'things down for next time. Nothing on this list changes anything.',
+    tools: [...SAFE_DEFAULT_TOOLS],
+    recommended: true,
+  },
+  {
+    id: 'capable',
+    label: 'Do things for me',
+    blurb:
+      'Everything above, plus writing files, fetching a page you name, ' +
+      'keeping lists and setting up jobs that run on a schedule. Anything ' +
+      'that changes something still asks you first.',
+    tools: [
+      ...SAFE_DEFAULT_TOOLS,
+      'write_file',
+      'http_fetch',
+      'list_jobs',
+      'create_job',
+      'update_job',
+      'delete_job',
+      'list_todos',
+      'add_todo',
+      'update_todo',
+      'remove_todo',
+      'list_notes',
+      'add_note',
+      'update_note',
+      'remove_note',
+      'spawn_agent',
+      'save_skill',
+    ],
+    recommended: false,
+  },
+];
+
+/**
+ * The presets, narrowed to the tools this install actually has.
+ *
+ * An install with no Discord bot and no desk has neither set of tools, and a
+ * card that promised them would be the same failure as a switch for a tool that
+ * does not exist: something the user chose that grants nothing. Intersecting
+ * here means the window can write exactly the list it was handed, and there is
+ * no second place where the rule about missing tools lives.
+ */
+export function capabilityPresets(
+  available: Iterable<string>,
+): CapabilityPreset[] {
+  const names = new Set(available);
+  return CAPABILITY_PRESETS.map((preset) => ({
+    ...preset,
+    tools: preset.tools.filter((name) => names.has(name)),
+  }));
+}
 
 /**
  * Every tool this install can offer, described the way the model is told about
@@ -184,10 +266,8 @@ function blurbFor(name: string): string {
 const TOOL_BLURBS: Record<string, string> = {
   current_time:
     'What time it is, and what day. Without this it has no idea, and would guess.',
-  read_file:
-    'Open a text file in your folder and read it.',
-  list_dir:
-    'See what is in a folder, with file sizes.',
+  read_file: 'Open a text file in your folder and read it.',
+  list_dir: 'See what is in a folder, with file sizes.',
   search_knowledge_base:
     'Search your folder for a word or phrase and show the lines it appears on.',
   write_file:
@@ -199,10 +279,8 @@ const TOOL_BLURBS: Record<string, string> = {
     'Download a web page it has been given the address of. Unlike a search, the ' +
     'address can be anywhere — including inside your own network — so it is off ' +
     'until you ask for it.',
-  web_search:
-    'Search the web and read the results. No account or key needed.',
-  read_memory:
-    'Read its own notes about you and this folder.',
+  web_search: 'Search the web and read the results. No account or key needed.',
+  read_memory: 'Read its own notes about you and this folder.',
   update_memory:
     'Write something down to remember for next time — a preference, a decision, ' +
     'how something is set up. It keeps these in a file in your folder.',
@@ -233,7 +311,6 @@ const TOOL_BLURBS: Record<string, string> = {
   read_discord_messages: 'Read recent messages in a Discord channel.',
   list_discord_channels: 'See which Discord channels it can reach.',
 };
-
 
 export interface ToolDependencies {
   /** Shared with the agent's instruction provider, so memory stays one file. */
@@ -413,10 +490,7 @@ function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
    * be here: a name the profile has switched off still belongs to the built-in
    * that owns it, because the profile can change between turns.
    */
-  const reserved = new Set([
-    ...tools.map((tool) => tool.name),
-    'save_skill',
-  ]);
+  const reserved = new Set([...tools.map((tool) => tool.name), 'save_skill']);
   for (const source of deps.mcpServers ?? []) {
     granted.push(
       ...buildMcpTools({

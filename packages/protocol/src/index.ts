@@ -672,12 +672,46 @@ export function defaultWindowState(): WindowState {
 }
 
 /**
+ * How much of the app is on screen.
+ *
+ * `simple` is for somebody who wants a companion: a name, one answer about what
+ * it may do, and the model. `power` is everything the app can do, down to the
+ * provider, the address and the individual tool switches.
+ *
+ * Not a level and not a capability — nothing about the agent changes with this
+ * value. It decides which controls are drawn and how roomy they are, which is
+ * why it is stored rather than held in the window that reads it: it is the
+ * user's answer about the app, like the theme beside it, and a restart should
+ * not put the switches back.
+ */
+export const EXPERIENCE_MODES = ['simple', 'power'] as const;
+export const experienceModeSchema = z.enum(EXPERIENCE_MODES);
+export type ExperienceMode = z.infer<typeof experienceModeSchema>;
+
+/**
  * Settings are what applies to the app as a whole: how to reach the provider,
  * and the escape hatches. Anything about *an agent's* behaviour — who it is,
  * which folder it works in, which tools it may use — lives in a profile below,
  * because that is the unit the user switches between.
  */
 export const settingsSchema = z.object({
+  /**
+   * How much of the app to draw; see `EXPERIENCE_MODES`.
+   *
+   * `.catch` rather than a plain enum, for the reason the two list fields further
+   * down have it: a hand-edited file with a typo in this one word must cost the
+   * mode its own value, not fail the whole settings parse and reset every other
+   * preference the user has. What it falls back to is `power`, the app in full —
+   * the state that hides nothing, which is the right thing to land on when the
+   * file does not say what was meant.
+   *
+   * The default for a file that has never existed is the other one, and it is
+   * decided in the store rather than here: a fresh install should open on the
+   * simple screen, while a file written before this field existed belongs to
+   * somebody already using the whole app. One schema, two defaults, and the fact
+   * that tells them apart is whether there was a file at all.
+   */
+  experienceMode: experienceModeSchema.catch('power'),
   /**
    * Which model backend is live, and where each one lives.
    *
@@ -2248,6 +2282,14 @@ export interface AgentCallResults {
 export interface ProfileCatalog {
   tools: CatalogTool[];
   skills: CatalogEntry[];
+  /**
+   * The same tools, grouped into the three choices the simple screen offers.
+   *
+   * Here rather than in the renderer because the names are the agent package's:
+   * a list written in the window would be a second copy of the tool names, and
+   * the one thing that must not drift is which names a choice actually grants.
+   */
+  presets: CapabilityPreset[];
 }
 
 /** One tool as the settings screen offers it. */
@@ -2271,6 +2313,39 @@ export interface CatalogTool extends CatalogEntry {
    * tools it described.
    */
   byDefault: boolean;
+}
+
+/**
+ * What an agent may do, said as one choice rather than thirty switches.
+ *
+ * The list here is *tools*, not a description of them, and that is the whole
+ * design: choosing a preset is a write to `enabledTools`, exactly like ticking
+ * every switch it names would be. So this is a label on a state the profile
+ * already holds rather than a second, quieter place where a grant lives — the
+ * preset on screen is worked out by comparing that grant against these lists,
+ * and a grant that matches none of them is simply "custom" without anything
+ * having to record the fact.
+ *
+ * Where the names live is why this is filled in by the app: the tools are the
+ * agent package's, and a preset naming a tool this build does not have grants
+ * nothing rather than failing, which is what lets one list serve an install
+ * with Discord and one without.
+ */
+export interface CapabilityPreset {
+  id: string;
+  /** What the card says. */
+  label: string;
+  /** One line under it, for somebody deciding. */
+  blurb: string;
+  /** The tool names choosing this grants. */
+  tools: string[];
+  /**
+   * Whether this is what a brand-new agent gets.
+   *
+   * A field rather than "the second card", because the order is presentation and
+   * this is behaviour: moving a card should not change what an agent can do.
+   */
+  recommended: boolean;
 }
 
 /**

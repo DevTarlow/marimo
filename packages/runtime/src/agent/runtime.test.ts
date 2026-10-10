@@ -382,6 +382,34 @@ describe('the catalogue', () => {
     );
     expect(created.id).not.toBe(profileId);
   });
+
+  /*
+   * The presets are narrowed to what this install has, in the one place that
+   * knows what that is. A card promising the to-do tools on an install with no
+   * desk would be a choice that grants nothing — and the window, handed the
+   * list, would have no way to tell.
+   */
+  it('offers presets naming only the tools this install has', async () => {
+    const catalog = await runtime().catalog();
+    const names = new Set(catalog.tools.map((tool) => tool.name));
+
+    expect(catalog.presets.length).toBeGreaterThan(1);
+    for (const preset of catalog.presets) {
+      expect(preset.tools.length).toBeGreaterThan(0);
+      expect(preset.tools.filter((name) => !names.has(name))).toEqual([]);
+    }
+
+    /*
+     * This runtime wires no desk, and the desk is not part of the app yet, so
+     * the eight to-do and note tools are not built here — and the widest card
+     * must not offer them. The scheduling tools deliberately stay: this
+     * catalogue does list them, because the app has jobs.
+     */
+    const capable = catalog.presets.find((preset) => preset.id === 'capable');
+    expect(capable?.tools).toContain('create_job');
+    expect(capable?.tools).not.toContain('list_todos');
+    expect(capable?.tools).not.toContain('save_skill');
+  });
 });
 
 describe('changing an agent', () => {
@@ -846,7 +874,7 @@ describe('folders and filing', () => {
     ).not.toContain(id);
   });
 
-  it('chooses a conversation\'s model, and gives the choice up again', async () => {
+  it("chooses a conversation's model, and gives the choice up again", async () => {
     const agent = runtime();
     const session = await agent.createSession(profileId);
     const id = session?.id ?? '';
@@ -865,7 +893,9 @@ describe('folders and filing', () => {
      * real state in the entry — a conversation that kept showing a model after
      * giving the choice up would never follow a changed default again.
      */
-    expect((await agent.setSessionModel(profileId, id, null)).model).toBeUndefined();
+    expect(
+      (await agent.setSessionModel(profileId, id, null)).model,
+    ).toBeUndefined();
 
     await expect(
       agent.setSessionModel('someone-else', id, 'deepseek-flash'),

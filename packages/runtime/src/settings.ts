@@ -59,6 +59,21 @@ export function defaultAvailableModels(): Record<ProviderId, string[]> {
 export function defaultStoredSettings(): StoredSettings {
   return {
     providers: defaultProviders(),
+    /*
+     * Power, which is the app in full — and deliberately not the friendly one.
+     *
+     * This function's answer is what a settings file that says nothing gets, and
+     * a file that says nothing is either an upgrade from a build that had no
+     * such field or one this build could not read at all. Hiding controls from
+     * somebody who was already using them is the worse of the two mistakes, and
+     * it is the one that looks like a feature that stopped working.
+     *
+     * The single case that deserves the simple screen — a file that has never
+     * existed, which is a person meeting this app for the first time — is decided
+     * in `load`, where the difference between "no file" and "a file with no field
+     * in it" is actually visible.
+     */
+    experienceMode: 'power',
     appearance: defaultAppearance(),
     temperature: 0.7,
     allowPrivateNetworkFetch: false,
@@ -188,6 +203,22 @@ export class SettingsStore {
     }
 
     const defaults = defaultStoredSettings();
+    /*
+     * A file that has never existed is somebody meeting this app for the first
+     * time, and the first time is the one moment the simple screen is right.
+     *
+     * Which is why this is decided here rather than in the schema: the same
+     * "no value" reaches this function from a fresh install and from a file
+     * written before the field existed, and those two want opposite answers. The
+     * state of the *read* is the only thing that can tell them apart, and a
+     * `.catch` in the schema cannot see it.
+     *
+     * Everything else — an older file, a corrupt one, a hand-edited one — keeps
+     * the default above, which is the app in full.
+     */
+    if (read.state === 'absent') {
+      defaults.experienceMode = 'simple';
+    }
     /*
      * The nested blocks are filled in before the file is parsed as a whole.
      *

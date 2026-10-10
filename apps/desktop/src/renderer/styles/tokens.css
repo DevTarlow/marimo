@@ -133,3 +133,37 @@
   --transition-fast: 120ms ease;
   --transition: 180ms ease;
 }
+
+/*
+ * How roomy the window is, chosen by which screen the app is showing.
+ *
+ * `comfortable` is what the simple screen draws and `compact` is the block
+ * above, unchanged — which is deliberate rather than lazy. One set of numbers
+ * exists for the dense case and this block overrides the handful the roomy case
+ * needs, so there is no second copy of the scale to keep in step with the first,
+ * and the screen a power user sees is pixel-identical to the one this app has
+ * always had.
+ *
+ * Set on `<html>` by the window, beside `data-theme`, and only there: the
+ * companion is a fixed 340×460 bubble whose layout is measured in its own test,
+ * and breathing room inside it would be a bug rather than a kindness.
+ *
+ * Type goes up about one step, spacing about a fifth. Both are tokens, which is
+ * the whole reason this is twelve lines rather than an audit of every rule: no
+ * component stylesheet names a font size or a gap of its own.
+ */
+:root[data-density='comfortable'] {
+  --text-xs: 12px;
+  --text-sm: 13.5px;
+  --text-base: 15px;
+  --text-lg: 17px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+
+  --space-1: 5px;
+  --space-2: 10px;
+  --space-3: 14px;
+  --space-4: 18px;
+  --space-5: 26px;
+  --space-6: 34px;
+}

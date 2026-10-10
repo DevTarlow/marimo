@@ -73,7 +73,11 @@ function ok(message) {
 }
 
 /** Waits for something, or gives up. */
-async function until(what, attempt, {everyMs = 250, withinMs = DEADLINE_MS} = {}) {
+async function until(
+  what,
+  attempt,
+  {everyMs = 250, withinMs = DEADLINE_MS} = {},
+) {
   const deadline = Date.now() + withinMs;
   let last;
   while (Date.now() < deadline) {
@@ -87,7 +91,9 @@ async function until(what, attempt, {everyMs = 250, withinMs = DEADLINE_MS} = {}
     }
     await new Promise((resolve) => setTimeout(resolve, everyMs));
   }
-  throw new Error(`timed out waiting for ${what}${last ? `: ${last.message}` : ''}`);
+  throw new Error(
+    `timed out waiting for ${what}${last ? `: ${last.message}` : ''}`,
+  );
 }
 
 async function main() {
@@ -132,9 +138,13 @@ async function main() {
     socket = new WebSocket(page.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
       socket.addEventListener('open', resolve, {once: true});
-      socket.addEventListener('error', () => {
-        reject(new Error('could not attach to the window'));
-      }, {once: true});
+      socket.addEventListener(
+        'error',
+        () => {
+          reject(new Error('could not attach to the window'));
+        },
+        {once: true},
+      );
     });
 
     const {send, console: pageConsole} = await attach(socket);
@@ -259,8 +269,10 @@ async function main() {
     await evaluate(
       `document.querySelector('.rail-row[data-active="true"] .rail-row-menu')?.click()`,
     );
-    const menu = await until('the conversation menu to open', async () =>
-      await evaluate(`(() => {
+    const menu = await until(
+      'the conversation menu to open',
+      async () =>
+        await evaluate(`(() => {
         const menu = document.querySelector('.popover');
         if (menu === null) return undefined;
         const id = menu.querySelector('.popover-id code');
@@ -285,14 +297,18 @@ async function main() {
     ) {
       fail(`the conversation menu is missing actions: ${menu}`);
     } else {
-      ok('the conversation menu shows its id, a copy button, rename and delete');
+      ok(
+        'the conversation menu shows its id, a copy button, rename and delete',
+      );
     }
     // Escape closes it, and the check is that the listener is real rather than
     // that React re-rendered.
     await evaluate(
       `document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
     );
-    if ((await evaluate(`document.querySelector('.popover') === null`)) !== true) {
+    if (
+      (await evaluate(`document.querySelector('.popover') === null`)) !== true
+    ) {
       fail('Escape did not close the conversation menu');
     } else {
       ok('Escape closes the conversation menu');
@@ -307,10 +323,13 @@ async function main() {
      * chat this check files is one that will still be visible afterwards.
      */
     await reload();
-    const openId = await until('the rail to settle on the newest chat', async () => {
-      const id = await activeRowId();
-      return typeof id === 'string' && id.length > 0 ? id : undefined;
-    });
+    const openId = await until(
+      'the rail to settle on the newest chat',
+      async () => {
+        const id = await activeRowId();
+        return typeof id === 'string' && id.length > 0 ? id : undefined;
+      },
+    );
 
     /*
      * Load a folder, rename it, file the open chat under it and rename the chat
@@ -403,14 +422,18 @@ async function main() {
         return filed ? state : undefined;
       }),
     );
-    const loaded = rail.folders.find((folder) => folder.id === changed.folderId);
+    const loaded = rail.folders.find(
+      (folder) => folder.id === changed.folderId,
+    );
     if (loaded === undefined) {
       fail('the folder that was loaded is not in the rail after a reload');
     } else if (
       loaded.name !== 'Smoke folder' ||
       !loaded.chats.some((row) => row.id === openId)
     ) {
-      fail(`the chat was not filed under the loaded folder: ${JSON.stringify(loaded)}`);
+      fail(
+        `the chat was not filed under the loaded folder: ${JSON.stringify(loaded)}`,
+      );
     } else if (
       loaded.chats.find((row) => row.id === openId)?.title !== 'Smoke chat'
     ) {
@@ -467,13 +490,17 @@ async function main() {
         // Both halves of the end state: the folder is gone *and* the chat that
         // was filed under it is reachable elsewhere. Waiting only for the first
         // would pass during the window before boot has read the conversations.
-        return JSON.parse(state).otherChats.includes(openId) ? state : undefined;
+        return JSON.parse(state).otherChats.includes(openId)
+          ? state
+          : undefined;
       }),
     );
     if (after.folderIds.includes(changed.folderId)) {
       fail('the removed folder is still in the rail');
     } else if (!after.otherChats.includes(openId)) {
-      fail('the chat filed under the removed folder did not move to Other chats');
+      fail(
+        'the chat filed under the removed folder did not move to Other chats',
+      );
     } else {
       ok('a forgotten folder takes its chats to Other chats');
     }
@@ -488,61 +515,81 @@ async function main() {
       fail(`the theme attribute is "${probe.theme}", not light or dark`);
     } else {
       /*
-     * A fresh data directory has no timer installed and no key to encrypt, so
-     * this is what the row should say on a first run.
-     */
-    if (probe.serviceInstalled !== false || probe.serviceKeysReadable !== true) {
-      fail(
-        `the background-service row is wrong: installed=${String(probe.serviceInstalled)} ` +
-          `keysReadable=${String(probe.serviceKeysReadable)}`,
-      );
-    } else {
-      ok('the background-service row answered, and is off on a fresh install');
-    }
+       * A fresh data directory has no timer installed and no key to encrypt, so
+       * this is what the row should say on a first run.
+       */
+      if (
+        probe.serviceInstalled !== false ||
+        probe.serviceKeysReadable !== true
+      ) {
+        fail(
+          `the background-service row is wrong: installed=${String(probe.serviceInstalled)} ` +
+            `keysReadable=${String(probe.serviceKeysReadable)}`,
+        );
+      } else {
+        ok(
+          'the background-service row answered, and is off on a fresh install',
+        );
+      }
 
-    /*
-     * The scheduling tools are the specific ones that were unreachable, so they
-     * are the specific ones asserted. A count alone would pass on a catalogue
-     * that listed eleven read-only tools and nothing else.
-     */
-    const needed = ['read_file', 'write_file', 'run_shell', 'spawn_agent', 'create_job'];
-    const missing = needed.filter((name) => !probe.catalogNames?.includes(name));
-    if (missing.length > 0 || probe.catalogBlurbs !== true) {
-      fail(
-        `the tool catalogue is incomplete: missing ${missing.join(', ') || '(none)'}` +
-          `, blurbs ${String(probe.catalogBlurbs)}`,
+      /*
+       * The scheduling tools are the specific ones that were unreachable, so they
+       * are the specific ones asserted. A count alone would pass on a catalogue
+       * that listed eleven read-only tools and nothing else.
+       */
+      const needed = [
+        'read_file',
+        'write_file',
+        'run_shell',
+        'spawn_agent',
+        'create_job',
+      ];
+      const missing = needed.filter(
+        (name) => !probe.catalogNames?.includes(name),
       );
-    } else {
-      ok(`the tool catalogue offers ${String(probe.catalogNames?.length)} tools`);
-    }
+      if (missing.length > 0 || probe.catalogBlurbs !== true) {
+        fail(
+          `the tool catalogue is incomplete: missing ${missing.join(', ') || '(none)'}` +
+            `, blurbs ${String(probe.catalogBlurbs)}`,
+        );
+      } else {
+        ok(
+          `the tool catalogue offers ${String(probe.catalogNames?.length)} tools`,
+        );
+      }
 
-    /*
-     * The companion window. Asserted from here rather than photographed: the
-     * DevTools protocol cannot capture a transparent always-on-top window, so
-     * the evidence that it is up and *transparent* comes from the page itself.
-     */
-    const pages = await (await fetch(`http://127.0.0.1:${String(DEBUG_PORT)}/json/list`)).json();
-    const pet = pages.find(
-      (entry) => entry.type === 'page' && entry.url.includes('companion.html'),
-    );
-    if (pet === undefined) {
-      fail('the desktop companion window did not open');
-    } else {
-      const petSocket = new WebSocket(pet.webSocketDebuggerUrl);
-      await new Promise((resolve) => petSocket.addEventListener('open', resolve));
-      const answer = await new Promise((resolve) => {
-        petSocket.addEventListener('message', (event) => {
-          const message = JSON.parse(event.data);
-          if (message.id === 1) {
-            resolve(message.result?.result?.value ?? '');
-          }
-        });
-        petSocket.send(
-          JSON.stringify({
-            id: 1,
-            method: 'Runtime.evaluate',
-            params: {
-              expression: `(() => {
+      /*
+       * The companion window. Asserted from here rather than photographed: the
+       * DevTools protocol cannot capture a transparent always-on-top window, so
+       * the evidence that it is up and *transparent* comes from the page itself.
+       */
+      const pages = await (
+        await fetch(`http://127.0.0.1:${String(DEBUG_PORT)}/json/list`)
+      ).json();
+      const pet = pages.find(
+        (entry) =>
+          entry.type === 'page' && entry.url.includes('companion.html'),
+      );
+      if (pet === undefined) {
+        fail('the desktop companion window did not open');
+      } else {
+        const petSocket = new WebSocket(pet.webSocketDebuggerUrl);
+        await new Promise((resolve) =>
+          petSocket.addEventListener('open', resolve),
+        );
+        const answer = await new Promise((resolve) => {
+          petSocket.addEventListener('message', (event) => {
+            const message = JSON.parse(event.data);
+            if (message.id === 1) {
+              resolve(message.result?.result?.value ?? '');
+            }
+          });
+          petSocket.send(
+            JSON.stringify({
+              id: 1,
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `(() => {
                 const moss = document.querySelector('.pet-moss');
                 const bar = document.querySelector('.pet-input');
                 const column = document.querySelector('.pet-column');
@@ -568,71 +615,87 @@ async function main() {
                       : false,
                 });
               })()`,
-              returnByValue: true,
-            },
-          }),
-        );
-        setTimeout(() => { resolve(''); }, 5_000);
-      });
-      const state = answer.length > 0 ? JSON.parse(answer) : {};
-      if (state.moss !== true || state.input !== true || state.transparent !== true) {
-        fail(`the companion is wrong: ${answer}`);
-      } else if (state.mossAboveBar !== true || state.columnAboveMoss !== true) {
-        fail(`the companion's layout is out of order: ${answer}`);
-      } else {
-        ok('the desktop companion is up, transparent, and shaped answers → moss → bar');
-      }
+                returnByValue: true,
+              },
+            }),
+          );
+          setTimeout(() => {
+            resolve('');
+          }, 5_000);
+        });
+        const state = answer.length > 0 ? JSON.parse(answer) : {};
+        if (
+          state.moss !== true ||
+          state.input !== true ||
+          state.transparent !== true
+        ) {
+          fail(`the companion is wrong: ${answer}`);
+        } else if (
+          state.mossAboveBar !== true ||
+          state.columnAboveMoss !== true
+        ) {
+          fail(`the companion's layout is out of order: ${answer}`);
+        } else {
+          ok(
+            'the desktop companion is up, transparent, and shaped answers → moss → bar',
+          );
+        }
 
-      /*
-       * And now the thing that actually broke: does the pet *hear* the turn?
-       *
-       * The companion is not a decoration of the main window — it has no
-       * transcript of its own to fall back on. Bubbles come from the event
-       * stream, so a window that is broadcast to but not broadcast *at* looks
-       * perfectly healthy and completely silent, while the same conversation
-       * visibly progresses next door. Nothing about that is visible from the
-       * main window, from the stores, or from any unit test: the pet's calls all
-       * work, and only the answers were missing.
-       *
-       * A fresh install has no API key, so the honest expectation is not an
-       * answer — it is a reaction. Sending from the pet must produce *something*
-       * in the pet, and on this install that something is the refusal. Either
-       * outcome passes; silence does not.
-       */
-      const reacted = await new Promise((resolve) => {
-        const timer = setTimeout(() => { resolve('timed out'); }, 20_000);
-        let step = 0;
-        petSocket.addEventListener('message', (event) => {
-          const message = JSON.parse(event.data);
-          const value = message.result?.result?.value;
-          if (message.id === 2) {
-            // The send is away; give the turn a moment to be refused.
-            setTimeout(() => {
-              petSocket.send(JSON.stringify({
-                id: 3,
-                method: 'Runtime.evaluate',
-                params: {
-                  expression: `JSON.stringify({
+        /*
+         * And now the thing that actually broke: does the pet *hear* the turn?
+         *
+         * The companion is not a decoration of the main window — it has no
+         * transcript of its own to fall back on. Bubbles come from the event
+         * stream, so a window that is broadcast to but not broadcast *at* looks
+         * perfectly healthy and completely silent, while the same conversation
+         * visibly progresses next door. Nothing about that is visible from the
+         * main window, from the stores, or from any unit test: the pet's calls all
+         * work, and only the answers were missing.
+         *
+         * A fresh install has no API key, so the honest expectation is not an
+         * answer — it is a reaction. Sending from the pet must produce *something*
+         * in the pet, and on this install that something is the refusal. Either
+         * outcome passes; silence does not.
+         */
+        const reacted = await new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            resolve('timed out');
+          }, 20_000);
+          let step = 0;
+          petSocket.addEventListener('message', (event) => {
+            const message = JSON.parse(event.data);
+            const value = message.result?.result?.value;
+            if (message.id === 2) {
+              // The send is away; give the turn a moment to be refused.
+              setTimeout(() => {
+                petSocket.send(
+                  JSON.stringify({
+                    id: 3,
+                    method: 'Runtime.evaluate',
+                    params: {
+                      expression: `JSON.stringify({
                     bubbles: document.querySelectorAll('.pet-bubble').length,
                     error: !!document.querySelector('.pet-error'),
                     text: [...document.querySelectorAll('.pet-bubble')].map((b) => b.textContent).join(' ').slice(0, 80),
                   })`,
-                  returnByValue: true,
-                },
-              }));
-            }, 6_000);
-          }
-          if (message.id === 3) {
-            clearTimeout(timer);
-            resolve(value ?? 'no value');
-          }
-        });
-        // Type and press Enter the way a person does, through the real input.
-        petSocket.send(JSON.stringify({
-          id: 2,
-          method: 'Runtime.evaluate',
-          params: {
-            expression: `(() => {
+                      returnByValue: true,
+                    },
+                  }),
+                );
+              }, 6_000);
+            }
+            if (message.id === 3) {
+              clearTimeout(timer);
+              resolve(value ?? 'no value');
+            }
+          });
+          // Type and press Enter the way a person does, through the real input.
+          petSocket.send(
+            JSON.stringify({
+              id: 2,
+              method: 'Runtime.evaluate',
+              params: {
+                expression: `(() => {
               const input = document.querySelector('.pet-input');
               const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
               setter.call(input, 'smoke: does the pet hear the answer?');
@@ -640,61 +703,68 @@ async function main() {
               input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
               return 'sent';
             })()`,
-            returnByValue: true,
-          },
-        }));
-      });
-      if (reacted === 'timed out' || reacted === 'no value') {
-        fail(`the companion never answered the check: ${reacted}`);
-      } else {
-        const seen = JSON.parse(reacted);
-        if (seen.bubbles === 0 && seen.error !== true) {
-          fail(
-            'the companion received no events at all — it drew nothing after a ' +
-              'turn was started from its own chat bar, which is what a window ' +
-              'missing from broadcast() looks like',
+                returnByValue: true,
+              },
+            }),
           );
+        });
+        if (reacted === 'timed out' || reacted === 'no value') {
+          fail(`the companion never answered the check: ${reacted}`);
         } else {
-          ok(`the companion hears the turn stream (${seen.text || 'shown as an error'})`);
+          const seen = JSON.parse(reacted);
+          if (seen.bubbles === 0 && seen.error !== true) {
+            fail(
+              'the companion received no events at all — it drew nothing after a ' +
+                'turn was started from its own chat bar, which is what a window ' +
+                'missing from broadcast() looks like',
+            );
+          } else {
+            ok(
+              `the companion hears the turn stream (${seen.text || 'shown as an error'})`,
+            );
+          }
         }
+        petSocket.close();
       }
-      petSocket.close();
-    }
 
-    /*
-     * A fresh install opens by pointing at Settings rather than by showing a
-     * chat that refuses. Checked here because it is the first thing a new user
-     * sees and the only part of the first run that no unit test covers. The
-     * control is asserted, not just the copy: a welcome that says "add a key in
-     * Settings" with nothing to press is the dead end this screen exists to
-     * avoid.
-     */
-    const asked = await send('Runtime.evaluate', {
-      expression: `JSON.stringify({
+      /*
+       * A fresh install opens by pointing at Settings rather than by showing a
+       * chat that refuses. Checked here because it is the first thing a new user
+       * sees and the only part of the first run that no unit test covers. The
+       * control is asserted, not just the copy: a welcome that says "add a key in
+       * Settings" with nothing to press is the dead end this screen exists to
+       * avoid.
+       */
+      const asked = await send('Runtime.evaluate', {
+        expression: `JSON.stringify({
         onboarding: !!document.querySelector('.onboarding'),
         cta: !!document.querySelector('.onboarding .button-primary'),
         composer: !!document.querySelector('.composer-box'),
       })`,
-      returnByValue: true,
-    });
-    const first = JSON.parse(asked.result.value);
-    if (first.onboarding !== true || first.cta !== true) {
-      fail(`a fresh install did not point at Settings: ${asked.result.value}`);
-    } else if (first.composer !== true) {
-      // Not blocking: somebody who wants to look around first still can.
-      fail('the first run took the message box away');
-    } else {
-      ok('a fresh install points at Settings, without taking the window over');
-    }
+        returnByValue: true,
+      });
+      const first = JSON.parse(asked.result.value);
+      if (first.onboarding !== true || first.cta !== true) {
+        fail(
+          `a fresh install did not point at Settings: ${asked.result.value}`,
+        );
+      } else if (first.composer !== true) {
+        // Not blocking: somebody who wants to look around first still can.
+        fail('the first run took the message box away');
+      } else {
+        ok(
+          'a fresh install points at Settings, without taking the window over',
+        );
+      }
 
-    /*
-     * The composer's shape, which no unit test can see: this package has no DOM
-     * test environment, and the two facts asserted here are the ones a
-     * restructured composer gets wrong silently — the arrow belongs on the line
-     * the message is typed on, and it is a circle. A Send that moved back to a
-     * row of its own, or a labelled rectangle, would pass every other check.
-     */
-    const shape = await evaluate(`JSON.stringify((() => {
+      /*
+       * The composer's shape, which no unit test can see: this package has no DOM
+       * test environment, and the two facts asserted here are the ones a
+       * restructured composer gets wrong silently — the arrow belongs on the line
+       * the message is typed on, and it is a circle. A Send that moved back to a
+       * row of its own, or a labelled rectangle, would pass every other check.
+       */
+      const shape = await evaluate(`JSON.stringify((() => {
       const line = document.querySelector('.composer-line');
       const input = line?.querySelector('textarea.composer-input');
       const arrow = line?.querySelector('.composer-send');
@@ -712,28 +782,29 @@ async function main() {
         foot: !!document.querySelector('.composer-foot'),
       };
     })())`);
-    const composer = JSON.parse(shape);
-    if (composer.line !== true || composer.foot !== true) {
-      fail(`the composer lost its structure: ${shape}`);
-    } else if (composer.sameLine !== true) {
-      fail('the send button is not on the line the message is typed on');
-    } else if (composer.round !== true) {
-      fail('the send button is not a circle');
-    } else if (composer.label !== 'Send message' || composer.glyph !== '↑') {
-      fail(`the send button is not the arrow it should be: ${shape}`);
-    } else {
-      ok('the composer types and sends on one line, with a round arrow');
-    }
+      const composer = JSON.parse(shape);
+      if (composer.line !== true || composer.foot !== true) {
+        fail(`the composer lost its structure: ${shape}`);
+      } else if (composer.sameLine !== true) {
+        fail('the send button is not on the line the message is typed on');
+      } else if (composer.round !== true) {
+        fail('the send button is not a circle');
+      } else if (composer.label !== 'Send message' || composer.glyph !== '↑') {
+        fail(`the send button is not the arrow it should be: ${shape}`);
+      } else {
+        ok('the composer types and sends on one line, with a round arrow');
+      }
 
-    /*
-     * The `+` menu: the things a message can carry that are not typed. Drawn by
-     * the popover primitive the rail menus share, which is why a break here shows
-     * up as a menu that never opens — and it has to open *upwards*, because the
-     * control it belongs to sits at the bottom of the window.
-     */
-    await evaluate(`document.querySelector('.composer-add')?.click()`);
-    const addMenu = await until('the + menu to open', async () => {
-      const state = await evaluate(`(() => {
+      /*
+       * The `+` menu: the things a message can carry that are not typed. Drawn by
+       * the popover primitive the rail menus share, which is why a break here shows
+       * up as a menu that never opens — and it has to open *upwards*, because the
+       * control it belongs to sits at the bottom of the window.
+       */
+      await evaluate(`document.querySelector('.composer-add')?.click()`);
+      const addMenu = await until('the + menu to open', async () => {
+        const state = await evaluate(
+          `(() => {
         const menu = document.querySelector('.popover');
         const plus = document.querySelector('.composer-add');
         if (menu === null || plus === null) return undefined;
@@ -746,7 +817,8 @@ async function main() {
           above: box.bottom <= anchor.top + 1,
           /*
            * The rule the popover exists to keep: the menu is on screen. On this
-           * screen there is room below the `+` — a fresh install shows the
+           * screen there is room below the ` +
+            ` — a fresh install shows the
            * welcome card instead of a transcript, so the composer is not yet at
            * the bottom of the window — and in a conversation there is none, so
            * what is asserted is that it flipped exactly when it had to.
@@ -760,80 +832,92 @@ async function main() {
             viewport: window.innerHeight,
           },
         });
-      })()`);
-      return state === undefined ? undefined : JSON.parse(state);
-    });
-    if (!addMenu.items.includes('Add files…')) {
-      fail(`the + menu has no way to add a file: ${JSON.stringify(addMenu.items)}`);
-    } else if (!addMenu.items.includes('Compact history')) {
+      })()`,
+        );
+        return state === undefined ? undefined : JSON.parse(state);
+      });
+      if (!addMenu.items.includes('Add files…')) {
+        fail(
+          `the + menu has no way to add a file: ${JSON.stringify(addMenu.items)}`,
+        );
+      } else if (!addMenu.items.includes('Compact history')) {
+        /*
+         * The command catalogue and the setting that switches one off travel
+         * protocol → settings → this menu. An empty list here means one of those
+         * three stopped agreeing with the others, which is invisible from every
+         * unit test each of them passes on its own.
+         */
+        fail(`the + menu offers no commands: ${JSON.stringify(addMenu.items)}`);
+      } else if (addMenu.withinViewport !== true) {
+        fail(
+          `the + menu is off the bottom of the window: ${JSON.stringify(addMenu.where)}`,
+        );
+      } else if (addMenu.needsFlip === true && addMenu.above !== true) {
+        fail('the + menu did not flip above a trigger with no room below it');
+      } else {
+        ok(`the + menu opens on screen with: ${addMenu.items.join(', ')}`);
+      }
+      await evaluate(
+        `document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
+      );
+      if (
+        (await evaluate(`document.querySelector('.popover') === null`)) !== true
+      ) {
+        fail('Escape did not close the + menu');
+      }
+
       /*
-       * The command catalogue and the setting that switches one off travel
-       * protocol → settings → this menu. An empty list here means one of those
-       * three stopped agreeing with the others, which is invisible from every
-       * unit test each of them passes on its own.
+       * The compact command, run the way a person runs it.
+       *
+       * On this machine there is no key, so what it *must* do is say so: a command
+       * that reported success, or said nothing at all, would be worse than one that
+       * fails. That makes the assertion here the honest one for a fresh install —
+       * and it still proves the whole path, because the sentence comes from the
+       * provider configuration at the far end of it. A missing IPC handler would
+       * arrive as "unknown method" instead.
        */
-      fail(`the + menu offers no commands: ${JSON.stringify(addMenu.items)}`);
-    } else if (addMenu.withinViewport !== true) {
-      fail(
-        `the + menu is off the bottom of the window: ${JSON.stringify(addMenu.where)}`,
+      await evaluate(`document.querySelector('.composer-add')?.click()`);
+      await until(
+        'the + menu to reopen',
+        async () =>
+          await evaluate(`document.querySelector('.popover') !== null`),
       );
-    } else if (addMenu.needsFlip === true && addMenu.above !== true) {
-      fail('the + menu did not flip above a trigger with no room below it');
-    } else {
-      ok(`the + menu opens on screen with: ${addMenu.items.join(', ')}`);
-    }
-    await evaluate(
-      `document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
-    );
-    if ((await evaluate(`document.querySelector('.popover') === null`)) !== true) {
-      fail('Escape did not close the + menu');
-    }
-
-    /*
-     * The compact command, run the way a person runs it.
-     *
-     * On this machine there is no key, so what it *must* do is say so: a command
-     * that reported success, or said nothing at all, would be worse than one that
-     * fails. That makes the assertion here the honest one for a fresh install —
-     * and it still proves the whole path, because the sentence comes from the
-     * provider configuration at the far end of it. A missing IPC handler would
-     * arrive as "unknown method" instead.
-     */
-    await evaluate(`document.querySelector('.composer-add')?.click()`);
-    await until('the + menu to reopen', async () =>
-      await evaluate(`document.querySelector('.popover') !== null`),
-    );
-    await evaluate(
-      `[...document.querySelectorAll('.popover-item')]
+      await evaluate(
+        `[...document.querySelectorAll('.popover-item')]
         .find((item) => item.textContent.trim() === 'Compact history')?.click()`,
-    );
-    const refusal = await until('the complaint about the missing key', async () => {
-      const text = await evaluate(
-        `document.querySelector('.composer-hint.is-failure')?.textContent ?? null`,
       );
-      return typeof text === 'string' ? text : undefined;
-    });
-    if (!/API key/u.test(refusal)) {
-      fail(`compacting without a key said the wrong thing: ${refusal}`);
-    } else {
-      ok('the compact command reached the agent and reported the missing key');
-    }
+      const refusal = await until(
+        'the complaint about the missing key',
+        async () => {
+          const text = await evaluate(
+            `document.querySelector('.composer-hint.is-failure')?.textContent ?? null`,
+          );
+          return typeof text === 'string' ? text : undefined;
+        },
+      );
+      if (!/API key/u.test(refusal)) {
+        fail(`compacting without a key said the wrong thing: ${refusal}`);
+      } else {
+        ok(
+          'the compact command reached the agent and reported the missing key',
+        );
+      }
 
-    /*
-     * The composer's model picker, driven the way a person drives it.
-     *
-     * Choosing a model travels schema → IPC → the conversation index → the rail
-     * and back, and the list has to open *upwards* because the box it belongs to
-     * sits at the bottom of the window. Neither is visible from a unit test, and
-     * both are silent when wrong: a list that opened downwards would simply be
-     * off screen, and a picker whose write never landed would keep showing the
-     * old name.
-     */
-    await evaluate(
-      `document.querySelector('.composer-model .model-picker-trigger')?.click()`,
-    );
-    const opened = await until('the model list to open', async () => {
-      const state = await evaluate(`(() => {
+      /*
+       * The composer's model picker, driven the way a person drives it.
+       *
+       * Choosing a model travels schema → IPC → the conversation index → the rail
+       * and back, and the list has to open *upwards* because the box it belongs to
+       * sits at the bottom of the window. Neither is visible from a unit test, and
+       * both are silent when wrong: a list that opened downwards would simply be
+       * off screen, and a picker whose write never landed would keep showing the
+       * old name.
+       */
+      await evaluate(
+        `document.querySelector('.composer-model .model-picker-trigger')?.click()`,
+      );
+      const opened = await until('the model list to open', async () => {
+        const state = await evaluate(`(() => {
         const trigger = document.querySelector('.composer-model .model-picker-trigger');
         const popover = document.querySelector('.composer-model .model-picker-popover');
         if (trigger === null || popover === null) return undefined;
@@ -846,28 +930,30 @@ async function main() {
           choice: !popover.querySelector('.model-picker-default'),
         });
       })()`);
-      return state === undefined ? undefined : JSON.parse(state);
-    });
-    if (opened.above !== true) {
-      fail('the model list opens downwards, off the bottom of the window');
-    } else if (opened.search !== true || opened.options < 1) {
-      fail(`the model list has nothing to choose from: ${JSON.stringify(opened)}`);
-    } else if (opened.choice !== true) {
-      /*
-       * A conversation that has never picked a model is following the default.
-       * Offering to "follow the app default" before there is a choice to give up
-       * is a row that does nothing.
-       */
-      fail('a conversation with no model of its own offers to give one up');
-    } else {
-      ok(`the model list opens upwards with ${opened.options} models`);
-    }
+        return state === undefined ? undefined : JSON.parse(state);
+      });
+      if (opened.above !== true) {
+        fail('the model list opens downwards, off the bottom of the window');
+      } else if (opened.search !== true || opened.options < 1) {
+        fail(
+          `the model list has nothing to choose from: ${JSON.stringify(opened)}`,
+        );
+      } else if (opened.choice !== true) {
+        /*
+         * A conversation that has never picked a model is following the default.
+         * Offering to "follow the app default" before there is a choice to give up
+         * is a row that does nothing.
+         */
+        fail('a conversation with no model of its own offers to give one up');
+      } else {
+        ok(`the model list opens upwards with ${opened.options} models`);
+      }
 
-    await evaluate(
-      `document.querySelector('.composer-model .model-picker-option')?.click()`,
-    );
-    const chosen = await until('the chosen model to be shown', async () => {
-      const state = await evaluate(`(() => {
+      await evaluate(
+        `document.querySelector('.composer-model .model-picker-option')?.click()`,
+      );
+      const chosen = await until('the chosen model to be shown', async () => {
+        const state = await evaluate(`(() => {
         const trigger = document.querySelector('.composer-model .model-picker-trigger');
         if (trigger === null) return undefined;
         // The popover closing *and* the note going are the two halves of the
@@ -878,114 +964,186 @@ async function main() {
           ? trigger.textContent.trim()
           : undefined;
       })()`);
-      return state === undefined ? undefined : state;
-    });
-    ok(`the conversation now answers with ${chosen}`);
+        return state === undefined ? undefined : state;
+      });
+      ok(`the conversation now answers with ${chosen}`);
 
-    await evaluate(
-      `document.querySelector('.composer-model .model-picker-trigger')?.click()`,
-    );
-    await until('the list to open again', async () =>
       await evaluate(
-        `document.querySelector('.composer-model .model-picker-default') !== null`,
-      ),
-    );
-    await evaluate(
-      `document.querySelector('.composer-model .model-picker-default')?.click()`,
-    );
-    const back = await until('the choice to be given up', async () => {
-      const note = await evaluate(
-        `document.querySelector('.composer-model .model-picker-note')?.textContent ?? null`,
+        `document.querySelector('.composer-model .model-picker-trigger')?.click()`,
       );
-      return note === 'default' ? note : undefined;
-    });
-    if (back !== 'default') {
-      fail('giving up the model choice did not go back to the app default');
-    } else {
-      ok('the model choice can be given up, and the conversation follows the default');
-    }
+      await until(
+        'the list to open again',
+        async () =>
+          await evaluate(
+            `document.querySelector('.composer-model .model-picker-default') !== null`,
+          ),
+      );
+      await evaluate(
+        `document.querySelector('.composer-model .model-picker-default')?.click()`,
+      );
+      const back = await until('the choice to be given up', async () => {
+        const note = await evaluate(
+          `document.querySelector('.composer-model .model-picker-note')?.textContent ?? null`,
+        );
+        return note === 'default' ? note : undefined;
+      });
+      if (back !== 'default') {
+        fail('giving up the model choice did not go back to the app default');
+      } else {
+        ok(
+          'the model choice can be given up, and the conversation follows the default',
+        );
+      }
 
-    /*
-     * The provider picker, opened the way a person opens it.
-     *
-     * Its list is drawn from the protocol catalogue and its value comes from the
-     * settings schema, so a provider on one side and not the other is a menu
-     * that quietly offers the wrong set — and a `<select>` whose value matches no
-     * option shows its first entry instead of what is stored. Neither is visible
-     * from a unit test, because each side is right on its own.
-     */
-    await send('Runtime.evaluate', {
-      expression: `[...document.querySelectorAll('.head button')]
+      /*
+       * The provider picker, opened the way a person opens it.
+       *
+       * Its list is drawn from the protocol catalogue and its value comes from the
+       * settings schema, so a provider on one side and not the other is a menu
+       * that quietly offers the wrong set — and a `<select>` whose value matches no
+       * option shows its first entry instead of what is stored. Neither is visible
+       * from a unit test, because each side is right on its own.
+       */
+      await send('Runtime.evaluate', {
+        expression: `[...document.querySelectorAll('.head button')]
         .find((entry) => entry.textContent.trim() === 'Settings')
         ?.click()`,
-      returnByValue: true,
-    });
+        returnByValue: true,
+      });
 
-    /*
-     * The sections fold, and they start folded.
-     *
-     * Asserted because every check below reaches *into* a panel: a folded
-     * `<details>` still answers a DOM query and still takes a programmatic
-     * click, so without this the rest of this block would pass against a dialog
-     * nobody can get at.
-     */
-    const foldedSections = await until('the settings sections', async () => {
-      const value = await evaluate(`(() => {
+      /*
+       * Which size the dialog opens at, and what that size means.
+       *
+       * A fresh install lands on the simple screen — that is the whole promise of
+       * it, and it is one line in a store and a page of React away from being
+       * false. Counting the sections is the only way to know, because every check
+       * below reaches *into* this dialog and a section that quietly stopped being
+       * drawn would take its own coverage with it.
+       */
+      const simpleScreen = await until('the settings sections', async () => {
+        const value = await evaluate(`(() => {
         const sections = [...document.querySelectorAll('details.settings-section')];
         if (sections.length === 0) return undefined;
-        return JSON.stringify(
-          sections.map((entry) => ({
-            title: entry.querySelector('h3')?.textContent ?? '',
-            open: entry.open,
+        const box = document.querySelector('.settings-mode input[type="checkbox"]');
+        const cards = [...document.querySelectorAll('.capability-card')];
+        return JSON.stringify({
+          titles: sections.map((entry) => entry.querySelector('h3')?.textContent ?? ''),
+          openOnArrival: sections.filter((entry) => entry.open).length,
+          mode: box?.checked ?? null,
+          choices: cards.map((card) => ({
+            label: card.querySelector('.capability-label')?.textContent ?? '',
+            chosen: card.getAttribute('aria-pressed') === 'true',
           })),
-        );
+          density: document.documentElement.dataset.density ?? '',
+        });
       })()`);
-      return value === undefined ? undefined : JSON.parse(value);
-    });
-    const openOnArrival = foldedSections.filter((entry) => entry.open);
-    if (foldedSections.length < 8) {
-      fail(`the dialog has ${String(foldedSections.length)} foldable section(s)`);
-    } else if (openOnArrival.length > 0) {
-      fail(
-        `a fresh install expands ${openOnArrival
-          .map((entry) => entry.title)
-          .join(', ')}`,
-      );
-    } else {
-      ok(`all ${String(foldedSections.length)} settings sections start folded`);
-    }
+        return value === undefined ? undefined : JSON.parse(value);
+      });
 
-    /**
-     * Opens a section the way a person does — a click on its heading.
-     *
-     * Idempotent, because the fold is stored: the walk below comes back to the
-     * Commands panel a second time and it is still open from the first visit.
-     */
-    const openSection = async (title) => {
+      const litCards = simpleScreen.choices.filter((entry) => entry.chosen);
+      if (simpleScreen.mode !== false) {
+        fail('a fresh install opens with the power-user switch already on');
+      } else if (simpleScreen.titles.includes('Provider')) {
+        fail(
+          'a fresh install opens on the screen the switch is supposed to reveal',
+        );
+      } else if (simpleScreen.titles.length < 4) {
+        fail(
+          `the simple screen has only ${String(simpleScreen.titles.length)} section(s)`,
+        );
+      } else if (simpleScreen.choices.length < 3) {
+        fail(
+          `the simple screen offers ${String(simpleScreen.choices.length)} choice(s)`,
+        );
+      } else if (litCards.length !== 1) {
+        fail(
+          `${String(litCards.length)} of the ${String(simpleScreen.choices.length)} ability ` +
+            'cards are lit on a fresh install',
+        );
+      } else if (simpleScreen.openOnArrival > 0) {
+        fail('a fresh install opens with a settings section already expanded');
+      } else if (simpleScreen.density !== 'comfortable') {
+        fail(`the simple screen is drawn at density "${simpleScreen.density}"`);
+      } else {
+        ok(
+          `a fresh install opens simple: ${String(simpleScreen.titles.length)} sections, ` +
+            `${String(simpleScreen.choices.length)} choices, "${litCards[0].label}" lit`,
+        );
+      }
+
+      /*
+       * The switch, turned the way a person turns it.
+       *
+       * Its effect is deliberately in two places at once that neither the store nor
+       * a unit test can see together: which sections this dialog draws, and how
+       * roomy the window behind it is. Both are asserted in one look, because a
+       * switch that turned on the sections and not the density is exactly the kind
+       * of half-working that ships.
+       */
       await evaluate(`(() => {
+      const box = document.querySelector('.settings-mode input[type="checkbox"]');
+      if (box !== null && !box.checked) box.click();
+    })()`);
+
+      const powerScreen = await until('the power screen', async () => {
+        const value = await evaluate(`(() => {
+        const sections = [...document.querySelectorAll('details.settings-section')];
+        const box = document.querySelector('.settings-mode input[type="checkbox"]');
+        return JSON.stringify({
+          count: sections.length,
+          titles: sections.map((entry) => entry.querySelector('h3')?.textContent ?? ''),
+          checked: box?.checked ?? null,
+          density: document.documentElement.dataset.density ?? '',
+        });
+      })()`);
+        const parsed = value === undefined ? undefined : JSON.parse(value);
+        return parsed?.count >= 8 ? parsed : undefined;
+      });
+
+      if (powerScreen.checked !== true) {
+        fail('the power-user switch would not stay on');
+      } else if (!powerScreen.titles.includes('Provider')) {
+        fail('turning the switch on did not reveal the Provider section');
+      } else if (powerScreen.density !== 'compact') {
+        fail(`the power screen is drawn at density "${powerScreen.density}"`);
+      } else {
+        ok(
+          `the switch reveals the whole app: ${String(powerScreen.count)} sections, ` +
+            'and the window back to its usual density',
+        );
+      }
+
+      /**
+       * Opens a section the way a person does — a click on its heading.
+       *
+       * Idempotent, because the fold is stored: the walk below comes back to the
+       * Commands panel a second time and it is still open from the first visit.
+       */
+      const openSection = async (title) => {
+        await evaluate(`(() => {
         const section = [...document.querySelectorAll('details.settings-section')]
           .find((entry) => entry.querySelector('h3')?.textContent === ${JSON.stringify(title)});
         if (section !== undefined && !section.open) {
           section.querySelector('summary')?.click();
         }
       })()`);
-      const opened = await until(`the ${title} section to open`, async () => {
-        const value = await evaluate(`(() => {
+        const opened = await until(`the ${title} section to open`, async () => {
+          const value = await evaluate(`(() => {
           const section = [...document.querySelectorAll('details.settings-section')]
             .find((entry) => entry.querySelector('h3')?.textContent === ${JSON.stringify(title)});
           return section === undefined ? undefined : section.open;
         })()`);
-        return value === true ? true : undefined;
-      });
-      if (opened !== true) {
-        fail(`the ${title} section could not be opened`);
-      }
-    };
+          return value === true ? true : undefined;
+        });
+        if (opened !== true) {
+          fail(`the ${title} section could not be opened`);
+        }
+      };
 
-    await openSection('Provider');
-    const picker = await until('the provider picker to appear', async () => {
-      const {result} = await send('Runtime.evaluate', {
-        expression: `(() => {
+      await openSection('Provider');
+      const picker = await until('the provider picker to appear', async () => {
+        const {result} = await send('Runtime.evaluate', {
+          expression: `(() => {
           const section = [...document.querySelectorAll('.settings-section')]
             .find((entry) => entry.querySelector('h3')?.textContent === 'Provider');
           if (section === undefined) return undefined;
@@ -1002,6 +1160,13 @@ async function main() {
           const keyInput = section.querySelector('input[type="password"]');
           const fetchButton = [...section.querySelectorAll('button')]
             .find((entry) => entry.textContent.trim() === 'Fetch Models');
+          /*
+           * The temperature slider is here too, and it is the older kind of
+           * check: the settings file has always held this number and no screen
+           * ever drew it, so a control that quietly stops being drawn takes a
+           * setting nothing can reach with it.
+           */
+          const temperature = section.querySelector('input[type="range"]');
           return JSON.stringify({
             labels: [...providers.options].map((option) => option.textContent),
             active: providers.value,
@@ -1010,60 +1175,71 @@ async function main() {
             hasKeyInput: keyInput !== null,
             hasFetchButton: fetchButton !== undefined,
             fetchDisabled: fetchButton?.disabled ?? null,
+            temperature: temperature?.value ?? null,
           });
         })()`,
-        returnByValue: true,
+          returnByValue: true,
+        });
+        return typeof result?.value === 'string'
+          ? JSON.parse(result.value)
+          : undefined;
       });
-      return typeof result?.value === 'string'
-        ? JSON.parse(result.value)
-        : undefined;
-    });
 
-    const providerLabels = picker.labels ?? [];
-    const sortedLabels = [...providerLabels].sort((a, b) => a.localeCompare(b));
-    if (picker.incomplete === true) {
-      fail('the provider section is missing one of its controls');
-    } else if (providerLabels.length < 2) {
-      fail(`the provider picker offers ${providerLabels.length} provider(s)`);
-    } else if (providerLabels.join('\u0000') !== sortedLabels.join('\u0000')) {
-      fail(
-        `the provider picker is out of alphabetical order: ${providerLabels.join(', ')}`,
+      const providerLabels = picker.labels ?? [];
+      const sortedLabels = [...providerLabels].sort((a, b) =>
+        a.localeCompare(b),
       );
-    } else if (!Array.isArray(picker.models) || picker.models.length === 0) {
-      fail(`the model picker is empty for "${picker.active}"`);
-    } else if (!/^https?:\/\//u.test(picker.baseUrl ?? '')) {
-      fail(`the base URL box holds "${picker.baseUrl}"`);
-    } else if (picker.hasKeyInput !== true) {
-      fail('the API key box is not in the provider section');
-    } else if (picker.hasFetchButton !== true) {
-      fail('the provider section has no Fetch Models button');
-    } else if (picker.fetchDisabled !== true) {
-      // A fresh install has no key stored, so there is nothing to ask the
-      // endpoint yet — the button is present but refused.
-      fail('Fetch Models is offered before a key is stored');
-    } else {
-      ok(
-        `the provider picker offers ${String(providerLabels.length)} providers, ` +
-          `alphabetically: ${providerLabels.join(', ')}`,
-      );
-      ok(
-        'the provider section carries the key box and a key-gated Fetch Models ' +
-          'button',
-      );
-    }
+      if (picker.incomplete === true) {
+        fail('the provider section is missing one of its controls');
+      } else if (providerLabels.length < 2) {
+        fail(`the provider picker offers ${providerLabels.length} provider(s)`);
+      } else if (
+        providerLabels.join('\u0000') !== sortedLabels.join('\u0000')
+      ) {
+        fail(
+          `the provider picker is out of alphabetical order: ${providerLabels.join(', ')}`,
+        );
+      } else if (!Array.isArray(picker.models) || picker.models.length === 0) {
+        fail(`the model picker is empty for "${picker.active}"`);
+      } else if (!/^https?:\/\//u.test(picker.baseUrl ?? '')) {
+        fail(`the base URL box holds "${picker.baseUrl}"`);
+      } else if (picker.hasKeyInput !== true) {
+        fail('the API key box is not in the provider section');
+      } else if (picker.hasFetchButton !== true) {
+        fail('the provider section has no Fetch Models button');
+      } else if (picker.fetchDisabled !== true) {
+        // A fresh install has no key stored, so there is nothing to ask the
+        // endpoint yet — the button is present but refused.
+        fail('Fetch Models is offered before a key is stored');
+      } else if (picker.temperature !== '0.7') {
+        fail(
+          `the temperature slider opens at ${String(picker.temperature)}, not the ` +
+            '0.7 the settings file defaults to',
+        );
+      } else {
+        ok(
+          `the provider picker offers ${String(providerLabels.length)} providers, ` +
+            `alphabetically: ${providerLabels.join(', ')}`,
+        );
+        ok(
+          'the provider section carries the key box and a key-gated Fetch Models ' +
+            'button',
+        );
+        ok(`the temperature slider is drawn, at ${String(picker.temperature)}`);
+      }
 
-    /*
-     * The two prompt boxes, asserted in the bundle the window actually loaded.
-     * The identity is the app's text and the preferences box is the user's, kept
-     * apart so that Reset can restore one without touching the other — a build
-     * that rendered one of them, or merged them back together, would pass every
-     * unit test above and still be the wrong screen.
-     */
-    const prompts = await until(
-      'the identity and preferences boxes to appear',
-      async () => {
-        const {result} = await send('Runtime.evaluate', {
-          expression: `(() => {
+      /*
+       * The two prompt boxes, asserted in the bundle the window actually loaded.
+       * The identity is the app's text and the preferences box is the user's, kept
+       * apart so that Reset can restore one without touching the other — a build
+       * that rendered one of them, or merged them back together, would pass every
+       * unit test above and still be the wrong screen.
+       */
+      const prompts = await until(
+        'the identity and preferences boxes to appear',
+        async () => {
+          const {result} = await send('Runtime.evaluate', {
+            expression: `(() => {
             const section = [...document.querySelectorAll('.settings-section')]
               .find((entry) => entry.querySelector('h3')?.textContent === 'What it is');
             if (section === undefined) return undefined;
@@ -1085,43 +1261,47 @@ async function main() {
               ),
             });
           })()`,
-          returnByValue: true,
-        });
-        return typeof result?.value === 'string'
-          ? JSON.parse(result.value)
-          : undefined;
-      },
-    );
-
-    if (prompts.incomplete === true) {
-      fail('the "What it is" section is missing one of its boxes');
-    } else if ((prompts.name ?? '').length === 0) {
-      fail('the agent has no name in Settings');
-    } else if (prompts.identityLength === 0) {
-      fail('the identity box is empty on a fresh install');
-    } else if (prompts.reset !== true) {
-      fail('the identity box has no Reset to default button');
-    } else if (prompts.preferences !== '') {
-      fail(`a fresh install starts with preferences: "${prompts.preferences}"`);
-    } else if ((prompts.placeholder ?? '').length === 0) {
-      // The example is how somebody works out what the box is for.
-      fail('the preferences box has no example in it');
-    } else {
-      ok(
-        'Settings carries the app identity, a Reset, and an empty box for your ' +
-          'own words',
+            returnByValue: true,
+          });
+          return typeof result?.value === 'string'
+            ? JSON.parse(result.value)
+            : undefined;
+        },
       );
-    }
 
-    /*
-     * A command switched off in Settings is *absent* from the composer's menu
-     * rather than merely discouraged there — the rule the whole capability model
-     * rests on, and the one that cannot be checked from either side alone: the
-     * switch writes the settings file and the menu reads it, in two processes
-     * and three layers apart.
-     */
-    const switched = await until('the Commands section to answer', async () => {
-      const state = await evaluate(`(() => {
+      if (prompts.incomplete === true) {
+        fail('the "What it is" section is missing one of its boxes');
+      } else if ((prompts.name ?? '').length === 0) {
+        fail('the agent has no name in Settings');
+      } else if (prompts.identityLength === 0) {
+        fail('the identity box is empty on a fresh install');
+      } else if (prompts.reset !== true) {
+        fail('the identity box has no Reset to default button');
+      } else if (prompts.preferences !== '') {
+        fail(
+          `a fresh install starts with preferences: "${prompts.preferences}"`,
+        );
+      } else if ((prompts.placeholder ?? '').length === 0) {
+        // The example is how somebody works out what the box is for.
+        fail('the preferences box has no example in it');
+      } else {
+        ok(
+          'Settings carries the app identity, a Reset, and an empty box for your ' +
+            'own words',
+        );
+      }
+
+      /*
+       * A command switched off in Settings is *absent* from the composer's menu
+       * rather than merely discouraged there — the rule the whole capability model
+       * rests on, and the one that cannot be checked from either side alone: the
+       * switch writes the settings file and the menu reads it, in two processes
+       * and three layers apart.
+       */
+      const switched = await until(
+        'the Commands section to answer',
+        async () => {
+          const state = await evaluate(`(() => {
         const section = [...document.querySelectorAll('.settings-section')]
           .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
         if (!section) return undefined;
@@ -1129,44 +1309,51 @@ async function main() {
         const label = section.querySelector('.settings-check span')?.textContent ?? '';
         return JSON.stringify({found: true, checked: box?.checked, label});
       })()`);
-      return state === undefined ? undefined : JSON.parse(state);
-    });
-    if (switched.checked !== true) {
-      fail(`a fresh install has the command switched off: ${JSON.stringify(switched)}`);
-    } else if (!/Compact history/u.test(switched.label)) {
-      fail(`the Commands section names the wrong thing: ${switched.label}`);
-    } else {
-      await openSection('Commands');
-      await evaluate(
-        `(() => {
+          return state === undefined ? undefined : JSON.parse(state);
+        },
+      );
+      if (switched.checked !== true) {
+        fail(
+          `a fresh install has the command switched off: ${JSON.stringify(switched)}`,
+        );
+      } else if (!/Compact history/u.test(switched.label)) {
+        fail(`the Commands section names the wrong thing: ${switched.label}`);
+      } else {
+        await openSection('Commands');
+        await evaluate(
+          `(() => {
           const section = [...document.querySelectorAll('.settings-section')]
             .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
           section?.querySelector('input[type="checkbox"]')?.click();
         })()`,
-      );
-      const off = await until('the switch to take', async () => {
-        const value = await evaluate(`(() => {
+        );
+        const off = await until('the switch to take', async () => {
+          const value = await evaluate(`(() => {
           const section = [...document.querySelectorAll('.settings-section')]
             .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
           const box = section?.querySelector('input[type="checkbox"]');
           return box === null || box === undefined ? undefined : !box.checked;
         })()`);
-        return value === true ? true : undefined;
-      });
-      if (off !== true) {
-        fail('switching a command off in Settings did not take');
-      } else {
-        // Back to the chat, where the menu either offers it or does not.
-        await evaluate(
-          `[...document.querySelectorAll('.settings-head button')]
+          return value === true ? true : undefined;
+        });
+        if (off !== true) {
+          fail('switching a command off in Settings did not take');
+        } else {
+          // Back to the chat, where the menu either offers it or does not.
+          await evaluate(
+            `[...document.querySelectorAll('.settings-head button')]
             .find((entry) => entry.textContent.trim() === 'Back to chat')?.click()`,
-        );
-        await until('the composer to come back', async () =>
-          await evaluate(`document.querySelector('.composer-add') !== null`),
-        );
-        await evaluate(`document.querySelector('.composer-add')?.click()`);
-        const items = await until('the + menu to open', async () => {
-          const value = await evaluate(`(() => {
+          );
+          await until(
+            'the composer to come back',
+            async () =>
+              await evaluate(
+                `document.querySelector('.composer-add') !== null`,
+              ),
+          );
+          await evaluate(`document.querySelector('.composer-add')?.click()`);
+          const items = await until('the + menu to open', async () => {
+            const value = await evaluate(`(() => {
             const menu = document.querySelector('.popover');
             return menu === null
               ? undefined
@@ -1176,86 +1363,92 @@ async function main() {
                   ),
                 );
           })()`);
-          return value === undefined ? undefined : JSON.parse(value);
-        });
-        await evaluate(
-          `document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
-        );
-        if (items.includes('Compact history')) {
-          fail('a command switched off in Settings is still in the + menu');
-        } else if (!items.includes('Add files…')) {
-          fail('switching a command off took the other items with it');
-        } else {
-          ok('a command switched off in Settings is gone from the + menu');
-        }
-        // Put it back: the checks after this one expect a fresh install.
-        await evaluate(
-          `[...document.querySelectorAll('.head button')]
+            return value === undefined ? undefined : JSON.parse(value);
+          });
+          await evaluate(
+            `document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
+          );
+          if (items.includes('Compact history')) {
+            fail('a command switched off in Settings is still in the + menu');
+          } else if (!items.includes('Add files…')) {
+            fail('switching a command off took the other items with it');
+          } else {
+            ok('a command switched off in Settings is gone from the + menu');
+          }
+          // Put it back: the checks after this one expect a fresh install.
+          await evaluate(
+            `[...document.querySelectorAll('.head button')]
             .find((entry) => entry.textContent.trim() === 'Settings')?.click()`,
-        );
-        const reopen = await until('the Commands section to come back', async () => {
-          const state = await evaluate(`(() => {
+          );
+          const reopen = await until(
+            'the Commands section to come back',
+            async () => {
+              const state = await evaluate(`(() => {
             const section = [...document.querySelectorAll('.settings-section')]
               .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
             if (!section) return undefined;
             const box = section.querySelector('input[type="checkbox"]');
             return JSON.stringify({present: true, checked: box?.checked});
           })()`);
-          return state === undefined ? undefined : JSON.parse(state);
-        });
-        // Still open from the visit above, but said again: this is the gesture a
-        // person makes after reopening the dialog, whatever the file remembers.
-        await openSection('Commands');
-        await evaluate(
-          `(() => {
+              return state === undefined ? undefined : JSON.parse(state);
+            },
+          );
+          // Still open from the visit above, but said again: this is the gesture a
+          // person makes after reopening the dialog, whatever the file remembers.
+          await openSection('Commands');
+          await evaluate(
+            `(() => {
             const section = [...document.querySelectorAll('.settings-section')]
               .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
             section?.querySelector('input[type="checkbox"]')?.click();
           })()`,
-        );
-        const restored = await until('the command to be switched back on', async () => {
-          /*
-           * `undefined` until it is actually back on: `until` resolves on the
-           * first non-undefined answer, and a state returned the moment the box
-           * was clicked is a state read while the write is still in flight — the
-           * box is disabled and still shows the old value until the pane has
-           * re-read the settings.
-           */
-          const state = await evaluate(`(() => {
+          );
+          const restored = await until(
+            'the command to be switched back on',
+            async () => {
+              /*
+               * `undefined` until it is actually back on: `until` resolves on the
+               * first non-undefined answer, and a state returned the moment the box
+               * was clicked is a state read while the write is still in flight — the
+               * box is disabled and still shows the old value until the pane has
+               * re-read the settings.
+               */
+              const state = await evaluate(`(() => {
             const section = [...document.querySelectorAll('.settings-section')]
               .find((entry) => entry.querySelector('h3')?.textContent === 'Commands');
             if (!section) return undefined;
             const box = section.querySelector('input[type="checkbox"]');
             return JSON.stringify({checked: box?.checked, saving: box?.disabled});
           })()`);
-          if (state === undefined) {
-            return undefined;
-          }
-          const parsed = JSON.parse(state);
-          return parsed.checked === true ? parsed : undefined;
-        });
-        if (restored.checked !== true) {
-          fail(
-            `the command could not be switched back on: after reopening it was ` +
-              `${JSON.stringify(reopen)}, now ${JSON.stringify(restored)}`,
+              if (state === undefined) {
+                return undefined;
+              }
+              const parsed = JSON.parse(state);
+              return parsed.checked === true ? parsed : undefined;
+            },
           );
+          if (restored.checked !== true) {
+            fail(
+              `the command could not be switched back on: after reopening it was ` +
+                `${JSON.stringify(reopen)}, now ${JSON.stringify(restored)}`,
+            );
+          }
         }
       }
-    }
 
-    /*
-     * Back to the chat before anything else is measured. The dialog covers the
-     * window, and every check after this one — and the screenshot — is about the
-     * window.
-     */
-    await send('Runtime.evaluate', {
-      expression: `[...document.querySelectorAll('.settings-head button')]
+      /*
+       * Back to the chat before anything else is measured. The dialog covers the
+       * window, and every check after this one — and the screenshot — is about the
+       * window.
+       */
+      await send('Runtime.evaluate', {
+        expression: `[...document.querySelectorAll('.settings-head button')]
         .find((entry) => entry.textContent.trim() === 'Back to chat')
         ?.click()`,
-      returnByValue: true,
-    });
+        returnByValue: true,
+      });
 
-    ok(`the theme resolved to ${probe.theme}`);
+      ok(`the theme resolved to ${probe.theme}`);
     }
 
     if (probe.userData !== userData) {

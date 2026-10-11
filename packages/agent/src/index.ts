@@ -103,6 +103,12 @@ export {
   runReview,
   resolveAgentDataDir,
   resolveMemoryFile,
+  // Split and re-render are exported for whatever indexes memory, so that there
+  // is one reader of memory.md rather than a second parser in another package.
+  // The index has to agree with the store bullet for bullet, and two parsers of
+  // one document is exactly the disagreement this package is arranged to avoid.
+  splitMemory,
+  toBullets,
 } from './memory/index.js';
 export type {
   MemoryPruneRequest,
@@ -134,6 +140,20 @@ export {
   resolveInsideWorkspace,
   PathOutsideWorkspaceError,
 } from './tools/paths.js';
+/*
+ * The walk, shared by the literal search and whatever indexes the same folder.
+ *
+ * One definition of which files are in a folder, because two would be a file the
+ * agent can recall but not quote — or the reverse, which is worse: a file it
+ * quotes in a result and never finds again by meaning.
+ */
+export {
+  MAX_FILE_BYTES,
+  MAX_FILES_SCANNED,
+  SKIPPED_DIRECTORIES,
+  walkFiles,
+} from './tools/walk.js';
+export type {WalkOptions, WalkResult} from './tools/walk.js';
 export type {AgentConfig} from './config.js';
 export {iterateSseData} from './models/sse.js';
 export {

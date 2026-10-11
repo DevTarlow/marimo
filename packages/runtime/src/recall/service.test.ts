@@ -1,269 +1,221 @@
 /**
- * The recall engine's life, with a fake process and a fake HTTP.
+ * Recall as a caller uses it, which is where the promises are kept.
  *
- * The interesting failures here are all about a *second* engine, and none of
- * them is visible from the window: one that never stops is 400 MB of weights
- * and a fan on somebody's laptop; one that is killed under a request turns a
- * good answer into a failure; one whose argv is the chat model's is a process
- * that starts, loads, moves no vectors at all, and reports itself healthy. So
- * the spawn and the two HTTP calls are injected, and the argv is asserted as an
- * array.
+ * Three of them are asserted here and each is a sentence somebody could rely on:
+ * a search brings the index up to date before it answers, a hit's text is the text
+ * that is in the file *now* — or the hit says it is stale — and a corpus that is
+ * not available is not offered as a scope that would come back empty.
  *
- * What is not faked is the idle timer or the queue, because those are the two
- * behaviours this class adds over the supervisor it wraps.
+ * The last is the one worth the most: the caller here is a model choosing between
+ * tools, and a scope the index cannot honour is a tool call that returns "nothing
+ * found" about a folder full of the answer.
  */
-import {EventEmitter} from 'node:events';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {PassThrough} from 'node:stream';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {EMBEDDING_PINS, embeddingPidFile, recallSpec} from '../local-model/index.js';
-import {EmbeddingError} from './client.js';
-import {RecallEngine} from './service.js';
+import {RecallService} from './service.js';
+import type {IndexModel} from './store.js';
 
-/**
- * As much of a child process as the supervisor touches.
- *
- * The pid is *this* process, and that is deliberate rather than lazy. The
- * supervisor reaps whatever pid a leftover pid file names before it starts
- * anything, and a test that runs two engines over one directory would otherwise
- * have the second one kill the first — which, in a test process, means killing a
- * vitest worker with SIGKILL and a report that says nothing about why. The
- * supervisor refuses to kill its own pid on purpose, so claiming to be it is the
- * one value that cannot do any harm here.
- */
-class FakeChild extends EventEmitter {
-  readonly pid = process.pid;
-  readonly stdout = new PassThrough();
-  readonly stderr = new PassThrough();
+const MODEL: IndexModel = {repo: 'unsloth/embeddinggemma-2-GGUF', revision: 'rev2', dims: 8};
+const VOCABULARY = ['retry', 'upload', 'cookie', 'bake', 'memory', 'tabs', 'oven', 'user'];
 
-  kill(signal?: NodeJS.Signals): boolean {
-    this.emit('exit', null, signal ?? 'SIGTERM');
-    return true;
-  }
+function fakeEmbedder(): (texts: readonly string[]) => Promise<{vectors: Float32Array[]}> {
+  return async (texts) => ({
+    vectors: texts.map((text) => {
+      const vector = new Float32Array(VOCABULARY.length);
+      for (const [index, word] of VOCABULARY.entries()) {
+        if (text.toLowerCase().includes(word)) {
+          vector[index] += 1;
+        }
+      }
+      if (vector.every((value) => value === 0)) {
+        vector[0] = 0.01;
+      }
+      return vector;
+    }),
+  });
 }
 
-describe('RecallEngine', () => {
-  let dir: string;
+describe('RecallService', () => {
+  let workspace: string;
+  let indexDir: string;
+  let memory: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(process.cwd(), '.marimo-recall-'));
+    workspace = await mkdtemp(join(process.cwd(), '.marimo-recall-svc-ws-'));
+    indexDir = await mkdtemp(join(process.cwd(), '.marimo-recall-svc-idx-'));
+    memory = '## Notes\n- the user prefers tabs\n';
   });
 
   afterEach(async () => {
-    await rm(dir, {recursive: true, force: true});
+    await rm(workspace, {recursive: true, force: true});
+    await rm(indexDir, {recursive: true, force: true});
   });
 
-  /**
-   * The spec, claiming both model files are there.
-   *
-   * Files that *say* they exist are enough: what the supervisor checks before a
-   * spawn is the two presence booleans, and a test that had to write 300 MB to
-   * disk to prove an argv is a test nobody runs.
-   */
-  function spec(options: {media?: boolean; projectorPresent?: boolean} = {}) {
-    const resolved = recallSpec({
-      dir,
-      manifest: EMBEDDING_PINS,
-      media: options.media ?? false,
-    });
-    return {
-      ...resolved,
-      files: {
-        ...resolved.files,
-        enginePresent: true,
-        modelPresent: true,
-        projectorPresent: options.projectorPresent ?? false,
-        ...(options.media === true
-          ? {projector: join(dir, EMBEDDING_PINS.weights.pieces.media.file)}
-          : {}),
-      },
-    };
-  }
-
-  function engine(options: {
-    child?: FakeChild;
-    spec?: ReturnType<typeof spec>;
-    spawns?: {count: number};
-    argv?: string[][];
-    idleMs?: number;
-    onEmbed?: (body: unknown) => Response;
-  }): RecallEngine {
-    const child = options.child ?? new FakeChild();
-    const spawnImpl = ((
-      _file: string,
-      args: string[],
-    ): FakeChild => {
-      if (options.spawns) {
-        options.spawns.count += 1;
-      }
-      options.argv?.push(args);
-      return child;
-    }) as unknown as typeof import('node:child_process').spawn;
-
-    const fetchImpl = (async (url: string, init?: RequestInit) => {
-      if (String(url).endsWith('/health')) {
-        return {ok: true, status: 200} as Response;
-      }
-      const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
-      return options.onEmbed === undefined
-        ? new Response(
-            JSON.stringify({
-              data: [{index: 0, embedding: new Array<number>(768).fill(0.1)}],
-              usage: {prompt_tokens: 3},
-            }),
-            {status: 200},
-          )
-        : options.onEmbed(body);
-    }) as unknown as typeof fetch;
-
-    return new RecallEngine({
-      spec: () => options.spec ?? spec(),
-      pidFile: embeddingPidFile(dir),
-      dims: EMBEDDING_PINS.weights.dims,
-      spawnImpl,
-      fetchImpl,
-      ...(options.idleMs === undefined ? {} : {idleMs: options.idleMs}),
+  function service(options: {memory?: boolean; folder?: boolean} = {}): RecallService {
+    return new RecallService({
+      workspaceRoot: options.folder === false ? '' : workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: fakeEmbedder(),
+      ...(options.memory === false ? {} : {readMemory: async () => memory}),
     });
   }
 
-  it('starts nothing until something asks for a vector', async () => {
-    const spawns = {count: 0};
-    const recall = engine({spawns});
-    const status = await recall.status();
+  async function write(path: string, text: string): Promise<void> {
+    const absolute = join(workspace, path);
+    await mkdir(join(absolute, '..'), {recursive: true});
+    await writeFile(absolute, text, 'utf8');
+  }
 
-    expect(status.state).toBe('off');
-    expect(spawns.count).toBe(0);
+  it('offers only the corpora it can honour', () => {
+    expect(service().scopes()).toEqual(['folder', 'memory']);
+    expect(service({folder: false}).scopes()).toEqual(['memory']);
+    expect(service({memory: false}).scopes()).toEqual(['folder']);
+    expect(service({folder: false, memory: false}).scopes()).toEqual([]);
+  });
+
+  it('answers a question about the code with the lines themselves', async () => {
+    await write('src/retry.ts', 'export function withRetry() {\n  // three attempts\n}');
+    await write('src/oven.ts', 'export function preheat() {}');
+
+    const answer = await service().search({query: 'how does retry work?'});
+
+    const hit = answer.hits.find((entry) => entry.path === 'src/retry.ts');
+    expect(hit).toBeDefined();
+    expect(hit?.text).toContain('withRetry');
+    expect(hit?.startLine).toBe(1);
+    expect(hit?.endLine).toBe(3);
+    expect(hit?.stale).toBe(false);
+    expect(answer.searched).toEqual(['folder', 'memory']);
   });
 
   /*
-   * The argv, asserted as data. This is the one thing that cannot be checked any
-   * other way: an engine started with the chat model's flags loads the model,
-   * answers `/health`, and embeds nothing — `--embeddings` is what restricts it
-   * to the endpoint we call, and `--pooling mean` is what makes a single vector
-   * come out of a long input at all.
+   * Memory and the folder are one space, which is the point of the feature: the
+   * same question finds a bullet the agent wrote about the user and a line of
+   * their code, and the caller does not have to ask twice.
    */
-  it('starts the engine with the embedding flags and not the chat ones', async () => {
-    const argv: string[][] = [];
-    await engine({argv}).embedText(['hello']);
+  it('finds memory through the same question as the folder', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+    memory = '## Preferences and tone\n- the user prefers tabs over spaces\n';
 
-    const args = argv[0] ?? [];
-    expect(args).toContain('--embeddings');
-    expect(args[args.indexOf('--pooling') + 1]).toBe('mean');
-    expect(args).not.toContain('--jinja');
-    expect(args).not.toContain('--flash-attn');
-    // On the processor: the chat tier's memory plan assumes the GPU is its own.
-    expect(args[args.indexOf('--n-gpu-layers') + 1]).toBe('0');
-    // Both halves of the batch, or llama.cpp clamps one down to the other and
-    // any media input over 512 tokens is refused with a 500.
-    expect(args[args.indexOf('--batch-size') + 1]).toBe('4096');
-    expect(args[args.indexOf('--ubatch-size') + 1]).toBe('4096');
-    expect(args).toContain('--no-webui');
+    const answer = await service().search({query: 'what does the user prefer?'});
+
+    const hit = answer.hits.find((entry) => entry.kind === 'memory');
+    expect(hit).toBeDefined();
+    expect(hit?.section).toBe('Preferences and tone');
+    expect(hit?.text).toBe('the user prefers tabs over spaces');
   });
 
-  it('passes the projector only when this install has one', async () => {
-    const without = engine({argv: []});
-    await without.embedText(['hello']);
+  it('searches only the corpora it was asked for', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+    memory = '## Notes\n- the retry code lives in src/retry.ts\n';
 
-    const argv: string[][] = [];
-    const withMedia = engine({
-      argv,
-      spec: spec({media: true, projectorPresent: true}),
-    });
-    await withMedia.embedText(['hello']);
+    const answer = await service().search({query: 'retry', scopes: ['memory']});
 
-    expect(argv[0]).toContain('--mmproj');
+    expect(answer.searched).toEqual(['memory']);
+    expect(answer.hits.every((hit) => hit.kind === 'memory')).toBe(true);
+  });
+
+  it('brings the index up to date before answering', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+    const recall = service();
+    await recall.search({query: 'retry'});
+
+    await new Promise((resolve) => setTimeout(resolve, 12));
+    await write('src/upload.ts', 'export function uploadRetry() {}');
+
+    const answer = await recall.search({query: 'upload'});
+
+    expect(answer.coverage.embedded).toBe(1);
+    expect(answer.hits.some((hit) => hit.path === 'src/upload.ts')).toBe(true);
   });
 
   /*
-   * Asked for but not downloaded is not "media preferred": the engine would fail
-   * to load a file that is not there, and the failure a user would see would be
-   * about a path rather than about a download they have not done.
+   * The promise this whole design rests on: a hit either carries text that is in
+   * the file now, or it says it is stale. A preview is not enough — a person
+   * looking at a result has to be able to trust the lines under it.
    */
-  it('leaves the projector off when the file is missing', async () => {
-    const argv: string[][] = [];
-    await engine({
-      argv,
-      spec: spec({media: true, projectorPresent: false}),
-    }).embedText(['hello']);
+  it('says a hit is stale rather than quoting a file that has changed', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+    const recall = service();
+    await recall.search({query: 'retry'});
 
-    expect(argv[0]).not.toContain('--mmproj');
+    await new Promise((resolve) => setTimeout(resolve, 12));
+    await write('src/retry.ts', 'export function somethingElse() {}');
+
+    /*
+     * A refresh that is not allowed to embed anything, which is what happens to a
+     * changed file when the folder is bigger than one slice — and what a file
+     * edited between the refresh and the read looks like.
+     */
+    const held = new RecallService({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: fakeEmbedder(),
+      maxFiles: 0,
+    });
+    const answer = await held.search({query: 'retry'});
+
+    const hit = answer.hits.find((entry) => entry.path === 'src/retry.ts');
+    expect(hit?.stale).toBe(true);
+    expect(hit?.text).toBe('');
+    expect(answer.coverage.truncated).toBe(true);
+    expect(answer.notes.join(' ')).toMatch(/not indexed yet/u);
   });
 
-  it('answers with the engine’s vectors', async () => {
-    const result = await engine({}).embedText(['hello']);
+  it('forgets the index when asked, and rebuilds it afterwards', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+    const recall = service();
+    await recall.search({query: 'retry'});
+    expect((await recall.status()).records).toBeGreaterThan(0);
 
-    expect(result.vectors).toHaveLength(1);
-    expect(result.vectors[0]?.length).toBe(768);
-    expect(result.tokens).toBe(3);
-  });
+    await recall.forget();
+    expect((await recall.status()).records).toBe(0);
 
-  it('stops itself after sitting idle', async () => {
-    const child = new FakeChild();
-    const recall = engine({child, idleMs: 20});
-
-    await recall.embedText(['hello']);
-    expect(await recall.status()).toMatchObject({state: 'ready'});
-
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(await recall.status()).toMatchObject({state: 'off'});
-    // The stop is the same one `stop()` does, so the pid file is gone too.
-    await recall.stop();
+    const again = await recall.search({query: 'retry'});
+    expect(again.hits.length).toBeGreaterThan(0);
   });
 
   /*
-   * One engine, one request at a time. Two embeds in flight would be two
-   * requests against a server started with `--parallel 1`, which is a queue
-   * inside the engine rather than in front of it — and the caller waiting on the
-   * second would be waiting on work it cannot see.
+   * A question with nothing in it, or a caller asking for a corpus that does not
+   * exist here, must not be a search that reads the whole folder and then says
+   * nothing was found.
    */
-  it('runs one embed at a time, in the order they were asked for', async () => {
-    const order: string[] = [];
-    const recall = engine({
-      onEmbed: (body) => {
-        const text = (
-          body as {input: Array<{content: Array<{text: string}>}>}
-        ).input[0]?.content[0]?.text;
-        order.push(text ?? '');
-        return new Response(
-          JSON.stringify({
-            data: [{index: 0, embedding: new Array<number>(768).fill(0.1)}],
-            usage: {prompt_tokens: 1},
-          }),
-          {status: 200},
-        );
-      },
+  it('does no work for an empty question or an impossible scope', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+
+    const empty = await service().search({query: '   '});
+    expect(empty.hits).toEqual([]);
+    expect(empty.coverage.embedded).toBe(0);
+
+    const impossible = await service({folder: false}).search({
+      query: 'retry',
+      scopes: ['folder'],
     });
-
-    await Promise.all([
-      recall.embedText(['first']),
-      recall.embedText(['second']),
-      recall.embedText(['third']),
-    ]);
-
-    expect(order).toEqual(['first', 'second', 'third']);
+    expect(impossible.hits).toEqual([]);
+    expect(impossible.searched).toEqual([]);
+    expect(impossible.notes.join(' ')).toMatch(/Nothing is available/u);
   });
 
-  it('reports a start failure as a sentence rather than as a broken promise', async () => {
-    const failing = recallSpec({
-      dir: join(dir, 'nothing-here'),
-      manifest: EMBEDDING_PINS,
-      media: false,
-    });
-    const recall = engine({
-      spec: {...failing, files: {...failing.files, enginePresent: false}},
+  it('reports what it indexed when a folder is only partly done', async () => {
+    await write('a.ts', 'const retry = 1;');
+    await write('b.ts', 'const bake = 2;');
+    const recall = new RecallService({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: fakeEmbedder(),
+      maxFiles: 1,
     });
 
-    await expect(recall.embedText(['hello'])).rejects.toThrow(EmbeddingError);
-    await expect(recall.embedText(['hello'])).rejects.toThrow(
-      /engine is not installed/u,
-    );
-  });
+    const answer = await recall.search({query: 'retry'});
 
-  it('names its own pid file, so it can never reap the chat engine', () => {
-    expect(embeddingPidFile('/data')).toBe(join('/data', 'recall.pid'));
-    expect(embeddingPidFile('/data')).not.toBe('/data/local-model.pid');
+    expect(answer.coverage.truncated).toBe(true);
+    expect(answer.coverage.pending).toBe(1);
+    expect(answer.index.records).toBeGreaterThan(0);
   });
 });

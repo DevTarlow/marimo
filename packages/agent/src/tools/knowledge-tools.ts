@@ -10,35 +10,19 @@
  * skips the directories that would waste the budget — `node_modules`, `.git`,
  * build output, and the agent's own `.marimo` folder.
  */
-import {readFile, readdir, stat} from 'node:fs/promises';
-import {join, relative, sep} from 'node:path';
+import {readFile, stat} from 'node:fs/promises';
+import {relative, sep} from 'node:path';
 
 import {FunctionTool} from '@google/adk';
 import {z} from 'zod';
 
 import {PathOutsideWorkspaceError, resolveInsideWorkspace} from './paths.js';
+import {walkFiles} from './walk.js';
 
-const MAX_FILES_SCANNED = 2_000;
-const MAX_FILE_BYTES = 256 * 1024;
 const MAX_RESULTS = 50;
 const DEFAULT_RESULTS = 20;
 const MAX_OUTPUT_CHARS = 8 * 1024;
 const MAX_LINE_CHARS = 200;
-
-const SKIPPED_DIRECTORIES = new Set([
-  '.git',
-  '.marimo',
-  '.venv',
-  '.next',
-  '.cache',
-  '__pycache__',
-  'build',
-  'coverage',
-  'dist',
-  'node_modules',
-  'target',
-  'venv',
-]);
 
 export interface KnowledgeToolContext {
   workspaceRoot: string;
@@ -96,11 +80,20 @@ export async function searchWorkspace(
   }
 
   const info = await stat(start);
-  const files: string[] = [];
+  let files: string[] = [];
   if (info.isFile()) {
     files.push(start);
   } else if (info.isDirectory()) {
-    await collectFiles(start, files, outcome);
+    /*
+     * The walk is shared with the recall indexer, which is the point of it
+     * living in `walk.ts`: a folder the search skips and the index walks would be
+     * a file the agent can recall but not quote.
+     */
+    const walked = await walkFiles(start);
+    files = walked.files;
+    outcome.filesScanned = walked.scanned;
+    outcome.unreadable = walked.unreadable;
+    outcome.truncated = walked.truncated;
   }
 
   for (const file of files) {
@@ -151,57 +144,6 @@ export async function searchWorkspace(
   }
 
   return outcome;
-}
-
-/** Depth-first walk with a hard file budget and no symlink following. */
-async function collectFiles(
-  start: string,
-  files: string[],
-  outcome: SearchOutcome,
-): Promise<void> {
-  const stack = [start];
-  while (stack.length > 0) {
-    const directory = stack.pop() as string;
-    let entries;
-    try {
-      entries = await readdir(directory, {withFileTypes: true});
-    } catch {
-      outcome.unreadable += 1;
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (outcome.filesScanned >= MAX_FILES_SCANNED) {
-        outcome.truncated = true;
-        return;
-      }
-      if (entry.isSymbolicLink()) {
-        // Following links risks cycles and escapes the walk's budget.
-        continue;
-      }
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        if (!SKIPPED_DIRECTORIES.has(entry.name)) {
-          stack.push(path);
-        }
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-      outcome.filesScanned += 1;
-      try {
-        const info = await stat(path);
-        if (info.size > MAX_FILE_BYTES) {
-          continue;
-        }
-      } catch {
-        outcome.unreadable += 1;
-        continue;
-      }
-      files.push(path);
-    }
-  }
 }
 
 export function createSearchKnowledgeBaseTool(context: KnowledgeToolContext) {

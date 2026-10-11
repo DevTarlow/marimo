@@ -28,5 +28,48 @@ export type {ChunkOptions, TextChunk} from './chunk.js';
 
 export {documentText, QUERY_PREFIX, queryText} from './prefixes.js';
 
-export {RECALL_IDLE_MS, RecallEngine} from './service.js';
-export type {RecallEngineOptions} from './service.js';
+export {RECALL_IDLE_MS, RecallEngine} from './engine.js';
+export type {RecallEngineOptions} from './engine.js';
+
+export {RECALL_INDEX_FILE, RecallService, recallIndexDir} from './service.js';
+export type {
+  RecallAnswer,
+  RecallHit,
+  RecallIndexStatus,
+  RecallQuery,
+  RecallScope,
+  RecallServiceOptions,
+} from './service.js';
+
+export {REFRESH_CHUNKS, REFRESH_FILES, memoryBullets, refreshIndex} from './indexer.js';
+export type {IndexCoverage, MemoryBullet, RefreshOptions, RefreshResult} from './indexer.js';
+
+export {
+  DEFAULT_LIMIT,
+  DEFAULT_PER_SOURCE,
+  MAX_LIMIT,
+  searchVectors,
+} from './search.js';
+export type {SearchHit, SearchOptions} from './search.js';
+
+export {
+  digestOf,
+  emptyIndex,
+  INDEX_FILE,
+  INDEX_VERSION,
+  indexMatchesModel,
+  MEMORY_SOURCE,
+  normalize,
+  previewOf,
+  readIndex,
+  removeIndex,
+  VECTORS_FILE,
+  writeIndex,
+} from './store.js';
+export type {
+  FileStamp,
+  IndexData,
+  IndexFile,
+  IndexModel,
+  IndexRecord,
+} from './store.js';

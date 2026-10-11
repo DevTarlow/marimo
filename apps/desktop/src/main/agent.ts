@@ -125,7 +125,34 @@ export class AgentService {
   constructor(private readonly options: AgentServiceOptions) {
     const {paths} = options;
 
-    this.localModel = new LocalModelHost({paths});
+    this.localModel = new LocalModelHost({
+      paths,
+      /*
+       * Read per call rather than captured: the tier is a Settings switch, and a
+       * copy taken at startup would be one that only took effect after a restart.
+       */
+      readSettings: async () => await this.runtime.settings(),
+      /*
+       * A download is the one thing in this app somebody watches, so it reports
+       * as it goes rather than being polled for. The same event channel the turn
+       * stream uses, for the same reason: the window is already listening.
+       */
+      onProgress: (progress) => {
+        options.sendEvent({
+          type: 'model.progress',
+          label: progress.label,
+          receivedBytes: progress.receivedBytes,
+          totalBytes: progress.totalBytes,
+          ...(progress.percent === undefined ? {} : {percent: progress.percent}),
+        });
+      },
+      onInstalled: (tier) => {
+        options.sendEvent({type: 'model.installed', tier});
+      },
+      onFailed: (message) => {
+        options.sendEvent({type: 'model.failed', message});
+      },
+    });
 
     this.mcp = new McpManager({
       readSecrets: secretReaderFor(paths, (file, label) =>

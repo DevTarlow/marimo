@@ -133,13 +133,18 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
    * Whether this install could answer a question right now.
    *
    * A fact only this process has: the model needs no key and no address, so what
-   * decides it is whether the weights and the engine are where the app looks and
-   * whether an engine started. A window that guessed would open a chat on a
-   * machine that cannot reply.
+   * decides it is whether the machine has a usable GPU, whether what that GPU can
+   * take has been downloaded, and whether an engine started. A window that guessed
+   * would open a chat on a machine that cannot reply.
+   *
+   * The order is the order of the fixes. Nothing downloaded is a download; a
+   * machine whose engine is here but has no usable device is a dead end, and its
+   * sentence comes from the plan rather than from this function — that is the one
+   * place that knows what the card reported.
    *
    * The engine is *not* started to answer this: the question is asked every time
-   * the settings are read, and loading a gigabyte of weights to report on them
-   * would be a spinner on every turn.
+   * the settings are read, and loading gigabytes of weights to report on them would
+   * be a spinner on every turn.
    */
   async function modelReadiness(
     service: AgentService,
@@ -148,16 +153,24 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     if (status.state === 'failed') {
       return {ok: false, problem: status.detail ?? 'The model did not start.'};
     }
-    if (!status.modelPresent) {
-      return {
-        ok: false,
-        problem: `The model file is not where the app looks for it: ${status.modelPath}`,
-      };
-    }
     if (!status.enginePresent) {
       return {
         ok: false,
-        problem: `The model engine is not where the app looks for it: ${status.enginePath}`,
+        problem:
+          'The model has not been downloaded yet. It needs a graphics card, and ' +
+          'the download is about 3 GB.',
+      };
+    }
+    if (!status.runnable) {
+      return {
+        ok: false,
+        problem: status.problem ?? 'This machine cannot run the model.',
+      };
+    }
+    if (!status.modelPresent) {
+      return {
+        ok: false,
+        problem: `The ${status.tierLabel} model has not been downloaded yet.`,
       };
     }
     return {ok: true};
@@ -396,6 +409,15 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       await agent().model.stop();
       return await agent().model.status();
     },
+
+    /*
+     * Fetches the engine and the chosen tier. Answers `started`, not `finished`:
+     * the download reports itself as `model.progress` events, and an invoke that
+     * waited for four gigabytes would be one nobody could cancel.
+     */
+    'localModel.install': async () => await agent().model.install(),
+
+    'localModel.cancel': async () => agent().model.cancel(),
 
     'profiles.list': async () => await agent().profiles(),
 

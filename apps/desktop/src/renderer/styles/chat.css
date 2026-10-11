@@ -1736,6 +1736,49 @@
   margin-top: var(--space-4);
 }
 
+/* The two buttons a first run offers, side by side rather than stacked. */
+.onboarding-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+/*
+ * A download, which is the one thing in this app that takes minutes.
+ *
+ * A bar rather than only a number, for the reason the memory readout is one: "2.1
+ * GB of 4.5 GB" is precise and still hard to feel, while a bar half full is read
+ * at a glance. It is drawn on the welcome screen and in the Model card, so it
+ * lives here rather than beside either of them.
+ */
+.model-progress {
+  width: 100%;
+  max-width: 42ch;
+  margin-top: var(--space-3);
+}
+
+.model-progress-bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.model-progress-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  /* Width is set inline from the event stream; the transition keeps it from
+     snapping between percentages. */
+  transition: width var(--transition-fast);
+}
+
+.model-progress p {
+  margin: var(--space-2) 0 0;
+  text-align: left;
+}
+
 /* ------------------------------------------------------------ what it knows */
 
 /*

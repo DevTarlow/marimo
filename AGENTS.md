@@ -22,8 +22,8 @@ packages/agent      Everything ADK: the OpenAI-compatible client, tool set,
                     document-version machinery. No Electron.
 packages/runtime    The Electron-free half of the app proper: where files live,
                     secrets with the cipher injected, the jobs/profiles/
-                    workspaces/settings/skills/proposals stores, and the
-                    supervisor for the model the app carries. Re-exports the
+                    workspaces/settings/skills/proposals stores, the supervisor
+                    for the model the app downloads, and the pins. Re-exports the
                     version machinery it uses, so a caller still finds it beside
                     them.
 apps/desktop        The Electron app: src/main (window, IPC, tray, adapters),
@@ -94,7 +94,7 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     and reports `turn.failed` if that is empty too. `tool-loop-plugin.ts` is its
     sibling and the same rule from the other end — the third identical tool call
     in a turn is refused rather than run, because a model that loops arrives at
-    that silence by itself. Nothing here is a prompt: a prompt is what a 1.7B
+    that silence by itself. Nothing here is a prompt: a prompt is what a small
     model loses first.
 16. **The engine's address exists only in the process that started it.** The
     engine comes up on whatever port was free, so no address is stored anywhere:
@@ -244,7 +244,7 @@ watches the workspace poorly.
 ```bash
 pnpm install          # the store lives in .pnpm-store, per pnpm-workspace.yaml
 pnpm build            # tsc -b for every project — but NOT the renderer bundle
-pnpm --filter @marimo/desktop model:fetch   # 1.1 GB, for a checkout; see below
+pnpm --filter @marimo/desktop model:fetch   # 2.7 GB, for a checkout; see below
 pnpm build:web        # the renderer bundle: `tsc -b` + vite build, desktop only
 pnpm typecheck        # including test projects
 pnpm test             # vitest, everywhere
@@ -361,6 +361,14 @@ machine with no usable device is refused with a sentence rather than quietly run
 a processor. `local-model/plan.ts` decides the tier from what the engine reports as
 free, and the decision is an *estimate*: weights, a quantized cache and a compute
 buffer, plus a margin. It probes and then downloads; it never tries and falls back.
+The estimate is why `modelTier` exists as a settings field — `auto`, `low` or
+`high` — and an explicit choice is never second-guessed, only warned about.
+
+**The engine is fetched before the tier, and that order is forced.** Nothing can
+ask the hardware until something can run on it, so the 32 MB engine goes first, then
+the probe, then the tier the probe chose. That is what stops a first run downloading
+4.5 GB for a card that cannot hold it — and it is why `LocalModelHost.install` is
+three steps rather than one.
 
 Five things here are easy to get wrong and expensive to find:
 

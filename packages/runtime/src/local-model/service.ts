@@ -27,7 +27,7 @@ import {readFile, rm, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {join} from 'node:path';
 
-import type {LocalModelStatus} from '@marimo/protocol';
+import type {EngineStatus} from '@marimo/protocol';
 
 import {engineArgs} from './args.js';
 import type {LocalModelFiles, LocalModelSpec} from './files.js';
@@ -145,9 +145,9 @@ export class LocalModelService {
     await this.clearPidFile();
   }
 
-  async status(): Promise<LocalModelStatus> {
+  async status(): Promise<EngineStatus> {
     const {files, ...tuning} = await this.options.spec();
-    const state: LocalModelStatus['state'] =
+    const state: EngineStatus['state'] =
       this.url !== undefined
         ? 'ready'
         : this.starting !== undefined

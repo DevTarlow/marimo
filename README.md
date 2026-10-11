@@ -125,7 +125,11 @@ describing a choice this app does not offer.
 (2.7 GB, a 16K window) and `high` is the same weights at Q8_0 (4.5 GB, 32K). Both
 are the same model, the same chat template and the same tool calls; the only
 difference is how much of the weights survived quantization. Which one runs is
-decided from what the graphics card reports as free, and can be overridden.
+decided from what the graphics card reports as free, and the Model card in
+Settings says which and why — in the plan's own words, because the number it was
+decided on is one a person can disagree with. The switch beside it is `auto`, the
+small one or the large one; an explicit choice is honoured and warned about rather
+than overruled.
 
 **Nothing is bundled, and the first run downloads.** A packaged app carries no
 weights and no engine, because an installer with a gigabyte inside it is a

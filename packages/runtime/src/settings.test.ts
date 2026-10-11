@@ -288,6 +288,79 @@ describe('SettingsStore, on a file from the provider era', () => {
  * values the schema accepts — so the bounds are what stops a hand-edited file
  * from setting a limit that makes the agent's warning nonsense.
  */
+/**
+ * The tier override, which is the one switch that changes what gets downloaded.
+ *
+ * It is a preference like any other — which is exactly why it is worth a test:
+ * a value that did not survive a restart would re-download 4.5 GB, or silently
+ * run the smaller model on a machine the user had already told the app about.
+ */
+describe('SettingsStore modelTier', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-tier-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): SettingsStore {
+    return new SettingsStore(join(dir, 'settings.json'));
+  }
+
+  it('lets the app decide on a fresh install', async () => {
+    expect((await store().load()).modelTier).toBe('auto');
+  });
+
+  it('keeps an override through a write and a restart', async () => {
+    const settings = store();
+    await settings.patch({modelTier: 'high'});
+    await settings.patch({temperature: 0.2});
+
+    expect((await store().load()).modelTier).toBe('high');
+  });
+
+  it('keeps the rest of the file when the override is set', async () => {
+    const settings = store();
+    await settings.patch({temperature: 0.2});
+    const after = await settings.patch({modelTier: 'low'});
+
+    expect(after.temperature).toBe(0.2);
+    expect(after.modelTier).toBe('low');
+  });
+
+  /*
+   * A hand-edited word must cost the choice its own value rather than the whole
+   * document: the alternative is a typo resetting the connectors and every layout
+   * width beside it.
+   */
+  it('falls back to the app deciding when the stored word is wrong', async () => {
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify({version: 1, modelTier: 'medium', sidebarWidth: 300}, null, 2),
+      'utf8',
+    );
+    const settings = await store().load();
+
+    expect(settings.modelTier).toBe('auto');
+    expect(settings.sidebarWidth).toBe(300);
+  });
+
+  it('gives a file written before the field existed the automatic answer', async () => {
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify({version: 1, sidebarWidth: 300}, null, 2),
+      'utf8',
+    );
+    const settings = await store().load();
+
+    expect(settings.modelTier).toBe('auto');
+    expect(settings.sidebarWidth).toBe(300);
+  });
+});
+
 describe('SettingsStore memorySoftLimitBytes', () => {
   let dir: string;
 

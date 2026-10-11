@@ -52,6 +52,9 @@ export function defaultStoredSettings(): StoredSettings {
     experienceMode: 'power',
     appearance: defaultAppearance(),
     temperature: 0.7,
+    // The app decides which tier this machine can run, which is the answer that
+    // cannot be wrong about somebody's hardware. The override is one field away.
+    modelTier: 'auto',
     allowPrivateNetworkFetch: false,
     mcpServers: [],
     // Discord is off until the user pastes a bot token, so a fresh install makes

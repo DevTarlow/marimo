@@ -45,11 +45,11 @@ import type {McpServer} from './mcp.js';
 /**
  * The one model this app answers with, as the name every request carries.
  *
- * There is no catalogue any more. The app carries exactly one set of weights —
- * Qwen3-1.7B (Q4_K_M) run by a llama.cpp engine it supervises on loopback — so a
- * provider menu, per-endpoint addresses and per-provider keys were three ways of
- * describing a choice that no longer exists. The app has no account, no key and
- * no network to reach a model through; that is the whole point of carrying one.
+ * There is no catalogue any more. The app runs exactly one model — Qwen3.5-4B, by
+ * a llama.cpp engine it supervises on loopback — so a provider menu, per-endpoint
+ * addresses and per-provider keys were three ways of describing a choice that no
+ * longer exists. The app has no account and no key; that is the whole point of
+ * carrying its own model.
  *
  * The id is not the file name, deliberately. It is what this app passes as the
  * request's `model` and what the engine is started with as its `--alias`: a label
@@ -58,7 +58,52 @@ import type {McpServer} from './mcp.js';
  * request body) and the runtime (the engine argv) need it, and this is the one
  * package they share.
  */
-export const LOCAL_MODEL_ID = 'qwen3-1.7b';
+export const LOCAL_MODEL_ID = 'qwen3.5-4b';
+
+/**
+ * The two quantizations of that model, smallest first.
+ *
+ * Not two models: the same weights, the same chat template and the same tool
+ * calls, differing in how much survived quantization and therefore in how much
+ * memory they need. That is what makes choosing one a memory decision rather than
+ * a capability one.
+ */
+export const MODEL_TIERS = ['low', 'high'] as const;
+export const modelTierSchema = z.enum(MODEL_TIERS);
+export type ModelTier = z.infer<typeof modelTierSchema>;
+
+/**
+ * Which tier to run: one of them, or let the app decide.
+ *
+ * `auto` is the default and is a real answer rather than a placeholder — the app
+ * probes the graphics card and picks the largest tier that fits. The other two are
+ * the override, and they exist because that probe is an *estimate*: weights, a
+ * quantized cache and a compute buffer with a margin, not a measurement. Somebody
+ * whose card can hold more than the estimate thinks should be able to say so.
+ */
+export const MODEL_TIER_CHOICES = ['auto', ...MODEL_TIERS] as const;
+export const modelTierChoiceSchema = z.enum(MODEL_TIER_CHOICES);
+export type ModelTierChoice = z.infer<typeof modelTierChoiceSchema>;
+
+/**
+ * One tier as the window draws it: what it is, what it costs, whether it is here.
+ *
+ * The size and the context travel to the renderer rather than being computed
+ * there, because they come from the pins the main process reads — and a second
+ * copy of "how big is the large model" in the window is a number that can disagree
+ * with the one being downloaded.
+ */
+export interface ModelTierSummary {
+  name: ModelTier;
+  /** What the picker shows. */
+  label: string;
+  /** What it would download, in bytes. */
+  bytes: number;
+  /** The context window it is started with. */
+  contextSize: number;
+  /** Whether its weights are already on disk. */
+  installed: boolean;
+}
 
 /**
  * The things the window can do to a conversation itself, as opposed to things
@@ -440,6 +485,16 @@ export const settingsSchema = z.object({
    * on any hosted one — which is why it has a control of its own in Settings.
    */
   temperature: z.number().min(0).max(2),
+  /**
+   * Which tier of the model to run, or `auto` to let the app decide.
+   *
+   * `.catch` rather than a plain enum, for the reason `experienceMode` has it: a
+   * hand-edited file with a typo in this one word must cost the choice its own
+   * value, not fail the whole settings parse and reset everything else. What it
+   * falls back to is the app deciding, which is the answer that cannot be wrong
+   * about somebody's hardware.
+   */
+  modelTier: modelTierChoiceSchema.catch('auto'),
   maxOutputTokens: z.number().int().positive().optional(),
   /** Opt-in escape hatch for `http_fetch` hitting loopback/private hosts. */
   allowPrivateNetworkFetch: z.boolean(),
@@ -826,13 +881,13 @@ export function emptySkillsFile(): SkillsFile {
  * exact argv the app hands the engine, so it can be run by hand and compared
  * against whatever the user's own server does.
  */
-export interface LocalModelStatus {
+export interface EngineStatus {
   state: 'off' | 'starting' | 'ready' | 'failed';
   /** Where requests go, once it is up. Absent before that, and after a stop. */
   baseUrl?: string;
   /** Why it is not ready, in a sentence somebody can act on. */
   detail?: string;
-  /** Whether the weights are where the app looks for them. */
+  /** Whether the chosen tier's weights are where the app looks for them. */
   modelPresent: boolean;
   /** Whether the engine binary is. Reported apart from the weights because
    *  they come from different places and are fixed in different ways. */
@@ -845,6 +900,54 @@ export interface LocalModelStatus {
   command: string[];
   /** The last lines the engine printed, oldest first. */
   log: string[];
+}
+
+/**
+ * The process, and the decision about which process to run.
+ *
+ * Split because two different things answer them: the supervisor knows what it
+ * started and where the files are, and the resolver knows what the machine can
+ * take and why. Only the window needs both at once, and a supervisor that had to
+ * carry a plan it did not make would be a second place that could disagree about
+ * the tier.
+ */
+export interface LocalModelStatus extends EngineStatus {
+  /**
+   * Which tier the app would run, at which window, and why.
+   *
+   * The whole plan rather than just the answer, because the two things a person
+   * can do with it are disagree with it and understand it: `reason` is the
+   * sentence the card shows verbatim, and `tiers` is what the picker draws.
+   */
+  tier: ModelTier;
+  tierLabel: string;
+  contextSize: number;
+  /** What this platform's GPU backend is called, e.g. `Vulkan`. */
+  backend?: string;
+  /**
+   * Whether the machine can run any tier at all.
+   *
+   * False means the probe found no usable device, or a card too small for even
+   * the small tier — and then `problem` is the sentence to show instead of a
+   * download button.
+   */
+  runnable: boolean;
+  /** Why not, when it cannot. Absent when it can. */
+  problem?: string;
+  /** The plan's own sentence, for the card to show. */
+  reason: string;
+  /** Whether the estimate says the chosen tier fits. False is a warning. */
+  fits: boolean;
+  /** Both tiers, as the picker draws them. */
+  tiers: ModelTierSummary[];
+  /**
+   * What is being downloaded right now, when something is.
+   *
+   * On the status as well as on the event channel, because a window that opened
+   * mid-download has missed every event and would otherwise draw an idle card
+   * over a download in progress.
+   */
+  installing?: {label: string; receivedBytes: number; totalBytes: number; percent?: number};
 }
 
 /**
@@ -1480,6 +1583,25 @@ export type AgentUiEvent =
    */
   | {type: 'skills.changed'}
   /**
+   * A model download is under way, and how far along.
+   *
+   * An event rather than a polled field, because a 4.5 GB download is the one
+   * thing in this app a person watches: the number has to move while they look at
+   * it, and a card that re-read the status on a timer would be a poll for
+   * something that only happens once.
+   */
+  | {
+      type: 'model.progress';
+      label: string;
+      receivedBytes: number;
+      totalBytes: number;
+      percent?: number;
+    }
+  /** A download finished, so whatever needed it can be re-read. */
+  | {type: 'model.installed'; tier: ModelTier}
+  /** A download failed, with the sentence that says why. */
+  | {type: 'model.failed'; message: string}
+  /**
    * The active profile or workspace changed, so what the window is looking at is
    * no longer what the agent would answer as. The renderer reloads its session
    * list on `profile` (conversations are per profile) and drops the turn in
@@ -1907,6 +2029,23 @@ export const agentCallSchemas = {
   'localModel.status': z.object({}),
   'localModel.start': z.object({}),
   'localModel.stop': z.object({}),
+  /*
+   * Fetches the engine and the chosen tier, reporting progress on the event
+   * channel. A call rather than a settings write for the reason the two above are:
+   * it reaches the network for gigabytes, and a write that quietly did that would
+   * report success for work it had not finished.
+   *
+   * It answers as soon as the download has *started*, because that is what the
+   * window is waiting for — the progress arrives as events, and a call that
+   * blocked for four gigabytes would be an invoke nobody can cancel.
+   */
+  'localModel.install': z.object({}),
+  /*
+   * Stops a download in flight. Not a nicety: the large tier is 4.5 GB, and a
+   * download with no way to stop it is one somebody closes the app to escape.
+   * What has arrived is kept, so the next attempt resumes rather than restarts.
+   */
+  'localModel.cancel': z.object({}),
 
   /* What this agent is allowed to do, and what it is. */
   'profiles.catalog': z.object({}),
@@ -1975,6 +2114,8 @@ export interface AgentCallResults {
   'localModel.status': LocalModelStatus;
   'localModel.start': LocalModelStatus;
   'localModel.stop': LocalModelStatus;
+  'localModel.install': {started: boolean};
+  'localModel.cancel': {cancelled: boolean};
   'profiles.catalog': ProfileCatalog;
   'profiles.update': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.create': {profiles: AgentProfile[]; activeProfileId: string};

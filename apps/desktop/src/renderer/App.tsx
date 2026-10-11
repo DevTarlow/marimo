@@ -10,7 +10,7 @@
  * that lands with Settings — but the tokens underneath it are the real ones, so
  * what it previews is what will ship.
  */
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useState} from 'react';
 
 import {COMMAND_IDS, COMMANDS, THEME_MODES} from '@marimo/protocol';
 import type {
@@ -43,7 +43,11 @@ export function App(): React.JSX.Element {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const agent = useAgent();
 
-  const loadSettings = (): void => {
+  /*
+   * Stable, because an effect below depends on it: a function rebuilt on every
+   * render would re-run that effect on every render, and this one writes state.
+   */
+  const loadSettings = useCallback((): void => {
     void window.marimo
       .call('settings.get', {})
       .then(({settings: loaded}) => {
@@ -53,11 +57,11 @@ export function App(): React.JSX.Element {
         // A settings read that fails is already reported by Settings itself; an
         // error here would be a second one over the conversation.
       });
-  };
+  }, []);
 
   useEffect(() => {
     loadSettings();
-  }, []);
+  }, [loadSettings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +136,15 @@ export function App(): React.JSX.Element {
   const disabled = agent.profile === undefined;
 
   /*
+   * A finished download is a fact the gate is derived from — `modelReady` comes
+   * from the main process, which has just seen the files appear — so the payload is
+   * re-read rather than the window assuming the download did what it said.
+   */
+  useEffect(() => {
+    loadSettings();
+  }, [agent.modelRevision, loadSettings]);
+
+  /*
    * The commands the `+` menu offers: the catalogue filtered by what the user
    * has switched off. Drawn from the protocol constant rather than from a list
    * here, so the menu and the Settings switches cannot describe different sets.
@@ -155,6 +168,8 @@ export function App(): React.JSX.Element {
           void agent.reload();
           loadSettings();
         }}
+        modelProgress={agent.modelProgress}
+        modelRevision={agent.modelRevision}
         onExperienceModeChange={(mode) => {
           /*
            * The density is this window's, and the switch is in the dialog, so
@@ -304,8 +319,18 @@ export function App(): React.JSX.Element {
               settings.modelProblem ??
               'The app has no way to answer yet. Settings will say what is missing.'
             }
+            progress={agent.modelProgress}
+            revision={agent.modelRevision}
             onOpenSettings={() => {
               setShowSettings(true);
+            }}
+            /*
+             * A download that has started changes what the gate should say, and
+             * the gate reads the settings payload — so the payload is re-read
+             * rather than the screen guessing at what the download did.
+             */
+            onChanged={() => {
+              loadSettings();
             }}
           />
         ) : (

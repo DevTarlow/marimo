@@ -67,6 +67,21 @@ export interface LiveSubagent {
   error?: string;
 }
 
+/**
+ * A model download in flight, as the two screens that draw it need it.
+ *
+ * The same shape the main process reports and the protocol carries, restated here
+ * because the renderer cannot import a type from the runtime package and the
+ * alternative — inferring it from an event union — would break the moment a field
+ * moved.
+ */
+export interface ModelProgress {
+  label: string;
+  receivedBytes: number;
+  totalBytes: number;
+  percent?: number;
+}
+
 /** The turn in flight, assembled from the stream. */
 export interface LiveTurn {
   messageId: string;
@@ -129,6 +144,10 @@ export interface AgentController {
    * different values, or the second one opens nothing.
    */
   openSettings: number;
+  /** A download in flight, or null. Drawn by the welcome screen and the card. */
+  modelProgress: ModelProgress | null;
+  /** Changes whenever the model files do, so a reader knows to re-read. */
+  modelRevision: number;
   /** The stored theme preference, kept in step with the settings file. */
   themeMode: ThemeMode;
   newSession: (workspaceId?: string) => Promise<void>;
@@ -171,6 +190,15 @@ export function useAgent(): AgentController {
   const [outbox, setOutbox] = useState<string | null>(null);
   const [openSettings, setOpenSettings] = useState(0);
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
+  /*
+   * A model download, which is the one thing in this app that happens over
+   * minutes and has to be watched. Kept in the hook rather than in the card that
+   * draws it, because two things draw it: the welcome screen on a first run and
+   * the Model card in Settings, and neither should own the stream.
+   */
+  const [modelProgress, setModelProgress] = useState<ModelProgress | null>(null);
+  /** Bumped when the model files change, so whoever is looking re-reads them. */
+  const [modelRevision, setModelRevision] = useState(0);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(
     null,
@@ -412,6 +440,33 @@ export function useAgent(): AgentController {
        */
       if (event.type === 'theme.changed') {
         setThemeMode(event.mode);
+        return;
+      }
+
+      /*
+       * The model downloading. Handled here, before the conversation filter
+       * below, because a download belongs to the install rather than to any
+       * conversation — and a card that had to subscribe separately would be a
+       * second listener for one stream.
+       */
+      if (event.type === 'model.progress') {
+        setModelProgress({
+          label: event.label,
+          receivedBytes: event.receivedBytes,
+          totalBytes: event.totalBytes,
+          ...(event.percent === undefined ? {} : {percent: event.percent}),
+        });
+        return;
+      }
+      if (event.type === 'model.installed') {
+        setModelProgress(null);
+        setModelRevision((count) => count + 1);
+        return;
+      }
+      if (event.type === 'model.failed') {
+        setModelProgress(null);
+        // The banner the window already has for a failure the user must read.
+        setError(event.message);
         return;
       }
 
@@ -866,6 +921,8 @@ export function useAgent(): AgentController {
     refresh,
     openSettings,
     themeMode,
+    modelProgress,
+    modelRevision,
     reload: boot,
     newSession,
     dismissError: () => {

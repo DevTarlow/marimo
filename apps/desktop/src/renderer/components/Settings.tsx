@@ -47,6 +47,7 @@ import {
 
 import {chosenPreset} from '../capabilities.js';
 import {describe} from '../describe.js';
+import type {ModelProgress} from '../hooks/useAgent.js';
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
 import {Model} from './Model.js';
@@ -91,8 +92,14 @@ interface Loaded {
 export function Settings({
   onClose,
   onExperienceModeChange,
+  modelProgress,
+  modelRevision,
 }: {
   onClose: () => void;
+  /** A model download in flight, from the window's event stream. */
+  modelProgress: ModelProgress | null;
+  /** Changes when the model files do, so the Model card re-reads them. */
+  modelRevision: number;
   /**
    * Told which size the dialog is now drawn at.
    *
@@ -844,6 +851,8 @@ export function Settings({
           opened={opened}
           onToggle={fold}
           power={power}
+          progress={modelProgress}
+          revision={modelRevision}
           onChange={() => {
             void load();
           }}

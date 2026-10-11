@@ -726,32 +726,50 @@ async function main() {
       }
 
       /*
-       * A fresh install opens by pointing at Settings rather than by showing a
-       * chat that refuses. Checked here because it is the first thing a new user
-       * sees and the only part of the first run that no unit test covers. The
-       * control is asserted, not just the copy: a welcome that says "add a key in
-       * Settings" with nothing to press is the dead end this screen exists to
-       * avoid.
+       * A fresh install opens by offering to download the model rather than by
+       * showing a chat that refuses. Checked here because it is the first thing a
+       * new user sees, it is the only part of the first run that no unit test
+       * covers, and it is now the *only* way the app gets a model at all.
+       *
+       * The control is asserted rather than just the copy: a welcome that says
+       * "download the model" with nothing to press is the dead end this screen
+       * exists to avoid. This run has no weights in it, so what it must offer is
+       * the download — and what it must *not* do is claim the machine cannot run
+       * the model, because nothing has asked the hardware yet.
        */
       const asked = await send('Runtime.evaluate', {
-        expression: `JSON.stringify({
-        onboarding: !!document.querySelector('.onboarding'),
-        cta: !!document.querySelector('.onboarding .button-primary'),
-        composer: !!document.querySelector('.composer-box'),
-      })`,
+        expression: `(async () => {
+          const status = await window.marimo.call('localModel.status', {});
+          return JSON.stringify({
+            onboarding: !!document.querySelector('.onboarding'),
+            cta: !!document.querySelector('.onboarding .button-primary'),
+            label: document.querySelector('.onboarding .button-primary')?.textContent ?? '',
+            composer: !!document.querySelector('.composer-box'),
+            enginePresent: status.enginePresent,
+            tiers: status.tiers.length,
+            runnable: status.runnable,
+          });
+        })()`,
+        awaitPromise: true,
         returnByValue: true,
       });
       const first = JSON.parse(asked.result.value);
       if (first.onboarding !== true || first.cta !== true) {
         fail(
-          `a fresh install did not point at Settings: ${asked.result.value}`,
+          `a fresh install did not offer to download the model: ${asked.result.value}`,
         );
+      } else if (!/download/iu.test(first.label)) {
+        fail(`the first run's button says "${first.label}"`);
+      } else if (first.enginePresent !== false) {
+        fail('a fresh install reported an engine it does not have');
+      } else if (first.tiers !== 2) {
+        fail(`the status describes ${String(first.tiers)} tiers, not 2`);
       } else if (first.composer !== true) {
         // Not blocking: somebody who wants to look around first still can.
         fail('the first run took the message box away');
       } else {
         ok(
-          'a fresh install points at Settings, without taking the window over',
+          'a fresh install offers the download, without taking the window over',
         );
       }
 
@@ -1099,7 +1117,9 @@ async function main() {
             provider: provider !== undefined,
             temperature: model.querySelector('input[type="range"]')?.value ?? null,
             selects: model.querySelectorAll('select').length,
+            selectLabel: model.querySelector('select')?.getAttribute('aria-label') ?? null,
             keyInputs: model.querySelectorAll('input[type="password"]').length,
+            textInputs: model.querySelectorAll('input[type="text"]').length,
           });
         })()`);
         return state === undefined ? undefined : JSON.parse(state);
@@ -1108,11 +1128,23 @@ async function main() {
       if (modelControls.provider === true) {
         fail('the Settings dialog still draws a Provider section');
       } else if (
-        modelControls.selects !== 0 ||
-        modelControls.keyInputs !== 0
+        modelControls.keyInputs !== 0 ||
+        modelControls.textInputs !== 0
       ) {
+        /*
+         * A key box or an address box is the thing being refused here: both would
+         * write to a file nothing reads. A `<select>` is *not* — the card has one
+         * legitimately now, the model's size — so what is asserted is that the
+         * only choice on offer is that one, by its label.
+         */
         fail(
-          `the Model card offers something to choose: ${JSON.stringify(modelControls)}`,
+          `the Model card offers something to configure the endpoint with: ${JSON.stringify(modelControls)}`,
+        );
+      } else if (modelControls.selects !== 1) {
+        fail(`the Model card has ${String(modelControls.selects)} pick-lists, not 1`);
+      } else if (modelControls.selectLabel !== 'Model size') {
+        fail(
+          `the Model card's pick-list is "${String(modelControls.selectLabel)}", not the model's size`,
         );
       } else if (modelControls.temperature !== '0.7') {
         fail(
@@ -1151,7 +1183,12 @@ async function main() {
         return state === undefined ? undefined : JSON.parse(state);
       });
 
-      if (!/not installed|Not running|Loading|Ready/u.test(modelCard.text)) {
+      /*
+       * Case-insensitive, because the sentences start with the word: "Not
+       * downloaded yet" and "is not installed" are the same state said two ways,
+       * and a case-sensitive pattern would pass on one and fail on the other.
+       */
+      if (!/not downloaded|not installed|not running|loading|ready/iu.test(modelCard.text)) {
         fail(`the Model card says nothing about the model: ${modelCard.text}`);
       } else if (!modelCard.command.includes('llama-server')) {
         fail(

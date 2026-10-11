@@ -51,6 +51,7 @@ import type {ModelProgress} from '../hooks/useAgent.js';
 import {Connectors} from './Connectors.js';
 import {Memory} from './Memory.js';
 import {Model} from './Model.js';
+import {Recall} from './Recall.js';
 import {SettingsSection} from './SettingsSection.js';
 
 /**
@@ -859,6 +860,16 @@ export function Settings({
         />
 
         <Memory opened={opened} onToggle={fold} />
+        {/*
+          Recall sits beside memory because it is the same subject from the other
+          end: memory is what the agent writes down, recall is how it finds it
+          again — and the same file is one of the two things it indexes.
+        */}
+        <Recall
+          opened={opened}
+          onToggle={fold}
+          power={loaded.settings.experienceMode === 'power'}
+        />
 
         {power && (
           <Connectors

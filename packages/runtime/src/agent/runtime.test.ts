@@ -975,10 +975,13 @@ describe('the built-in model', () => {
 
       const after = await agent.catalog();
       expect(after.tools.map((tool) => tool.name)).toContain('recall');
-      // And it is granted to a new profile out of the box, so turning the feature
-      // on is the whole of turning it on.
+      /*
+       * Listed, and not granted by default: a default the catalogue only
+       * sometimes shows is a preset that stops matching, which is what the smoke
+       * check found when recall was added to `SAFE_DEFAULT_TOOLS`.
+       */
       const entry = after.tools.find((tool) => tool.name === 'recall');
-      expect(entry?.byDefault).toBe(true);
+      expect(entry?.byDefault).toBe(false);
       expect(entry?.blurb).toContain('mean');
     });
 

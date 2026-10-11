@@ -106,6 +106,15 @@ export function Recall({
   };
 
   const enabled = settings?.recall.enabled ?? false;
+  /*
+   * Whether this profile may use it, read from the grant rather than assumed: the
+   * tool is a capability like every other, and a card that said "on" while the
+   * agent had not been allowed to look would be the switch that did nothing.
+   */
+  const granted =
+    settings?.profiles
+      .find((profile) => profile.id === settings.activeProfileId)
+      ?.enabledTools.includes('recall') ?? false;
   const installed = status?.textPresent ?? false;
   const installing = status?.installing;
   const index = status?.index;
@@ -247,6 +256,13 @@ export function Recall({
             Forgetting removes what it has read. Your files and its notes are not
             touched.
           </p>
+          {!granted && (
+            <p className="settings-muted">
+              One more step: the agent has to be allowed to use it. Tick{' '}
+              <strong>recall</strong> under “What this agent can do” — a tool it has
+              not been granted is not offered to it at all.
+            </p>
+          )}
         </>
       )}
 

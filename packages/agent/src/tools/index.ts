@@ -80,15 +80,6 @@ export const SAFE_DEFAULT_TOOLS = [
   'read_file',
   'list_dir',
   'search_knowledge_base',
-  /*
-   * Recall is offered by default, and deliberately beside the literal search
-   * rather than instead of it. Both are ways of looking at the same folder without
-   * changing anything, which is the line this list draws — and the model needs
-   * both: an identifier it was told is a literal search, and a description is a
-   * recall. It only exists at all when the app has an index to answer from, which
-   * is the user's switch and not this list's.
-   */
-  'recall',
   'read_memory',
   'update_memory',
   'prune_memory',

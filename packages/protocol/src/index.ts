@@ -503,6 +503,18 @@ export const recallSettingsSchema = z.object({
    * result list, and prose is the safer thing to be wrong about.
    */
   codeQueries: z.boolean(),
+  /**
+   * Whether the first-run card has been answered, either way.
+   *
+   * Not consent and not a switch: `enabled` is the feature and this is the
+   * question about it. It exists because the card is asked *once* — the moment a
+   * download finishes — and "once" cannot be derived from anything else in this
+   * document. `enabled: false` is as true of somebody who pressed "Not now" as it
+   * is of somebody who has never been asked, and the next model download would
+   * ask them again. Written when the card is answered, never read by the model or
+   * by the window's chat surface.
+   */
+  introSeen: z.boolean(),
 });
 
 export type RecallSettings = z.infer<typeof recallSettingsSchema>;
@@ -609,6 +621,9 @@ export function defaultRecallSettings(): RecallSettings {
     conversations: true,
     media: false,
     codeQueries: false,
+    // False for an existing install, which is what makes the card appear once
+    // after this field was added — and never again, because the card writes it.
+    introSeen: false,
   };
 }
 

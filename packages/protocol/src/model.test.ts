@@ -106,6 +106,7 @@ describe('the recall settings', () => {
       conversations: true,
       media: false,
       codeQueries: false,
+      introSeen: false,
     });
   });
 

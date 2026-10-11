@@ -1001,6 +1001,7 @@ describe('the recall block', () => {
       conversations: true,
       media: false,
       codeQueries: false,
+      introSeen: false,
     });
   });
 
@@ -1059,6 +1060,7 @@ describe('the recall block', () => {
       conversations: true,
       media: false,
       codeQueries: false,
+      introSeen: false,
     });
   });
 });

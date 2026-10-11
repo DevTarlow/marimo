@@ -29,6 +29,7 @@ import {Settings} from './components/Settings.js';
 import {Transcript} from './components/Transcript.js';
 import {WorkspaceRail} from './components/WorkspaceRail.js';
 import {useAgent} from './hooks/useAgent.js';
+import {recallOfferOnRead} from './recall-offer.js';
 
 import './styles/chat.css';
 
@@ -182,15 +183,27 @@ export function App(): React.JSX.Element {
    * already using it would be the nag this is shaped to avoid — so the offer
    * belongs to the moment it goes from false to true, which is a download
    * finishing.
+   *
+   * What `wasReady` may not record is the `false` a payload that has not arrived
+   * yet produces, or every launch looks like that transition. It is written only
+   * once there is a payload to have an opinion about, and the decision itself is
+   * in `recall-offer.ts` where it can be tested.
    */
   const modelReady = settings?.modelReady ?? false;
   const wasReady = useRef<boolean | null>(null);
   useEffect(() => {
-    if (wasReady.current === false && modelReady) {
+    const read = recallOfferOnRead({
+      loaded: settings !== null,
+      wasReady: wasReady.current,
+      modelReady,
+      enabled: settings?.recall.enabled ?? false,
+      introSeen: settings?.recall.introSeen ?? false,
+    });
+    if (read.offer) {
       setRecallIntro(true);
     }
-    wasReady.current = modelReady;
-  }, [modelReady]);
+    wasReady.current = read.remember;
+  }, [modelReady, settings]);
 
   /*
    * The commands the `+` menu offers: the catalogue filtered by what the user
@@ -213,6 +226,19 @@ export function App(): React.JSX.Element {
       <RecallIntro
         onDone={() => {
           setRecallIntro(false);
+          /*
+           * Answering it, either way, is what makes it once. The write is not
+           * awaited and its failure is not reported: the worst outcome is the
+           * card being offered again after a later model download, and an error
+           * over the conversation about a flag the user never asked to see would
+           * be worse than that.
+           */
+          void window.marimo
+            .call('settings.set', {patch: {recall: {introSeen: true}}})
+            .then(({settings: saved}) => {
+              setSettings(saved);
+            })
+            .catch(() => undefined);
         }}
       />
     );

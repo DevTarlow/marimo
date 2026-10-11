@@ -79,7 +79,18 @@ export class LocalModelService {
   private starting: Promise<Started> | undefined;
   private url: string | undefined;
   private port: number | undefined;
-  private failure: string | undefined;
+  /**
+   * The last start failure, with the file situation it was recorded against.
+   *
+   * The two presence flags are here because a failure about *missing files* has a
+   * shelf life: it is the answer to a question a download changes. Reported after
+   * the files have arrived, it is what leaves a first run on the welcome screen
+   * that says the model is not installed — the window's gate reads this, not the
+   * disk — and the download that just finished is the one thing that disproves it.
+   */
+  private failure:
+    | {problem: string; enginePresent: boolean; modelPresent: boolean}
+    | undefined;
   private readonly log: string[] = [];
 
   constructor(private readonly options: LocalModelOptions) {}
@@ -147,19 +158,20 @@ export class LocalModelService {
 
   async status(): Promise<EngineStatus> {
     const {files, ...tuning} = await this.options.spec();
+    const failure = this.liveFailure(files);
     const state: EngineStatus['state'] =
       this.url !== undefined
         ? 'ready'
         : this.starting !== undefined
           ? 'starting'
-          : this.failure !== undefined
+          : failure !== undefined
             ? 'failed'
             : 'off';
 
     return {
       state,
       ...(this.url === undefined ? {} : {baseUrl: this.url}),
-      ...(this.failure === undefined ? {} : {detail: this.failure}),
+      ...(failure === undefined ? {} : {detail: failure}),
       modelPresent: files.modelPresent,
       enginePresent: files.enginePresent,
       modelPath: files.model,
@@ -199,11 +211,13 @@ export class LocalModelService {
     if (!files.enginePresent) {
       return this.fail(
         `The model engine is not installed. It should be at ${files.engine}.`,
+        files,
       );
     }
     if (!files.modelPresent) {
       return this.fail(
         `The model file is not installed. It should be at ${files.model}.`,
+        files,
       );
     }
 
@@ -235,6 +249,7 @@ export class LocalModelService {
     } catch (failure) {
       return this.fail(
         `The model engine could not be started: ${describe(failure)}`,
+        files,
       );
     }
 
@@ -269,6 +284,7 @@ export class LocalModelService {
           this.fail(
             `The model engine stopped (${describeExit(code, signal)}). ` +
               this.tail(),
+            files,
           ),
         );
       });
@@ -277,7 +293,7 @@ export class LocalModelService {
     await this.writePidFile(child.pid);
 
     const baseUrl = `http://127.0.0.1:${String(port)}/v1`;
-    const ready = this.waitForHealth(baseUrl);
+    const ready = this.waitForHealth(baseUrl, files);
     const result = await Promise.race([ready, exited]);
     if (!result.ok) {
       return result;
@@ -290,7 +306,10 @@ export class LocalModelService {
   }
 
   /** Polls `/health` until it answers, or gives up. */
-  private async waitForHealth(baseUrl: string): Promise<Started> {
+  private async waitForHealth(
+    baseUrl: string,
+    files: LocalModelFiles,
+  ): Promise<Started> {
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const deadline = Date.now() + READY_TIMEOUT_MS;
 
@@ -313,6 +332,7 @@ export class LocalModelService {
       `The model did not finish loading within ${String(
         Math.round(READY_TIMEOUT_MS / 1000),
       )} seconds. ${this.tail()}`,
+      files,
     );
   }
 
@@ -333,8 +353,33 @@ export class LocalModelService {
     }
   }
 
-  private fail(problem: string): Started {
-    this.failure = problem;
+  /**
+   * The recorded failure, while it still describes these files.
+   *
+   * A failure is recorded once and read on every settings load, and what it was
+   * about can change underneath it — that is what a first run *is*: the window
+   * asks for the engine at launch, is told there is none, and then downloads one.
+   * Only a change in which files are present invalidates the answer, because that
+   * is the premise the sentence was built on. An engine that is here and crashes
+   * is a failure about the engine, and it stands until the next start.
+   */
+  private liveFailure(files: LocalModelFiles): string | undefined {
+    const failure = this.failure;
+    if (failure === undefined) {
+      return undefined;
+    }
+    return failure.enginePresent === files.enginePresent &&
+      failure.modelPresent === files.modelPresent
+      ? failure.problem
+      : undefined;
+  }
+
+  private fail(problem: string, files: LocalModelFiles): Started {
+    this.failure = {
+      problem,
+      enginePresent: files.enginePresent,
+      modelPresent: files.modelPresent,
+    };
     this.options.log?.(`[marimo] ${problem}`);
     return {ok: false, problem};
   }

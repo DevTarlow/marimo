@@ -249,6 +249,41 @@ describe('LocalModelService', () => {
     expect((await engine.status()).modelPresent).toBe(true);
   });
 
+  /*
+   * The first-run sequence, which is the only way a user meets this at all: the
+   * window asks for the engine as it starts, is told there is none, and *then*
+   * downloads one. The recorded sentence has to stop being the answer the moment
+   * the files exist, because the window's gate reads this status rather than the
+   * disk — a stale one leaves a finished download on the welcome screen that says
+   * the model is not installed, with nothing left to click.
+   */
+  it('forgets a missing-file failure once those files arrive', async () => {
+    let installed = false;
+    const engine = service({
+      files: () => ({
+        ...files(),
+        enginePresent: installed,
+        modelPresent: installed,
+      }),
+    });
+
+    const before = await engine.ensureRunning();
+    expect(before.ok).toBe(false);
+    expect((await engine.status()).state).toBe('failed');
+
+    // The download lands. Same service, same process, files now on disk.
+    installed = true;
+
+    const status = await engine.status();
+    expect(status.state).toBe('off');
+    expect(status.detail).toBeUndefined();
+    expect(status.modelPresent).toBe(true);
+
+    // And the question the download was for is answerable straight away.
+    await expect(engine.ensureRunning()).resolves.toMatchObject({ok: true});
+    await engine.stop();
+  });
+
   it('stops the child and forgets the address', async () => {
     const child = new FakeChild();
     const engine = service({child});

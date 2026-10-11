@@ -34,6 +34,8 @@ import type {
   Job,
   McpServer,
   AgentUiEvent,
+  RecallModelStatus,
+  RecallPiece,
   McpStatus,
   PendingGate,
   ProfileCatalog,
@@ -47,6 +49,7 @@ import type {JobService} from '@marimo/agent';
 import {safeStorageCipher, secretStore} from './secrets.js';
 import {BrowserSearchProvider} from './search/search-window.js';
 import {LocalModelHost} from './local-model.js';
+import {RecallHost} from './recall.js';
 
 /**
  * How often a dropped MCP server is considered for a reconnect.
@@ -111,6 +114,15 @@ export class AgentService {
    * shipped weights are.
    */
   private readonly localModel: LocalModelHost;
+  /**
+   * The engine that finds things by meaning, and the indexes behind it.
+   *
+   * Owned here for the reason the model is: starting a process is not something
+   * the shared package does. It is constructed unconditionally and does nothing
+   * until the setting is on — an object that waits, rather than a second code path
+   * for the installs that have it.
+   */
+  private readonly recall: RecallHost;
   /** Held for as long as this process is: "the app is running the jobs". */
   private appLock: ProcessLock | undefined;
   private reconcile: NodeJS.Timeout | undefined;
@@ -154,6 +166,30 @@ export class AgentService {
       },
     });
 
+    this.recall = new RecallHost({
+      ...this.options.paths,
+      readSettings: async () => await this.runtime.settings(),
+      onProgress: (progress) => {
+        options.sendEvent({
+          type: 'recall.progress',
+          piece: progress.piece,
+          label: progress.label,
+          receivedBytes: progress.receivedBytes,
+          totalBytes: progress.totalBytes,
+          ...(progress.percent === undefined ? {} : {percent: progress.percent}),
+        });
+      },
+      onInstalled: (piece) => {
+        options.sendEvent({type: 'recall.installed', piece});
+      },
+      onFailed: (message) => {
+        options.sendEvent({type: 'recall.failed', message});
+      },
+      onIndexed: (counts) => {
+        options.sendEvent({type: 'recall.indexed', ...counts});
+      },
+    });
+
     this.mcp = new McpManager({
       readSecrets: secretReaderFor(paths, (file, label) =>
         secretStore(file, label),
@@ -179,8 +215,21 @@ export class AgentService {
        * runtime asks for one; this is the only process that knows how to answer.
        */
       localModel: this.localModel,
+      recall: {
+        stop: async () => {
+          await this.recall.stop();
+        },
+      },
       mcpServers: () => this.mcp.toolsets(),
-      services: () => ({jobService: this.jobService()}),
+      /*
+       * Both services, resolved per profile and folder. Recall answers
+       * `undefined` when the setting is off, which is how the capability becomes
+       * absent rather than discouraged.
+       */
+      services: async (profileId, workspaceRoot) => ({
+        jobService: this.jobService(),
+        ...(await this.recallServiceFor(profileId, workspaceRoot)),
+      }),
       /*
        * A helper agent's words, while the turn that asked for it is still
        * awaiting the tool call. The same channel the MCP status events use, for
@@ -344,6 +393,68 @@ export class AgentService {
   /** The engine, for the calls that describe and drive it. */
   get model(): LocalModelHost {
     return this.localModel;
+  }
+
+  /**
+   * The service this profile and folder should be given, or nothing.
+   *
+   * A method rather than a call at the construction site: the runtime asks per
+   * turn, and what it must get back is the *same object* for the same profile and
+   * folder — a new one would invalidate the agent's cached runner on every
+   * message, which is the rule the runtime's own interface documents.
+   */
+  private async recallServiceFor(
+    profileId: string,
+    workspaceRoot?: string,
+  ): Promise<{recallService: Awaited<ReturnType<RecallHost['serviceFor']>>}> {
+    const service = await this.recall.serviceFor(profileId, workspaceRoot);
+    return service === undefined ? ({} as never) : {recallService: service};
+  }
+
+  /**
+   * What recall is doing, for the card and for a search box.
+   *
+   * Resolved against the *active* profile and folder rather than a conversation's:
+   * the card is about the install, and a search box that indexed one folder while
+   * the rail showed another would answer about the wrong one.
+   */
+  async recallStatus(): Promise<RecallModelStatus> {
+    const scope = await this.recallScope();
+    return await this.recall.status(scope.profileId, scope.workspaceRoot);
+  }
+
+  async recallInstall(piece: RecallPiece): Promise<{started: boolean}> {
+    return this.recall.install(piece);
+  }
+
+  recallCancel(): {cancelled: boolean} {
+    return this.recall.cancel();
+  }
+
+  async recallReindex(): Promise<{started: boolean}> {
+    const scope = await this.recallScope();
+    await this.recall.reindex(scope.profileId, scope.workspaceRoot);
+    return {started: true};
+  }
+
+  async recallForget(): Promise<{forgotten: boolean}> {
+    const scope = await this.recallScope();
+    return await this.recall.forget(scope.profileId, scope.workspaceRoot);
+  }
+
+  private async recallScope(): Promise<{
+    profileId: string;
+    workspaceRoot?: string;
+  }> {
+    const profile = await this.runtime.activeProfile();
+    const state = await this.runtime.workspaces();
+    const active = state.workspaces.find(
+      (entry) => entry.id === state.activeWorkspaceId,
+    );
+    return {
+      profileId: profile.id,
+      ...(active === undefined ? {} : {workspaceRoot: active.path}),
+    };
   }
 
   /**

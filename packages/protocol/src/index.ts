@@ -475,6 +475,59 @@ export const recallSettingsSchema = z.object({
 
 export type RecallSettings = z.infer<typeof recallSettingsSchema>;
 
+/** The two downloads: the backbone, and the projector that makes media possible. */
+export const RECALL_PIECES = ['text', 'media'] as const;
+export const recallPieceSchema = z.enum(RECALL_PIECES);
+export type RecallPiece = z.infer<typeof recallPieceSchema>;
+
+/** The corpora the window may ask about. */
+export const RECALL_QUERY_SCOPES = ['folder', 'memory'] as const;
+export const recallScopeSchema = z.enum(RECALL_QUERY_SCOPES);
+export type RecallScopeName = z.infer<typeof recallScopeSchema>;
+
+/**
+ * The recall model, as the card draws it.
+ *
+ * Its own status rather than a reuse of `EngineStatus`, because the two engines
+ * are different things: this one has two possible downloads, can be *absent*
+ * because a switch is off rather than because a file is missing, and carries a
+ * count of what it has indexed — which is the number that tells a user whether
+ * the thing they turned on has done anything yet.
+ */
+export interface RecallModelStatus {
+  /** Whether the user has switched recall on. Nothing downloads until they do. */
+  enabled: boolean;
+  /** Whether images and audio are part of it, which needs the projector. */
+  media: boolean;
+  state: 'off' | 'starting' | 'ready' | 'failed';
+  detail?: string;
+  /** Which pieces are on disk, at their pinned size. */
+  enginePresent: boolean;
+  textPresent: boolean;
+  projectorPresent: boolean;
+  /** Bytes each piece is, for the button that names the download. */
+  sizeBytes: {engine: number; text: number; media: number};
+  /** Exactly what the app runs, once something is running. */
+  command: string[];
+  log: string[];
+  /** What is being downloaded, when something is. */
+  installing?: {
+    piece: RecallPiece;
+    label: string;
+    receivedBytes: number;
+    totalBytes: number;
+    percent?: number;
+  };
+  /** What the index holds for the folder the window is looking at. */
+  index: {
+    builtAt?: string;
+    records: number;
+    chunks: number;
+    memory: number;
+    changed: number;
+  };
+}
+
 export function defaultRecallSettings(): RecallSettings {
   return {enabled: false, memory: true, workspace: true};
 }
@@ -1645,6 +1698,30 @@ export type AgentUiEvent =
   | {type: 'model.installed'; tier: ModelTier}
   /** A download failed, with the sentence that says why. */
   | {type: 'model.failed'; message: string}
+  /*
+   * The recall model's own four, shaped like the model's above and separate from
+   * them on purpose: the card that draws them has different words to say, and a
+   * `model.progress` carrying an embedding download would make two unrelated
+   * things one event with a string in it to tell them apart.
+   */
+  | {
+      type: 'recall.progress';
+      piece: RecallPiece;
+      label: string;
+      receivedBytes: number;
+      totalBytes: number;
+      percent?: number;
+    }
+  | {type: 'recall.installed'; piece: RecallPiece}
+  | {type: 'recall.failed'; message: string}
+  /**
+   * Something was indexed, so a card or a search box showing counts is stale.
+   *
+   * Carries the numbers rather than making the window ask: indexing happens in
+   * the background while a turn is running, and a chatty event that forced a
+   * round trip would be a poll wearing an event's clothes.
+   */
+  | {type: 'recall.indexed'; records: number; chunks: number; memory: number}
   /**
    * The active profile or workspace changed, so what the window is looking at is
    * no longer what the agent would answer as. The renderer reloads its session
@@ -2091,6 +2168,20 @@ export const agentCallSchemas = {
    */
   'localModel.cancel': z.object({}),
 
+  /*
+   * Recall: the model that finds things by meaning.
+   *
+   * `status` is a read and the rest are buttons, for the same reason the model's
+   * are: a settings write that quietly reached the network for 310 MB would
+   * report success for something that had not happened yet.
+   */
+  'recall.status': z.object({}),
+  /* Fetches one piece. Answers as soon as the download has *started*. */
+  'recall.install': z.object({piece: recallPieceSchema}),
+  'recall.cancel': z.object({}),
+  'recall.reindex': z.object({}),
+  'recall.forget': z.object({}),
+
   /* What this agent is allowed to do, and what it is. */
   'profiles.catalog': z.object({}),
   'profiles.update': z.object({
@@ -2160,6 +2251,11 @@ export interface AgentCallResults {
   'localModel.stop': LocalModelStatus;
   'localModel.install': {started: boolean};
   'localModel.cancel': {cancelled: boolean};
+  'recall.status': RecallModelStatus;
+  'recall.install': {started: boolean};
+  'recall.cancel': {cancelled: boolean};
+  'recall.reindex': {started: boolean};
+  'recall.forget': {forgotten: boolean};
   'profiles.catalog': ProfileCatalog;
   'profiles.update': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.create': {profiles: AgentProfile[]; activeProfileId: string};

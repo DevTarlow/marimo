@@ -250,6 +250,19 @@ export class RecallService {
     return {hits, searched: wanted, coverage, index, notes};
   }
 
+  /**
+   * Brings the index up to date without answering anything.
+   *
+   * What the button in the card does, and why it is separate from `search`: a
+   * user who has just switched recall on wants the folder indexed *now*, and the
+   * honest way to do that is the same bounded refresh a search would have done,
+   * with a count at the end instead of a result list.
+   */
+  async reindex(): Promise<RecallIndexStatus> {
+    await this.refresh();
+    return await this.status();
+  }
+
   /** Throws the index away, so the next search builds it again. */
   async forget(): Promise<void> {
     await removeIndex(this.options.dir);

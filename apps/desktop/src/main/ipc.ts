@@ -419,6 +419,13 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'localModel.cancel': async () => agent().model.cancel(),
 
+    /* Recall: a read and four buttons, on the same terms as the model's. */
+    'recall.status': async () => await agent().recallStatus(),
+    'recall.install': async (params) => await agent().recallInstall(params.piece),
+    'recall.cancel': () => agent().recallCancel(),
+    'recall.reindex': async () => await agent().recallReindex(),
+    'recall.forget': async () => await agent().recallForget(),
+
     'profiles.list': async () => await agent().profiles(),
 
     'profiles.catalog': async () => await agent().catalog(),

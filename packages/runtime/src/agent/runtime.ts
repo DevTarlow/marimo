@@ -109,8 +109,22 @@ export interface AgentRuntimeOptions {
   paths: AppPaths;
   /** Present in the window, absent in the runner, which has no browser. */
   webSearch?: WebSearchProvider;
-  /** The rest of the app's tools, resolved per profile. */
-  services?: (profileId: string) => RuntimeServices;
+  /**
+   * The rest of the app's tools, resolved per profile and folder.
+   *
+   * The folder is passed because recall's index lives inside it — a service
+   * derived from one folder is the wrong service for another, and asking the app
+   * to remember what the runtime last asked for would be a second copy of a fact
+   * this function already has.
+   *
+   * May be asynchronous: the supplier reads a setting to decide whether recall
+   * exists at all, and a callback that had to be synchronous would push that read
+   * into whoever assembled the store.
+   */
+  services?: (
+    profileId: string,
+    workspaceRoot?: string,
+  ) => RuntimeServices | Promise<RuntimeServices>;
   /**
    * The MCP servers that are connected right now.
    *
@@ -799,7 +813,7 @@ export class AgentRuntime {
      */
     host.setRecallService(
       settings.recall.enabled
-        ? this.options.services?.(profileId).recallService
+        ? (await this.options.services?.(profileId, workspaceRoot))?.recallService
         : undefined,
     );
 
@@ -992,7 +1006,13 @@ export class AgentRuntime {
       return existing;
     }
 
-    const services = this.options.services?.(profileId) ?? {};
+    /*
+     * Awaited, and the folder is deliberately not passed: this is the host a
+     * caller builds before it knows which conversation is asking — reading a
+     * transcript, filing a session — and recall's tools are chosen when a turn
+     * runs, where `host()` has both.
+     */
+    const services = (await this.options.services?.(profileId)) ?? {};
     const host = new AgentHost({
       sessionsDir: this.options.paths.sessions,
       // A placeholder config: `host()` resolves the real one and calls

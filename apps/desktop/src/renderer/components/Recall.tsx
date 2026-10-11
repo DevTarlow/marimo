@@ -122,9 +122,9 @@ export function Recall({
   return (
     <SettingsSection title="Recall" opened={opened} onToggle={onToggle}>
       <p className="settings-muted">
-        Finds things by what they mean rather than by the words they use: your
-        folder, and the notes it keeps about you. It is what lets an answer to
-        “why does the upload keep failing” find a passage about retries.
+        Searches your folder and the notes it keeps about you by what you mean.
+        Ask why the upload keeps failing and it finds the code that retries,
+        though retry is not in the question.
       </p>
 
       <label className="settings-check">
@@ -143,9 +143,10 @@ export function Recall({
 
       {!enabled && (
         <p className="settings-muted">
-          Off. Turning it on downloads {formatBytes(status?.sizeBytes.text ?? 0)} of
-          model and runs it beside the one that answers questions — on the
-          processor, so it does not compete for video memory.
+          Off. Turning it on downloads{' '}
+          {formatBytes(status?.sizeBytes.text ?? 0)} and runs it on your
+          processor, next to the model that answers questions, so it does not
+          take video memory from it.
         </p>
       )}
 
@@ -219,10 +220,10 @@ export function Recall({
 
           <p className="settings-muted">
             {index === undefined || index.records === 0
-              ? 'Nothing indexed in this folder yet. It is indexed the first time something is searched.'
-              : `${String(index.records)} item(s) indexed — ${String(index.chunks)} from the folder and ${String(index.memory)} from memory.` +
+              ? 'Nothing is indexed in this folder yet. It gets indexed the first time you search.'
+              : `${String(index.records)} ${index.records === 1 ? 'item' : 'items'} indexed: ${String(index.chunks)} from the folder, ${String(index.memory)} from memory.` +
                 (index.changed > 0
-                  ? ` ${String(index.changed)} file(s) have changed since.`
+                  ? ` ${String(index.changed)} ${index.changed === 1 ? 'file has' : 'files have'} changed since.`
                   : '')}
           </p>
 
@@ -253,14 +254,14 @@ export function Recall({
             </button>
           </div>
           <p className="settings-muted">
-            Forgetting removes what it has read. Your files and its notes are not
-            touched.
+            Forgetting deletes what it has read. Your files and its notes stay
+            where they are.
           </p>
           {!granted && (
             <p className="settings-muted">
-              One more step: the agent has to be allowed to use it. Tick{' '}
-              <strong>recall</strong> under “What this agent can do” — a tool it has
-              not been granted is not offered to it at all.
+              The agent also has to be allowed to use it. Tick recall under
+              “What this agent can do”; a tool it has not been granted is not
+              offered to it.
             </p>
           )}
         </>
@@ -271,7 +272,7 @@ export function Recall({
           <summary>The engine</summary>
           <p className="settings-muted">
             {status.state}
-            {status.detail === undefined ? '' : ` — ${status.detail}`}
+            {status.detail === undefined ? '' : `: ${status.detail}`}
           </p>
           <p className="settings-muted settings-path">
             {status.command.join(' ')}

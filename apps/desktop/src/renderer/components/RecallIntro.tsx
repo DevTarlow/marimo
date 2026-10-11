@@ -105,26 +105,30 @@ export function RecallIntro({
   return (
     <div className="onboarding">
       <img className="onboarding-mark" src="./marimo-logo.png" alt="" />
-      <h2>One more thing, and it is the interesting one</h2>
+      <h2>Search by what you remember about it</h2>
 
       <p className="onboarding-lead">
-        Your agent can read the folder you give it. <strong>Recall</strong> lets
-        it — and you — <em>find</em> things in there by what you mean, and in what
-        it has remembered about you.
+        Recall looks through the folder you give your agent, and through the notes
+        it keeps about you. You ask for something the way you would say it out
+        loud, and it finds the place that matches.
       </p>
 
       <p className="onboarding-note">
-        Ask “why does the upload keep failing” and it lands on the retry code,
-        even though neither of you said “retry”. Ask “what did we decide about the
-        folders thing” and it finds the note from three weeks ago. In this window
-        it is <strong>Ctrl+K</strong>: type what you are looking for, and read the
-        lines where they live.
+        Ask why the upload keeps failing and it lands on the code that retries.
+        Retry is not in the question. Ask what you decided about the folders and
+        it finds the note from three weeks ago.
       </p>
 
       <p className="onboarding-note">
-        It is one {size} download and it runs on your processor, beside the model
-        that answers questions, so it does not compete for video memory. Nothing
-        you search with it leaves this computer.
+        You can search this way yourself, from this window. Press{' '}
+        <strong>Ctrl+K</strong>, type what you remember, and read the lines where
+        they are.
+      </p>
+
+      <p className="onboarding-note">
+        It is a {size} download. It runs on your processor next to the model that
+        answers questions, so it does not take video memory from it. What you
+        search stays on this computer.
       </p>
 
       {installing !== undefined && (
@@ -156,7 +160,7 @@ export function RecallIntro({
             className="button button-primary"
             onClick={onDone}
           >
-            Start using it
+            Continue
           </button>
         ) : installing === undefined ? (
           <button
@@ -182,19 +186,17 @@ export function RecallIntro({
           </button>
         )}
 
-        <button
-          type="button"
-          className="button button-quiet"
-          onClick={onDone}
-        >
-          {installed || ready ? 'Close' : 'Not now'}
-        </button>
+        {!(installed || ready) && (
+          <button type="button" className="button button-quiet" onClick={onDone}>
+            Not now
+          </button>
+        )}
       </div>
 
       {problem !== null && <p className="settings-problem">{problem}</p>}
 
       <p className="onboarding-note onboarding-quiet">
-        You can turn this on or off whenever you like, in Settings → Recall.
+        You can change this whenever you like in Settings, under Recall.
       </p>
     </div>
   );

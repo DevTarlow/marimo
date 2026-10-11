@@ -36,6 +36,7 @@ import {Companion} from './companion.js';
 import {noticeFor, trayMenu} from './tray.js';
 import type {TrayItem} from './tray.js';
 import {AgentService} from './agent.js';
+import {registerMediaScheme} from './media/decode-window.js';
 import {
   applyUserDataOverride,
   resolvePaths,
@@ -725,6 +726,15 @@ if (!hasLock) {
   // racing it for the same conversation files.
   app.quit();
 } else {
+  /*
+   * Before anything is ready, and deliberately: Electron reads a custom scheme's
+   * privileges once, while it builds the URL request factory inside the ready
+   * sequence. A call after that is a warning nobody reads and a scheme that
+   * stays non-standard — which for `marimo-media://` means a video whose seeks
+   * never arrive, or a frame that taints the canvas it is drawn into.
+   */
+  registerMediaScheme();
+
   /*
    * Launching the app again brings the window back.
    *

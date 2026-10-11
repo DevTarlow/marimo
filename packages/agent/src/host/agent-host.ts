@@ -115,6 +115,16 @@ export interface AgentHostOptions {
    */
   recallService?: RecallLookup;
   /**
+   * Told which conversations are gone, right after they are deleted.
+   *
+   * A callback rather than a call to `recallService` directly, because the host
+   * that deletes is built before it knows which folder the conversation worked
+   * in — deletion is metadata, and the placeholder host can do it — while the
+   * index that has to forget the chat lives with the folder. The caller that
+   * owns both resolves one from the other here.
+   */
+  onSessionsDeleted?: (sessionIds: readonly string[]) => void | Promise<void>;
+  /**
    * Where a helper agent's words go while it runs.
    *
    * Out of band rather than through the turn's generator, because a tool call
@@ -258,6 +268,10 @@ export class AgentHost {
    * then rather than from what was true when the host was made.
    */
   private recallService: RecallLookup | undefined;
+  /** Told which conversations were deleted, so their vectors can be dropped. */
+  private readonly onSessionsDeleted:
+    | ((sessionIds: readonly string[]) => void | Promise<void>)
+    | undefined;
   /**
    * The question the current turn is answering.
    *
@@ -334,6 +348,7 @@ export class AgentHost {
     this.skillService = options.skillService;
     this.mcpServers = options.mcpServers ?? [];
     this.recallService = options.recallService;
+    this.onSessionsDeleted = options.onSessionsDeleted;
     this.onSubagentEvent = options.onSubagentEvent;
     this.subagentLimits = options.subagentLimits;
   }
@@ -477,6 +492,15 @@ export class AgentHost {
     }
     const deleted =
       await this.sessionService.deleteSessionsForProfile(profileId);
+    /*
+     * Told before the count is answered, so a caller that deletes a profile and
+     * immediately searches cannot find the conversations it just removed. The
+     * ids are the session service's own answer rather than a second scan of the
+     * index.
+     */
+    if (deleted.length > 0) {
+      await this.onSessionsDeleted?.(deleted);
+    }
     return deleted.length;
   }
 
@@ -658,6 +682,7 @@ export class AgentHost {
       userId: this.userId,
       sessionId,
     });
+    await this.onSessionsDeleted?.([sessionId]);
   }
 
   async getTranscript(

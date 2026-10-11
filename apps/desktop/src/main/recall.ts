@@ -25,6 +25,7 @@ import {join} from 'node:path';
 
 import {MemoryStore, resolveAgentDataDir} from '@marimo/agent';
 import {
+  ConversationWatermarkStore,
   EMBEDDING_PINS,
   RecallEngine,
   RecallService,
@@ -37,7 +38,13 @@ import {
   recallSpec,
   resolveRecallFiles,
 } from '@marimo/runtime';
-import type {DownloadProgress} from '@marimo/runtime';
+import type {
+  ConversationEvent,
+  ConversationSummary,
+  DownloadProgress,
+  EmbeddingPart,
+  MediaKind,
+} from '@marimo/runtime';
 import type {RecallModelStatus, StoredSettings} from '@marimo/protocol';
 
 export interface RecallHostOptions {
@@ -54,7 +61,37 @@ export interface RecallHostOptions {
   onProgress?: (progress: DownloadProgress & {piece: 'text' | 'media'}) => void;
   onInstalled?: (piece: 'text' | 'media') => void;
   onFailed?: (message: string) => void;
-  onIndexed?: (counts: {records: number; chunks: number; memory: number}) => void;
+  onIndexed?: (counts: {
+    records: number;
+    chunks: number;
+    memory: number;
+    conversations: number;
+    media: number;
+  }) => void;
+  /**
+   * The stored conversations, for the third corpus.
+   *
+   * Injected rather than read here, because conversations belong to the session
+   * store and this class has no business knowing where one lives. The indexer
+   * asks for the list and then for one conversation's events, which is what keeps
+   * a search from reading every transcript in the app to answer one question.
+   */
+  listConversations?: (
+    profileId: string,
+  ) => Promise<readonly ConversationSummary[]>;
+  readConversation?: (
+    profileId: string,
+    sessionId: string,
+  ) => Promise<{title: string; events: readonly ConversationEvent[]}>;
+  /**
+   * Media, decoded into the content parts the embedding client takes.
+   *
+   * The one piece of this that has to be Electron: decoding a sound or a clip
+   * needs a browser engine, which is exactly what this process is. Absent when
+   * the projector is not installed, which is what makes the `media` scope
+   * disappear rather than return nothing.
+   */
+  decodeMedia?: (path: string, kind: MediaKind) => Promise<EmbeddingPart[]>;
   /**
    * Read indexes and never build one.
    *
@@ -75,6 +112,8 @@ export class RecallHost {
   >();
   private downloading: AbortController | undefined;
   private progress: RecallModelStatus['installing'];
+  /** The media switch the running engine was last seen under; see `serviceFor`. */
+  private lastMedia: boolean | undefined;
 
   constructor(private readonly options: RecallHostOptions) {
     this.engine = new RecallEngine({
@@ -83,12 +122,13 @@ export class RecallHost {
           dir: this.dir,
           manifest: EMBEDDING_PINS,
           /*
-           * Media is off until the projector is a thing this build downloads and
-           * uses. The pin knows both pieces, so the card can still say what the
-           * second download would cost — but a service that passed a projector
-           * path nobody has fetched would be an engine that fails to load a file.
+           * The media switch, read per call like everything else here. The
+           * projector is only passed when the file is actually on disk —
+           * `resolveRecallFiles` checks that — so a switch turned on before the
+           * download finishes starts an engine that is ready for text rather than
+           * one that fails to load a file that is not there.
            */
-          media: false,
+          media: (await this.options.readSettings()).recall.media,
         }),
       pidFile: embeddingPidFile(this.options.userData),
       dims: EMBEDDING_PINS.weights.dims,
@@ -125,6 +165,20 @@ export class RecallHost {
       return undefined;
     }
 
+    /*
+     * The engine's argv carries `--mmproj` or it does not, and that is decided
+     * when the process is spawned — `ensureRunning` answers with the engine that
+     * is already up, whatever the spec now says. So a media switch that moved
+     * while one was running has to replace it, or the switch is one that only
+     * takes effect after a restart: a media request against a process with no
+     * image encoder fails, and the sentence it fails with is about the request.
+     * One model load on the next request is the whole cost.
+     */
+    if (this.lastMedia !== undefined && this.lastMedia !== settings.recall.media) {
+      await this.engine.stop();
+    }
+    this.lastMedia = settings.recall.media;
+
     const root =
       workspaceRoot !== undefined &&
       workspaceRoot.length > 0 &&
@@ -135,7 +189,35 @@ export class RecallHost {
       root === undefined
         ? join(this.options.userData, 'recall', profileId)
         : join(resolveAgentDataDir(root, profileId), 'recall');
-    const key = `${root ?? ''}\u0000${indexDir}`;
+    /*
+     * The projector on disk, not the switch: a switch turned on before the
+     * download has finished must not offer a media scope whose every request the
+     * engine would refuse for a missing encoder.
+     */
+    const mediaReady =
+      settings.recall.media &&
+      this.options.decodeMedia !== undefined &&
+      resolveRecallFiles({dir: this.dir, manifest: EMBEDDING_PINS, media: true})
+        .projectorPresent;
+    const conversationsOn =
+      settings.recall.conversations &&
+      this.options.listConversations !== undefined &&
+      this.options.readConversation !== undefined;
+    /*
+     * What the service was derived from, and new switches belong in here. A
+     * cached service keeps the scopes it was built with, so turning media or
+     * conversations on without rebuilding would be a switch that only took
+     * effect after a restart — and the runtime is told to drop its runner when
+     * this object changes identity, which is exactly right for a new tool list.
+     */
+    const key = [
+      root ?? '',
+      indexDir,
+      settings.recall.memory ? 'memory' : '',
+      conversationsOn ? 'conversations' : '',
+      mediaReady ? 'media' : '',
+      settings.recall.codeQueries ? 'code' : 'search',
+    ].join('\u0000');
 
     const existing = this.services.get(profileId);
     if (existing !== undefined && existing.key === key) {
@@ -146,6 +228,13 @@ export class RecallHost {
       workspaceRoot: root ?? this.options.userData,
       profileId,
     });
+    const watermark = new ConversationWatermarkStore({
+      file: join(indexDir, 'conversations.json'),
+    });
+    const list = this.options.listConversations;
+    const read = this.options.readConversation;
+    const decode = this.options.decodeMedia;
+
     const service = new RecallService({
       ...(root === undefined ? {} : {workspaceRoot: root}),
       dir: indexDir,
@@ -159,6 +248,23 @@ export class RecallHost {
       ...(this.options.readOnly === true ? {readOnly: true} : {}),
       ...(settings.recall.memory
         ? {readMemory: async () => await memory.read()}
+        : {}),
+      ...(conversationsOn && list !== undefined && read !== undefined
+        ? {
+            conversations: {
+              list: async () => await list(profileId),
+              read: async (sessionId: string) => await read(profileId, sessionId),
+            },
+            watermark,
+          }
+        : {}),
+      ...(mediaReady && decode !== undefined
+        ? {
+            media: {
+              decode,
+              embedParts: async (inputs) => await this.engine.embedParts(inputs),
+            },
+          }
         : {}),
     });
     this.services.set(profileId, {key, service, memory});
@@ -174,7 +280,7 @@ export class RecallHost {
     const files = resolveRecallFiles({
       dir: this.dir,
       manifest: EMBEDDING_PINS,
-      media: false,
+      media: settings.recall.media,
     });
     const engine = await this.engine.status();
     const installed = recallPiecesInstalled({
@@ -184,12 +290,12 @@ export class RecallHost {
     const service = await this.serviceFor(profileId, workspaceRoot);
     const index =
       service === undefined
-        ? {records: 0, chunks: 0, memory: 0, changed: 0}
+        ? {records: 0, chunks: 0, memory: 0, conversations: 0, media: 0, changed: 0}
         : await service.status();
 
     return {
       enabled: settings.recall.enabled,
-      media: false,
+      media: settings.recall.media,
       state: engine.state,
       ...(engine.detail === undefined ? {} : {detail: engine.detail}),
       enginePresent: files.enginePresent,
@@ -234,16 +340,24 @@ export class RecallHost {
   async reindex(
     profileId: string,
     workspaceRoot?: string,
-  ): Promise<{records: number; chunks: number; memory: number}> {
+  ): Promise<{
+    records: number;
+    chunks: number;
+    memory: number;
+    conversations: number;
+    media: number;
+  }> {
     const service = await this.serviceFor(profileId, workspaceRoot);
     if (service === undefined) {
-      return {records: 0, chunks: 0, memory: 0};
+      return {records: 0, chunks: 0, memory: 0, conversations: 0, media: 0};
     }
     const status = await service.reindex();
     const counts = {
       records: status.records,
       chunks: status.chunks,
       memory: status.memory,
+      conversations: status.conversations,
+      media: status.media,
     };
     this.options.onIndexed?.(counts);
     return counts;
@@ -301,6 +415,20 @@ export class RecallHost {
           ? {}
           : {fetchImpl: this.options.fetchImpl}),
       });
+
+      /*
+       * The projector lands *after* an engine may already be up, and `--mmproj`
+       * is fixed when the process is spawned. An engine started without it has
+       * no image encoder in the process at all, so a media request against it
+       * fails with a sentence about the request rather than about the earlier
+       * start. Stopping it here is what makes the next request start one that
+       * carries the projector — cheap, because the engine starts on demand and
+       * is idle when nothing is being embedded.
+       */
+      if (piece === 'media') {
+        await this.engine.stop();
+      }
+
       this.options.onInstalled?.(piece);
     } catch (failure) {
       // A cancelled download is not a failure to report: the user asked for it.

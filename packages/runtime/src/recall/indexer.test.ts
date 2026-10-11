@@ -16,6 +16,8 @@ import {join} from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {memoryBullets, refreshIndex} from './indexer.js';
+import type {MediaSource} from './indexer.js';
+import type {ConversationEvent} from './conversations.js';
 import {INDEX_FILE, readIndex} from './store.js';
 import type {IndexModel} from './store.js';
 
@@ -299,6 +301,150 @@ describe('refreshIndex', () => {
 
     expect(read?.file.count).toBe(1);
     expect(read?.vectors.length).toBe(8);
+  });
+
+  /*
+   * A conversation is append-only, so the interesting thing is not that it gets
+   * embedded but that the *second* refresh embeds only what was said since the
+   * first. A test that only looked at the first pass would pass with no
+   * watermark at all, which is the whole feature.
+   */
+  it('embeds a conversation once, then only the new stretch', async () => {
+    const embedder = fakeEmbedder();
+    let events: ConversationEvent[] = [
+      {author: 'user', content: {parts: [{text: 'how should the retry work?'}]}},
+      {
+        author: 'agent',
+        content: {
+          parts: [
+            {text: 'the thinking nobody said', thought: true},
+            {text: 'three attempts, then give up'},
+            {functionCall: {name: 'read_file'}},
+          ],
+        },
+      },
+    ];
+    const conversations = {
+      list: async () => [
+        {sessionId: 's1', title: 'Retries', eventCount: events.length},
+      ],
+      read: async () => ({title: 'Retries', events}),
+    };
+
+    const first = await refreshIndex({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: embedder.embed,
+      conversations,
+      watermark: {},
+    });
+
+    const conversation = first.data.file.records.filter(
+      (record) => record.kind === 'conversation',
+    );
+    expect(conversation).toHaveLength(1);
+    expect(conversation[0]?.sessionId).toBe('s1');
+    expect(conversation[0]?.startEvent).toBe(0);
+    expect(conversation[0]?.endEvent).toBe(2);
+    expect(first.watermark).toEqual({s1: 2});
+
+    const asked = embedder.calls.flat().join('\n');
+    expect(asked).toContain('how should the retry work?');
+    expect(asked).toContain('three attempts, then give up');
+    // Reasoning and tool payloads are what the renderer exists to leave out.
+    expect(asked).not.toContain('the thinking nobody said');
+    expect(asked).not.toContain('read_file');
+
+    events = [...events, {author: 'user', content: {parts: [{text: 'and the upload?'}]}}];
+    embedder.calls.length = 0;
+    const second = await refreshIndex({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: embedder.embed,
+      conversations,
+      watermark: first.watermark,
+    });
+
+    const again = embedder.calls.flat().join('\n');
+    expect(again).toContain('and the upload?');
+    expect(again).not.toContain('three attempts');
+    expect(second.watermark).toEqual({s1: 3});
+    expect(
+      second.data.file.records.filter((record) => record.kind === 'conversation'),
+    ).toHaveLength(2);
+  });
+
+  it('drops a conversation that is gone, and its watermark with it', async () => {
+    const embedder = fakeEmbedder();
+    const events: ConversationEvent[] = [
+      {author: 'user', content: {parts: [{text: 'remember the oven'}]}},
+    ];
+    const present = {
+      list: async () => [{sessionId: 's1', title: 'Kitchen', eventCount: 1}],
+      read: async () => ({title: 'Kitchen', events}),
+    };
+    const first = await refreshIndex({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: embedder.embed,
+      conversations: present,
+      watermark: {},
+    });
+    expect(first.data.file.records).toHaveLength(1);
+
+    const gone = {
+      list: async () => [],
+      read: async () => undefined,
+    };
+    const second = await refreshIndex({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: embedder.embed,
+      conversations: gone,
+      watermark: first.watermark,
+    });
+
+    expect(second.data.file.records).toHaveLength(0);
+    expect(second.watermark).toEqual({});
+  });
+
+  /*
+   * Media goes in as content parts with no task prefix, and the parts the
+   * decoder produces are exactly what the engine is handed.
+   */
+  it('embeds a media file through the decoder', async () => {
+    await write('photo.png', 'not really a png');
+    const parts: Array<readonly unknown[]> = [];
+    const media: MediaSource = {
+      decode: async (path: string) => [
+        {type: 'text', text: path},
+        {type: 'image_url', image_url: {url: 'data:image/png;base64,AAAA'}},
+      ],
+      embedParts: async (inputs) => {
+        parts.push(inputs[0] ?? []);
+        return {vectors: inputs.map(() => Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]))};
+      },
+    };
+
+    const {data, coverage} = await refreshIndex({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: fakeEmbedder().embed,
+      media,
+    });
+
+    expect(coverage.media).toBe(1);
+    const record = data.file.records.find((entry) => entry.kind === 'media');
+    expect(record?.path).toBe('photo.png');
+    expect(record?.mediaKind).toBe('image');
+    // The file name as plain words, and the picture: never `title: … | text: …`.
+    expect(parts[0]?.[0]).toEqual({type: 'text', text: join(workspace, 'photo.png')});
+    expect(parts[0]?.[1]).toMatchObject({type: 'image_url'});
   });
 });
 

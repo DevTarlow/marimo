@@ -998,6 +998,8 @@ describe('the recall block', () => {
       enabled: false,
       memory: true,
       workspace: true,
+      conversations: true,
+      media: false,
       codeQueries: false,
     });
   });
@@ -1054,6 +1056,8 @@ describe('the recall block', () => {
       enabled: true,
       memory: true,
       workspace: false,
+      conversations: true,
+      media: false,
       codeQueries: false,
     });
   });

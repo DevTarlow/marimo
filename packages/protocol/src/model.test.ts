@@ -103,6 +103,8 @@ describe('the recall settings', () => {
       enabled: false,
       memory: true,
       workspace: true,
+      conversations: true,
+      media: false,
       codeQueries: false,
     });
   });

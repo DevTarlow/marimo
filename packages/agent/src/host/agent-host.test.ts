@@ -959,6 +959,28 @@ describe('AgentHost', () => {
     expect(await host.listSessions('profile-alpha')).toHaveLength(1);
   });
 
+  it('tells the index which conversations are gone', async () => {
+    fake = await startFakeDeepSeek(() => textChunks('ok'));
+    const forgotten: string[][] = [];
+    const host = new AgentHost({
+      sessionsDir: join(workDir, 'sessions'),
+      config: createConfig(fake.baseUrl),
+      onSessionsDeleted: (ids) => {
+        forgotten.push([...ids]);
+      },
+    });
+    host.init();
+    openHosts.push(host);
+
+    const one = await host.createSession();
+    await host.deleteSession(one.id);
+    expect(forgotten).toEqual([[one.id]]);
+
+    const two = await host.createSession(undefined, 'profile-beta');
+    expect(await host.deleteSessionsForProfile('profile-beta')).toBe(1);
+    expect(forgotten[1]).toEqual([two.id]);
+  });
+
   it('uses the profile identity as the system prompt', async () => {
     const {host, session} = await startHost(() => textChunks('ok'));
     host.updateConfig({

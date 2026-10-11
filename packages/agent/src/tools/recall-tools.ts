@@ -19,7 +19,7 @@ import {FunctionTool} from '@google/adk';
 import {z} from 'zod';
 
 /** The corpora recall can search. The literals are the contract. */
-export const RECALL_SCOPES = ['folder', 'memory'] as const;
+export const RECALL_SCOPES = ['folder', 'memory', 'conversation', 'media'] as const;
 export type RecallScope = (typeof RECALL_SCOPES)[number];
 
 /**
@@ -32,13 +32,16 @@ export type RecallScope = (typeof RECALL_SCOPES)[number];
  * there.
  */
 export interface RecallHit {
-  kind: 'text' | 'memory';
+  kind: 'text' | 'memory' | 'conversation' | 'media';
   /** Relative to the folder being searched; `''` for a memory bullet. */
   path: string;
   startLine?: number;
   endLine?: number;
   /** For a memory bullet, the section it lives under. */
   section?: string;
+  /** For a conversation passage, the conversation it was said in. */
+  sessionId?: string;
+  title?: string;
   /** One line of the text, for a list that has to be readable. */
   preview: string;
   /** Cosine similarity, higher is nearer. Not comparable across modalities. */
@@ -72,6 +75,15 @@ export interface RecallLookup {
   /** The corpora available right now — absent ones are not offered to the model. */
   scopes(): readonly RecallScope[];
   search(request: RecallRequest): Promise<RecallAnswer>;
+  /**
+   * Drops conversations from the index, when one is deleted.
+   *
+   * On the lookup rather than on the host, because the host is the thing that
+   * knows a conversation was deleted and this is the thing that remembers it was
+   * indexed. Optional, because a store that only reads — the headless runner —
+   * has nothing to drop from.
+   */
+  forgetSessions?(sessionIds: readonly string[]): Promise<void>;
 }
 
 export interface RecallToolContext {
@@ -106,12 +118,13 @@ export function createRecallTool(context: RecallToolContext) {
     name: 'recall',
     description:
       'Find things by what they mean rather than by matching words: files in ' +
-      'the workspace, and your own long-term memory. Use it when you know what ' +
-      'you are looking for but not the words the answer uses, or when a question ' +
-      'is about something the user told you earlier. Unlike search_knowledge_base ' +
-      'this matches on meaning, so it can find a passage about retries from the ' +
-      'question "why does the upload keep failing". Results carry their own text; ' +
-      'a result marked as changed has to be read with read_file instead.',
+      'the workspace, your own long-term memory, and what was said in earlier ' +
+      'conversations. Use it when you know what you are looking for but not the ' +
+      'words the answer uses, or when a question is about something the user ' +
+      'told you earlier. Unlike search_knowledge_base this matches on meaning, ' +
+      'so it can find a passage about retries from the question "why does the ' +
+      'upload keep failing". Results carry their own text; a result marked as ' +
+      'changed has to be read with read_file instead.',
     parameters: z.object({
       query: z
         .string()
@@ -207,10 +220,7 @@ function render(
   let cut = false;
 
   for (const hit of answer.hits) {
-    const where =
-      hit.kind === 'memory'
-        ? `memory "${hit.section ?? ''}"`
-        : `${hit.path}:${String(hit.startLine ?? 1)}-${String(hit.endLine ?? 1)}`;
+    const where = whereOf(hit);
     const head = `${where} (${hit.score.toFixed(2)})`;
     const body = hit.stale
       ? '  [changed since it was indexed — read it with read_file to see the current text]'
@@ -243,6 +253,27 @@ function indent(text: string): string {
     .split('\n')
     .map((line) => `  ${line}`)
     .join('\n');
+}
+
+/**
+ * Where a hit came from, in the register the model already reads.
+ *
+ * A memory bullet names its section, a file names its lines, and the two new
+ * corpora need their own nouns rather than being flattened into a path: a
+ * conversation passage is *said*, so it is labelled by the conversation it was
+ * said in — a path would be a file the model would then try to read.
+ */
+function whereOf(hit: RecallHit): string {
+  switch (hit.kind) {
+    case 'memory':
+      return `memory "${hit.section ?? ''}"`;
+    case 'conversation':
+      return `conversation "${hit.title ?? hit.sessionId ?? ''}"`;
+    case 'media':
+      return `media ${hit.path}`;
+    default:
+      return `${hit.path}:${String(hit.startLine ?? 1)}-${String(hit.endLine ?? 1)}`;
+  }
 }
 
 function describeError(error: unknown): string {

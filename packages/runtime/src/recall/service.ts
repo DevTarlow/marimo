@@ -34,8 +34,15 @@ import {splitMemory} from '@marimo/agent';
 
 import {chunkText} from './chunk.js';
 import type {TextChunk} from './chunk.js';
+import {renderConversationText} from './conversations.js';
+import type {ConversationEvent, ConversationWatermarkStore} from './conversations.js';
 import {refreshIndex} from './indexer.js';
-import type {IndexCoverage} from './indexer.js';
+import type {
+  ConversationSource,
+  IndexCoverage,
+  MediaSource,
+} from './indexer.js';
+import type {MediaKind} from './media.js';
 import {documentText, queryText} from './prefixes.js';
 import {DEFAULT_LIMIT, MAX_LIMIT, searchVectors} from './search.js';
 import type {SearchHit} from './search.js';
@@ -45,15 +52,16 @@ import {
   previewOf,
   readIndex,
   removeIndex,
+  writeIndex,
 } from './store.js';
 import type {FileStamp, IndexModel, IndexRecord} from './store.js';
 
 /** The corpora this app can search. */
-export type RecallScope = 'folder' | 'memory';
+export type RecallScope = 'folder' | 'memory' | 'conversation' | 'media';
 
 /** One hit, with its text read back and checked. */
 export interface RecallHit {
-  kind: 'text' | 'memory';
+  kind: 'text' | 'memory' | 'conversation' | 'media';
   /** Path relative to the folder, or `''` for a memory bullet. */
   path: string;
   /** Text only: the first and last line, 1-based and inclusive. */
@@ -61,6 +69,12 @@ export interface RecallHit {
   endLine?: number;
   /** Memory only: the `##` heading the bullet lives under. */
   section?: string;
+  /** Conversation only: which chat this passage came from. */
+  sessionId?: string;
+  /** Conversation only: the chat's title at the time it was indexed. */
+  title?: string;
+  /** Media only: which decoder produced this vector. */
+  mediaKind?: MediaKind;
   preview: string;
   /** Cosine similarity against the query. */
   score: number;
@@ -90,6 +104,8 @@ export interface RecallIndexStatus {
   records: number;
   chunks: number;
   memory: number;
+  conversations: number;
+  media: number;
   /** Files whose stamp no longer matches what was indexed. */
   changed: number;
 }
@@ -122,6 +138,26 @@ export interface RecallServiceOptions {
    * opinion about which file the agent's memory is in.
    */
   readMemory?: () => Promise<string>;
+  /**
+   * The stored conversations, and how far each has been embedded.
+   *
+   * Both injected for the reason memory is: where a conversation lives is the
+   * session store's business, and a second derivation here would be a second
+   * opinion about which chat is which. `watermark` is a *store* rather than a
+   * value because it has to survive the process: embedding the same exchange on
+   * every search is the cost this exists to avoid.
+   */
+  conversations?: ConversationSource;
+  watermark?: ConversationWatermarkStore;
+  /**
+   * The media decoder, when this install has the projector.
+   *
+   * Absent is the same kind of answer as `readMemory` being absent: images,
+   * audio and video are not offered as a scope, because an engine without the
+   * projector has no encoder for them and a scope that came back empty would be
+   * a promise the tool made and broke.
+   */
+  media?: MediaSource;
   /**
    * Ask questions the model's code way.
    *
@@ -164,6 +200,20 @@ export class RecallService {
     if (this.options.readMemory !== undefined) {
       scopes.push('memory');
     }
+    if (
+      this.options.conversations !== undefined &&
+      (this.options.readOnly === true || this.options.watermark !== undefined)
+    ) {
+      /*
+       * A read-only service has no watermark because it never writes one, and it
+       * does not need one to read: the records are already in the index, and the
+       * only thing a watermark decides is what a *refresh* still has to embed.
+       */
+      scopes.push('conversation');
+    }
+    if (this.options.media !== undefined) {
+      scopes.push('media');
+    }
     return scopes;
   }
 
@@ -171,13 +221,16 @@ export class RecallService {
   async status(): Promise<RecallIndexStatus> {
     const data = await readIndex(this.options.dir, this.options.model);
     if (data === undefined) {
-      return {records: 0, chunks: 0, memory: 0, changed: 0};
+      return {records: 0, chunks: 0, memory: 0, conversations: 0, media: 0, changed: 0};
     }
     return {
       builtAt: data.file.builtAt,
       records: data.file.count,
       chunks: data.file.records.filter((record) => record.kind === 'text').length,
       memory: data.file.records.filter((record) => record.kind === 'memory').length,
+      conversations: data.file.records.filter((record) => record.kind === 'conversation')
+        .length,
+      media: data.file.records.filter((record) => record.kind === 'media').length,
       changed: await this.changedCount(data.file.files),
     };
   }
@@ -199,8 +252,11 @@ export class RecallService {
       evicted: 0,
       chunks: 0,
       memory: 0,
+      conversations: 0,
+      media: 0,
       embedded: 0,
       pending: 0,
+      pendingConversations: 0,
       truncated: false,
       skipped: 0,
     };
@@ -241,10 +297,17 @@ export class RecallService {
       try {
         coverage = await this.refresh();
       if (coverage.truncated) {
+        /*
+         * Two budgets can stop a refresh, and they mean different things: a
+         * folder still being sliced, and conversations whose newest exchange has
+         * not been embedded yet. Saying "the folder is large" about a chat would
+         * send the reader looking in the wrong place.
+         */
         notes.push(
-          'The folder is large enough that indexing happens in slices, and ' +
-            `${String(coverage.pending)} file(s) are not indexed yet. ` +
-            'Ask again to continue.',
+          'The index is built in slices, and ' +
+            `${String(coverage.pending)} file(s) and ` +
+            `${String(coverage.pendingConversations)} conversation(s) are not ` +
+            'indexed yet. Ask again to continue.',
         );
       }
       if (coverage.skipped > 0) {
@@ -324,17 +387,91 @@ export class RecallService {
   /** Throws the index away, so the next search builds it again. */
   async forget(): Promise<void> {
     await removeIndex(this.options.dir);
+    /*
+     * And the watermark with it. Leaving the mark behind would make the rebuild
+     * that follows skip every conversation it had already read — the index would
+     * come back missing exactly the words the user just asked to be re-embedded,
+     * and nothing about the result would say why.
+     */
+    await this.options.watermark?.save({});
+  }
+
+  /**
+   * Drops particular conversations from the index, without a rebuild.
+   *
+   * Used when a conversation is deleted: its vectors describe text that no longer
+   * exists, and a search that returned it would quote a chat the user removed.
+   * The refresh would drop it on the next pass anyway — a session that is gone is
+   * not in the list — but "on the next pass" can be a day away, and a deleted
+   * conversation is the one hit that must not come back even once.
+   *
+   * One index is reached here, because a service is one profile and one folder.
+   * Another folder's index for the same profile is settled by its own next
+   * refresh, which is the same rule every other deletion in this file follows.
+   */
+  async forgetSessions(sessionIds: readonly string[]): Promise<void> {
+    const ids = new Set(sessionIds);
+    if (ids.size === 0) {
+      return;
+    }
+
+    const data = await readIndex(this.options.dir, this.options.model);
+    if (data !== undefined) {
+      const dims = data.file.model.dims;
+      const records: IndexRecord[] = [];
+      const vectors: Float32Array[] = [];
+      for (const [at, record] of data.file.records.entries()) {
+        const gone =
+          record.kind === 'conversation' &&
+          record.sessionId !== undefined &&
+          ids.has(record.sessionId);
+        if (gone) {
+          continue;
+        }
+        records.push(record);
+        vectors.push(
+          new Float32Array(data.vectors.subarray(at * dims, (at + 1) * dims)),
+        );
+      }
+
+      if (records.length !== data.file.records.length) {
+        const flat = new Float32Array(vectors.length * dims);
+        for (const [index, vector] of vectors.entries()) {
+          flat.set(vector, index * dims);
+        }
+        await writeIndex(this.options.dir, {
+          file: {
+            ...data.file,
+            builtAt: (this.options.now?.() ?? new Date()).toISOString(),
+            count: records.length,
+            records,
+          },
+          vectors: flat,
+        });
+      }
+    }
+
+    await this.options.watermark?.forget([...ids]);
   }
 
   private async refresh(): Promise<IndexCoverage> {
     const memory =
       this.options.readMemory === undefined ? '' : await this.options.readMemory();
+    const watermark =
+      this.options.watermark === undefined
+        ? undefined
+        : await this.options.watermark.load();
     const result = await refreshIndex({
       workspaceRoot: this.options.workspaceRoot ?? '',
       dir: this.options.dir,
       model: this.options.model,
       embed: this.options.embed,
       memory,
+      ...(this.options.conversations === undefined
+        ? {}
+        : {conversations: this.options.conversations}),
+      ...(watermark === undefined ? {} : {watermark}),
+      ...(this.options.media === undefined ? {} : {media: this.options.media}),
       ...(this.options.maxFiles === undefined
         ? {}
         : {maxFiles: this.options.maxFiles}),
@@ -343,6 +480,14 @@ export class RecallService {
         : {maxChunks: this.options.maxChunks}),
       ...(this.options.now === undefined ? {} : {now: this.options.now}),
     });
+    /*
+     * Written *after* the index, which is the commit point. A crash between the
+     * two writes leaves a mark that is behind the index, and the next refresh
+     * embeds that stretch again — a duplicate vector is untidy. The other order
+     * would advance the mark past vectors that were never written, and those
+     * words would be missing from the index with nothing to say so.
+     */
+    await this.options.watermark?.save(result.watermark);
     return result.coverage;
   }
 
@@ -362,6 +507,9 @@ export class RecallService {
       ...(hit.startLine === undefined ? {} : {startLine: hit.startLine}),
       ...(hit.endLine === undefined ? {} : {endLine: hit.endLine}),
       ...(hit.section === undefined ? {} : {section: hit.section}),
+      ...(hit.sessionId === undefined ? {} : {sessionId: hit.sessionId}),
+      ...(hit.title === undefined ? {} : {title: hit.title}),
+      ...(hit.mediaKind === undefined ? {} : {mediaKind: hit.mediaKind}),
       score: hit.score,
     };
 
@@ -384,6 +532,14 @@ export class RecallService {
         : {...base, preview: previewOf(bullet.text), text: bullet.text, stale: false};
     }
 
+    if (hit.kind === 'conversation') {
+      return await this.readConversation(hit, base);
+    }
+
+    if (hit.kind === 'media') {
+      return await this.readMedia(hit, base);
+    }
+
     const root = this.options.workspaceRoot;
     if (root === undefined || root.length === 0) {
       return {...base, preview: '', text: '', stale: true};
@@ -403,6 +559,76 @@ export class RecallService {
     return chunk === undefined
       ? {...base, preview: '', text: '', stale: true}
       : {...base, preview: previewOf(chunk.text), text: chunk.text, stale: false};
+  }
+
+  /**
+   * A conversation passage, rendered again from the stored events.
+   *
+   * The events are re-read and the same stretch re-rendered, and the digest is
+   * over that render. A transcript is append-only, so an old range renders
+   * exactly as it did — which is what makes a digest of a *derived* text as
+   * trustworthy as one of a file's bytes. A range that no longer renders the same
+   * is reported as changed rather than quoted, the same answer a file gets.
+   */
+  private async readConversation(
+    hit: SearchHit,
+    base: Omit<RecallHit, 'preview' | 'text' | 'stale'>,
+  ): Promise<RecallHit> {
+    const source = this.options.conversations;
+    const sessionId = hit.sessionId;
+    if (source === undefined || sessionId === undefined) {
+      return {...base, preview: '', text: '', stale: true};
+    }
+
+    let read: {title: string; events: readonly ConversationEvent[]} | undefined;
+    try {
+      read = await source.read(sessionId);
+    } catch {
+      read = undefined;
+    }
+    if (read === undefined) {
+      return {...base, preview: '', text: '', stale: true};
+    }
+
+    const start = Math.max(0, hit.startEvent ?? 0);
+    const end = Math.min(hit.endEvent ?? read.events.length, read.events.length);
+    const text = renderConversationText(read.events.slice(start, end));
+    return digestOf(text) === hit.sha256
+      ? {...base, preview: previewOf(text), text, stale: false}
+      : {...base, preview: '', text: '', stale: true};
+  }
+
+  /**
+   * A media file, checked by the stamp it was embedded from.
+   *
+   * There is no text to quote, so the hit carries no text and the read is a
+   * question rather than an answer: has this file changed since it was indexed?
+   * The same size and modification time the incremental refresh trusts are the
+   * evidence, which is the honest bound — hashing a clip on every search is the
+   * cost this design exists to avoid.
+   */
+  private async readMedia(
+    hit: SearchHit,
+    base: Omit<RecallHit, 'preview' | 'text' | 'stale'>,
+  ): Promise<RecallHit> {
+    const root = this.options.workspaceRoot;
+    const label = hit.mediaKind ?? 'media';
+    if (root === undefined || root.length === 0) {
+      return {...base, preview: `[${label}] ${hit.path}`, text: '', stale: true};
+    }
+    try {
+      const info = await stat(join(root, hit.path.split('/').join(sep)));
+      const fresh =
+        digestOf(`${String(info.size)}:${String(info.mtimeMs)}`) === hit.sha256;
+      return {
+        ...base,
+        preview: `[${label}] ${hit.path}`,
+        text: '',
+        stale: !fresh,
+      };
+    } catch {
+      return {...base, preview: `[${label}] ${hit.path}`, text: '', stale: true};
+    }
   }
 
   /** How many indexed files no longer match the stamp they were built from. */
@@ -429,7 +655,16 @@ export class RecallService {
 
 /** Which corpus a record belongs to. */
 function scopeOf(record: IndexRecord): RecallScope {
-  return record.kind === 'memory' ? 'memory' : 'folder';
+  switch (record.kind) {
+    case 'memory':
+      return 'memory';
+    case 'conversation':
+      return 'conversation';
+    case 'media':
+      return 'media';
+    default:
+      return 'folder';
+  }
 }
 
 /**

@@ -26,6 +26,28 @@ export type {
 export {CHUNK_CHARS, CHUNK_OVERLAP_CHARS, chunkText} from './chunk.js';
 export type {ChunkOptions, TextChunk} from './chunk.js';
 
+export {
+  CONVERSATION_SOURCE,
+  ConversationWatermarkStore,
+  MAX_CONVERSATION_CHARS,
+  conversationSlice,
+  renderConversationText,
+} from './conversations.js';
+export type {
+  ConversationEvent,
+  ConversationSlice,
+  ConversationWatermarkStoreOptions,
+} from './conversations.js';
+
+export {
+  frameTimes,
+  MEDIA_EXTENSIONS,
+  MEDIA_KINDS,
+  MAX_MEDIA_BYTES,
+  mediaKindOf,
+} from './media.js';
+export type {MediaKind} from './media.js';
+
 export {documentText, QUERY_PREFIX, queryText} from './prefixes.js';
 
 export {RECALL_IDLE_MS, RecallEngine} from './engine.js';
@@ -41,8 +63,23 @@ export type {
   RecallServiceOptions,
 } from './service.js';
 
-export {REFRESH_CHUNKS, REFRESH_FILES, memoryBullets, refreshIndex} from './indexer.js';
-export type {IndexCoverage, MemoryBullet, RefreshOptions, RefreshResult} from './indexer.js';
+export {
+  REFRESH_CHUNKS,
+  REFRESH_CONVERSATIONS,
+  REFRESH_FILES,
+  REFRESH_MEDIA,
+  memoryBullets,
+  refreshIndex,
+} from './indexer.js';
+export type {
+  ConversationSource,
+  ConversationSummary,
+  IndexCoverage,
+  MediaSource,
+  MemoryBullet,
+  RefreshOptions,
+  RefreshResult,
+} from './indexer.js';
 
 export {
   DEFAULT_LIMIT,

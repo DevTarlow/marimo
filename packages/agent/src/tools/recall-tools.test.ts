@@ -308,7 +308,7 @@ describe('createRecallTool', () => {
     expect(tool?.description).toContain('search_knowledge_base');
   });
 
-  it('names its two scopes in the order the service declares them', () => {
-    expect(RECALL_SCOPES).toEqual(['folder', 'memory']);
+  it('names its scopes in the order the service declares them', () => {
+    expect(RECALL_SCOPES).toEqual(['folder', 'memory', 'conversation', 'media']);
   });
 });

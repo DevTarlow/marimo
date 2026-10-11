@@ -30,6 +30,7 @@ import {
   SAFE_DEFAULT_TOOLS,
 } from '@marimo/agent';
 import type {
+  AdkEvent,
   DeskService,
   DiscordService,
   JobService,
@@ -740,6 +741,27 @@ export class AgentRuntime {
   }
 
   /**
+   * One conversation's stored events and title, for the recall indexer.
+   *
+   * Raw events rather than the projected transcript, because the indexer renders
+   * its own text from them — reasoning and tool payloads left out — and the
+   * projection is shaped for drawing. Deliberately not `host()`: indexing a chat
+   * has nothing to do with a model, and a conversation whose engine is not up
+   * must still be findable by meaning.
+   */
+  async conversationFor(
+    profileId: string,
+    sessionId: string,
+  ): Promise<{title: string; events: AdkEvent[]}> {
+    const host = await this.ensureHost(profileId);
+    const events = await host.eventsFor(sessionId);
+    const summary = (await host.listSessions(profileId)).find(
+      (entry) => entry.id === sessionId,
+    );
+    return {title: summary?.title ?? '', events};
+  }
+
+  /**
    * The host for a profile, working in the folder a conversation is filed under,
    * and brought up to date with the settings on disk.
    *
@@ -1041,6 +1063,36 @@ export class AgentRuntime {
       ...(this.options.onEvent === undefined
         ? {}
         : {onSubagentEvent: this.options.onEvent}),
+      /*
+       * The deletion sync, resolved lazily because the folder to purge from is
+       * the one the *service* would have indexed into — and a service is built
+       * from a setting this callback must read at the moment a chat is deleted,
+       * not at the moment the host was made. The active folder is the honest
+       * guess: another folder's index is settled by its own next refresh, which
+       * drops any session that is no longer in the list.
+       */
+      onSessionsDeleted: async (sessionIds) => {
+        const root = workspaceRootFor(await this.workspaceStore.load());
+        const recall = (
+          await this.options.services?.(profileId, root)
+        )?.recallService;
+        /*
+         * Best effort, and deliberately swallowed. The conversation is already
+         * deleted by the time this runs, and an index that cannot be rewritten —
+         * a read-only folder, a full disk — must not turn a deletion that
+         * happened into an error the window reports. The stale vectors are
+         * dropped by that index's next refresh anyway, which is the backstop the
+         * pruning in `refreshIndex` exists to be.
+         */
+        try {
+          await recall?.forgetSessions?.(sessionIds);
+        } catch (failure) {
+          console.log(
+            '[marimo] the deleted conversation could not be dropped from the recall index:',
+            failure,
+          );
+        }
+      },
     });
     host.init();
     this.hosts.set(profileId, host);

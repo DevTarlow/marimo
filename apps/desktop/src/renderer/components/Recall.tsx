@@ -79,6 +79,8 @@ export function Recall({
     enabled?: boolean;
     memory?: boolean;
     workspace?: boolean;
+    conversations?: boolean;
+    media?: boolean;
     codeQueries?: boolean;
   }): Promise<void> => {
     setBusy(true);
@@ -117,6 +119,7 @@ export function Recall({
       .find((profile) => profile.id === settings.activeProfileId)
       ?.enabledTools.includes('recall') ?? false;
   const installed = status?.textPresent ?? false;
+  const projectorPresent = status?.projectorPresent ?? false;
   const installing = status?.installing;
   const index = status?.index;
 
@@ -218,6 +221,58 @@ export function Recall({
             />
             Index what it remembers about you
           </label>
+          <label className="settings-check">
+            <input
+              type="checkbox"
+              checked={settings?.recall.conversations ?? true}
+              disabled={busy}
+              onChange={(event) => {
+                void set({conversations: event.target.checked});
+              }}
+            />
+            Index your past conversations
+          </label>
+          <p className="settings-muted">
+            Your messages and its answers, not the thinking in between and not the
+            tool calls. This is the corpus that lets it find something you settled
+            three weeks ago; it stays in the same index the folder does, on this
+            machine.
+          </p>
+
+          <label className="settings-check">
+            <input
+              type="checkbox"
+              checked={settings?.recall.media ?? false}
+              disabled={busy}
+              onChange={(event) => {
+                void set({media: event.target.checked});
+              }}
+            />
+            Index pictures, sounds and video
+          </label>
+          {settings?.recall.media === true && !projectorPresent && (
+            <>
+              <p className="settings-muted">
+                This needs a second download, about{' '}
+                {formatBytes(status?.sizeBytes.media ?? 0)}: the image and audio
+                encoder. Without it the engine has no way to read a picture at
+                all.
+              </p>
+              {installing === undefined && (
+                <button
+                  type="button"
+                  className="button button-small"
+                  disabled={busy}
+                  onClick={() => {
+                    void download('media');
+                  }}
+                >
+                  Download the image and audio encoder (
+                  {formatBytes(status?.sizeBytes.media ?? 0)})
+                </button>
+              )}
+            </>
+          )}
 
           <label className="settings-check">
             <input
@@ -240,7 +295,7 @@ export function Recall({
           <p className="settings-muted">
             {index === undefined || index.records === 0
               ? 'Nothing is indexed in this folder yet. It gets indexed the first time you search.'
-              : `${String(index.records)} ${index.records === 1 ? 'item' : 'items'} indexed: ${String(index.chunks)} from the folder, ${String(index.memory)} from memory.` +
+              : `${String(index.records)} ${index.records === 1 ? 'item' : 'items'} indexed: ${describeIndex(index)}.` +
                 (index.changed > 0
                   ? ` ${String(index.changed)} ${index.changed === 1 ? 'file has' : 'files have'} changed since.`
                   : '')}
@@ -303,4 +358,26 @@ export function Recall({
       )}
     </SettingsSection>
   );
+}
+
+/**
+ * What the index holds, as one clause.
+ *
+ * Only the corpora with something in them are named: "0 from conversations"
+ * reads as a failure when it means the switch is off, and the counts are the one
+ * place a user can see that their chats or their photographs were part of the
+ * index at all.
+ */
+function describeIndex(index: RecallModelStatus['index']): string {
+  const parts = [
+    `${String(index.chunks)} from the folder`,
+    `${String(index.memory)} from memory`,
+  ];
+  if (index.conversations > 0) {
+    parts.push(`${String(index.conversations)} from your conversations`);
+  }
+  if (index.media > 0) {
+    parts.push(`${String(index.media)} from pictures and sound`);
+  }
+  return parts.join(', ');
 }

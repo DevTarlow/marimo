@@ -162,7 +162,9 @@ export function Search({
                     {group.hits.map((hit) => {
                       const at = hits.indexOf(hit);
                       return (
-                        <li key={`${hit.path}:${String(hit.startLine ?? 0)}:${hit.section ?? ''}`}>
+                        <li
+                          key={`${hit.path}:${String(hit.startLine ?? 0)}:${hit.section ?? ''}:${hit.sessionId ?? ''}`}
+                        >
                           <button
                             type="button"
                             className={
@@ -206,6 +208,15 @@ export function Search({
                       This file has changed since it was indexed, so its text is
                       not shown. It will be indexed again the next time you search.
                     </p>
+                  ) : current.kind === 'media' ? (
+                    /*
+                     * A picture has no text to show. Saying so is better than an
+                     * empty pane, which reads as a hit that found nothing.
+                     */
+                    <p className="search-note">
+                      {current.preview} matched by what it looks like or sounds
+                      like, not by words. Nothing but its name is stored.
+                    </p>
                   ) : (
                     <pre className="search-text">{current.text}</pre>
                   )}
@@ -243,6 +254,8 @@ function group(hits: readonly RecallQueryHit[]): Array<{
 }> {
   const memory = hits.filter((hit) => hit.kind === 'memory');
   const files = hits.filter((hit) => hit.kind === 'text');
+  const conversations = hits.filter((hit) => hit.kind === 'conversation');
+  const media = hits.filter((hit) => hit.kind === 'media');
   const groups: Array<{label: string; hits: RecallQueryHit[]}> = [];
   if (files.length > 0) {
     groups.push({label: 'In this folder', hits: files});
@@ -250,12 +263,25 @@ function group(hits: readonly RecallQueryHit[]): Array<{
   if (memory.length > 0) {
     groups.push({label: 'From memory', hits: memory});
   }
+  if (conversations.length > 0) {
+    groups.push({label: 'From your conversations', hits: conversations});
+  }
+  if (media.length > 0) {
+    groups.push({label: 'Pictures, sounds and video', hits: media});
+  }
   return groups;
 }
 
 /** Where a hit is, in the words a person can act on. */
 function where(hit: RecallQueryHit): string {
-  return hit.kind === 'memory'
-    ? `memory — ${hit.section ?? ''}`
-    : `${hit.path}:${String(hit.startLine ?? 1)}-${String(hit.endLine ?? 1)}`;
+  switch (hit.kind) {
+    case 'memory':
+      return `memory — ${hit.section ?? ''}`;
+    case 'conversation':
+      return `conversation — ${hit.title ?? hit.sessionId ?? ''}`;
+    case 'media':
+      return hit.path;
+    default:
+      return `${hit.path}:${String(hit.startLine ?? 1)}-${String(hit.endLine ?? 1)}`;
+  }
 }

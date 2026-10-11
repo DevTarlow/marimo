@@ -69,12 +69,13 @@ export const MEMORY_SOURCE = '(memory)';
 
 /** One vector's worth of provenance. */
 export interface IndexRecord {
-  /** Whether this points into the folder, or at the agent's memory file. */
-  kind: 'text' | 'memory';
+  /** Whether this points into the folder, at memory, at a chat, or at media. */
+  kind: 'text' | 'memory' | 'conversation' | 'media';
   /**
    * For text, the path relative to the workspace root — relative because the
    * index travels with the folder, and an absolute path in it would be wrong the
-   * moment the folder moved. For memory, `MEMORY_SOURCE`.
+   * moment the folder moved. For memory, `MEMORY_SOURCE`; for a conversation,
+   * `CONVERSATION_SOURCE`; for media, the file's relative path.
    */
   path: string;
   /** Text only: the first and last line this vector stands for, 1-based. */
@@ -82,6 +83,21 @@ export interface IndexRecord {
   endLine?: number;
   /** Memory only: the `##` heading the bullet lives under. */
   section?: string;
+  /**
+   * Conversation only: which conversation, and which stretch of its stored
+   * events, this vector stands for.
+   *
+   * The event range rather than a line range, because a conversation is
+   * append-only: an old range can be rendered again exactly, and a watermark that
+   * counts events is what tells the next refresh where the new half begins.
+   */
+  sessionId?: string;
+  /** Conversation only: the title at the time it was embedded. */
+  title?: string;
+  startEvent?: number;
+  endEvent?: number;
+  /** Media only: which of the three decoders produced this vector. */
+  mediaKind?: 'image' | 'audio' | 'video';
   /**
    * A digest of the text this vector stands for.
    *

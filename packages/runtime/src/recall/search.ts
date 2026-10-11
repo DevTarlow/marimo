@@ -95,15 +95,28 @@ export function searchVectors(options: SearchOptions): SearchHit[] {
 /**
  * What "the same source" means for a record.
  *
- * A file, or a section of memory. Without this the top of every result list is
- * whichever file happens to have several near-identical chunks — which is what a
- * long file of similar functions looks like from here — and the fact the user
- * needed, sitting one paragraph into another file, never appears.
+ * A file, a section of memory, one conversation, or one media file. Without this
+ * the top of every result list is whichever file happens to have several
+ * near-identical chunks — which is what a long file of similar functions looks
+ * like from here — and the fact the user needed, sitting one paragraph into
+ * another file, never appears.
+ *
+ * The conversation case is the one that matters most: a chat is indexed in
+ * stretches as it grows, so without a per-conversation cap a single long chat
+ * that happens to match the question would fill the whole list with its own
+ * earlier messages.
  */
 function sourceKey(record: IndexRecord): string {
-  return record.kind === 'memory'
-    ? `memory:${record.section ?? ''}`
-    : `text:${record.path}`;
+  switch (record.kind) {
+    case 'memory':
+      return `memory:${record.section ?? ''}`;
+    case 'conversation':
+      return `conversation:${record.sessionId ?? record.path}`;
+    case 'media':
+      return `media:${record.path}`;
+    default:
+      return `text:${record.path}`;
+  }
 }
 
 /** The dot product of a unit vector with the vector at `at`. */

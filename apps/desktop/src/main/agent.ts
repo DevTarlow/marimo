@@ -26,7 +26,7 @@ import {
   secretReaderFor,
 } from '@marimo/runtime';
 import type {ProcessLock} from '@marimo/runtime';
-import type {AppPaths} from '@marimo/runtime';
+import type {AppPaths, EmbeddingPart, MediaKind} from '@marimo/runtime';
 
 import type {
   AgentProfile,
@@ -52,6 +52,8 @@ import {safeStorageCipher, secretStore} from './secrets.js';
 import {BrowserSearchProvider} from './search/search-window.js';
 import {LocalModelHost} from './local-model.js';
 import {RecallHost} from './recall.js';
+import {MediaDecodingWindow} from './media/decode-window.js';
+import {mediaParts} from './media/parts.js';
 
 /**
  * How often a dropped MCP server is considered for a reconnect.
@@ -125,6 +127,15 @@ export class AgentService {
    * for the installs that have it.
    */
   private readonly recall: RecallHost;
+  /**
+   * The hidden window that decodes media, when the projector is installed.
+   *
+   * Built unconditionally for the reason the recall engine is: nothing happens
+   * until a media file is actually decoded, and a second code path for installs
+   * that have the projector would be the one nobody tests. Starting a process is
+   * not something `@marimo/runtime` does, which is why this lives here.
+   */
+  private readonly media: MediaDecodingWindow;
   /** Held for as long as this process is: "the app is running the jobs". */
   private appLock: ProcessLock | undefined;
   private reconcile: NodeJS.Timeout | undefined;
@@ -168,9 +179,27 @@ export class AgentService {
       },
     });
 
+    this.media = new MediaDecodingWindow();
+
     this.recall = new RecallHost({
       ...this.options.paths,
       readSettings: async () => await this.runtime.settings(),
+      /*
+       * The conversations corpus, read through the runtime rather than a second
+       * session store: the listing is the sidebar's own list and the events are
+       * the host's, so a chat the window cannot show is a chat the index cannot
+       * see either. Called lazily by the indexer, which is why closing over
+       * `this.runtime` before it exists is safe.
+       */
+      listConversations: async (profileId) =>
+        (await this.runtime.listSessions(profileId)).map((session) => ({
+          sessionId: session.id,
+          title: session.title,
+          eventCount: session.messageCount,
+        })),
+      readConversation: async (profileId, sessionId) =>
+        await this.runtime.conversationFor(profileId, sessionId),
+      decodeMedia: async (path, kind) => await this.decodeMedia(path, kind),
       onProgress: (progress) => {
         options.sendEvent({
           type: 'recall.progress',
@@ -390,6 +419,7 @@ export class AgentService {
     // spinning fan with no window left to explain it.
     await this.runtime.dispose();
     this.search.dispose();
+    this.media.dispose();
   }
 
   /** The engine, for the calls that describe and drive it. */
@@ -411,6 +441,21 @@ export class AgentService {
   ): Promise<{recallService: Awaited<ReturnType<RecallHost['serviceFor']>>}> {
     const service = await this.recall.serviceFor(profileId, workspaceRoot);
     return service === undefined ? ({} as never) : {recallService: service};
+  }
+
+  /**
+   * One media file, as the content parts the embedding client takes.
+   *
+   * The decode and the translation are separate steps because only the first
+   * needs a browser engine: a picture is bytes read here, and the parts builder
+   * is a plain function with a test that proves the task prefix never appears in
+   * front of one.
+   */
+  private async decodeMedia(
+    path: string,
+    kind: MediaKind,
+  ): Promise<EmbeddingPart[]> {
+    return mediaParts(path, await this.media.decode(path, kind));
   }
 
   /**
@@ -457,7 +502,14 @@ export class AgentService {
     scopes?: readonly RecallScopeName[],
     limit?: number,
   ): Promise<RecallQueryResult> {
-    const empty = {records: 0, chunks: 0, memory: 0, changed: 0};
+    const empty = {
+      records: 0,
+      chunks: 0,
+      memory: 0,
+      conversations: 0,
+      media: 0,
+      changed: 0,
+    };
     const settings = await this.runtime.settings();
     if (!settings.recall.enabled) {
       return {hits: [], searched: [], notes: ['Recall is off.'], index: empty};
@@ -487,6 +539,8 @@ export class AgentService {
         ...(hit.startLine === undefined ? {} : {startLine: hit.startLine}),
         ...(hit.endLine === undefined ? {} : {endLine: hit.endLine}),
         ...(hit.section === undefined ? {} : {section: hit.section}),
+        ...(hit.sessionId === undefined ? {} : {sessionId: hit.sessionId}),
+        ...(hit.title === undefined ? {} : {title: hit.title}),
         preview: hit.preview,
         score: hit.score,
         text: hit.text,

@@ -472,6 +472,26 @@ export const recallSettingsSchema = z.object({
   memory: z.boolean(),
   workspace: z.boolean(),
   /**
+   * Whether the user's own conversations are part of the index.
+   *
+   * A third consent beside the folder and memory, and the one somebody is most
+   * likely to want to decline: a folder is the work, memory is what the agent
+   * wrote about them, and a conversation is everything they said. It defaults on
+   * for the same reason memory does — the feature exists to answer questions
+   * about *them* — but it is a switch rather than a consequence of `enabled`,
+   * because the two are different promises.
+   */
+  conversations: z.boolean(),
+  /**
+   * Whether images, audio and video are part of it.
+   *
+   * Off, and unlike the others that is not a preference: media needs the
+   * projector, a 555 MB second download, and without it in the engine process
+   * there is no image encoder at all — so a picture is not a slower answer, it is
+   * one the engine cannot give. Switching it on is what offers that download.
+   */
+  media: z.boolean(),
+  /**
    * Whether questions about this folder are asked the model's *code* way.
    *
    * The model was trained with two query prompts and identical document prompts:
@@ -493,7 +513,12 @@ export const recallPieceSchema = z.enum(RECALL_PIECES);
 export type RecallPiece = z.infer<typeof recallPieceSchema>;
 
 /** The corpora the window may ask about. */
-export const RECALL_QUERY_SCOPES = ['folder', 'memory'] as const;
+export const RECALL_QUERY_SCOPES = [
+  'folder',
+  'memory',
+  'conversation',
+  'media',
+] as const;
 export const recallScopeSchema = z.enum(RECALL_QUERY_SCOPES);
 export type RecallScopeName = z.infer<typeof recallScopeSchema>;
 
@@ -515,11 +540,15 @@ export type RecallScopeName = z.infer<typeof recallScopeSchema>;
  * so rather than quoting a copy that no longer exists.
  */
 export interface RecallQueryHit {
-  kind: 'text' | 'memory';
+  kind: 'text' | 'memory' | 'conversation' | 'media';
   path: string;
   startLine?: number;
   endLine?: number;
   section?: string;
+  /** Conversation only: the id of the conversation this passage came from. */
+  sessionId?: string;
+  /** Conversation only: the conversation's title, for the result list. */
+  title?: string;
   preview: string;
   /** Cosine similarity. Not comparable between modalities — see the card. */
   score: number;
@@ -566,12 +595,21 @@ export interface RecallModelStatus {
     records: number;
     chunks: number;
     memory: number;
+    conversations: number;
+    media: number;
     changed: number;
   };
 }
 
 export function defaultRecallSettings(): RecallSettings {
-  return {enabled: false, memory: true, workspace: true, codeQueries: false};
+  return {
+    enabled: false,
+    memory: true,
+    workspace: true,
+    conversations: true,
+    media: false,
+    codeQueries: false,
+  };
 }
 
 /**
@@ -1763,7 +1801,7 @@ export type AgentUiEvent =
    * the background while a turn is running, and a chatty event that forced a
    * round trip would be a poll wearing an event's clothes.
    */
-  | {type: 'recall.indexed'; records: number; chunks: number; memory: number}
+  | {type: 'recall.indexed'; records: number; chunks: number; memory: number; conversations: number; media: number}
   /**
    * The active profile or workspace changed, so what the window is looking at is
    * no longer what the agent would answer as. The renderer reloads its session

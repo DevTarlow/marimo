@@ -16,6 +16,8 @@ import {join} from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {RecallService} from './service.js';
+import {ConversationWatermarkStore} from './conversations.js';
+import type {ConversationEvent} from './conversations.js';
 import type {IndexModel} from './store.js';
 
 const MODEL: IndexModel = {repo: 'unsloth/embeddinggemma-2-GGUF', revision: 'rev2', dims: 8};
@@ -274,5 +276,88 @@ describe('RecallService', () => {
     expect(answer.coverage.truncated).toBe(true);
     expect(answer.coverage.pending).toBe(1);
     expect(answer.index.records).toBeGreaterThan(0);
+  });
+
+  /*
+   * The third corpus, and the promise that makes it a corpus rather than a
+   * copy: a hit's text is the conversation *as it is now*, rendered again from
+   * the stored events and checked against the digest, and a chat that is
+   * deleted stops being found at once.
+   */
+  describe('conversations', () => {
+    function recallWith(events: () => readonly ConversationEvent[]) {
+      const watermark = new ConversationWatermarkStore({
+        file: join(indexDir, 'conversations.json'),
+      });
+      const conversations = {
+        list: async () => [
+          {sessionId: 's1', title: 'Retries', eventCount: events().length},
+        ],
+        read: async () => ({title: 'Retries', events: events()}),
+      };
+      return new RecallService({
+        workspaceRoot: workspace,
+        dir: indexDir,
+        model: MODEL,
+        embed: fakeEmbedder(),
+        conversations,
+        watermark,
+      });
+    }
+
+    it('offers the conversation scope only when there is something to read it', () => {
+      expect(service().scopes()).not.toContain('conversation');
+      expect(recallWith(() => []).scopes()).toContain('conversation');
+    });
+
+    it('finds a chat and reads the stretch back', async () => {
+      const recall = recallWith(() => [
+        {author: 'user', content: {parts: [{text: 'how should the retry work?'}]}},
+        {author: 'agent', content: {parts: [{text: 'three attempts, then give up'}]}},
+      ]);
+
+      const answer = await recall.search({
+        query: 'retry',
+        scopes: ['conversation'],
+      });
+
+      expect(answer.searched).toEqual(['conversation']);
+      const hit = answer.hits.find((entry) => entry.kind === 'conversation');
+      expect(hit).toBeDefined();
+      expect(hit?.sessionId).toBe('s1');
+      expect(hit?.title).toBe('Retries');
+      expect(hit?.text).toContain('USER: how should the retry work?');
+      expect(hit?.stale).toBe(false);
+    });
+
+    it('stops finding a chat that has been forgotten', async () => {
+      let events: ConversationEvent[] = [
+        {author: 'user', content: {parts: [{text: 'how should the retry work?'}]}},
+      ];
+      const recall = recallWith(() => events);
+      const first = await recall.search({query: 'retry', scopes: ['conversation']});
+      expect(first.hits.length).toBeGreaterThan(0);
+
+      await recall.forgetSessions(['s1']);
+      events = [];
+
+      const second = await recall.search({query: 'retry', scopes: ['conversation']});
+      expect(second.hits).toEqual([]);
+    });
+
+    it('offers media only when there is a decoder', () => {
+      expect(service().scopes()).not.toContain('media');
+      const withMedia = new RecallService({
+        workspaceRoot: workspace,
+        dir: indexDir,
+        model: MODEL,
+        embed: fakeEmbedder(),
+        media: {
+          decode: async () => [],
+          embedParts: async () => ({vectors: []}),
+        },
+      });
+      expect(withMedia.scopes()).toContain('media');
+    });
   });
 });

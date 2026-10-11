@@ -169,6 +169,21 @@ export async function runDue(options: {
     // per call rather than at construction, so this closure is never called early.
     readSettings: async () => await agent.settings(),
     readOnly: true,
+    /*
+     * The conversations corpus, from the same runtime the job's own tools use.
+     * The runner never *builds* an index, so these are only ever called to read a
+     * hit back — but a chat the window indexed should be findable from a
+     * scheduled job too, and the alternative is a search that quietly answers
+     * about the folder while the question was about something the user said.
+     */
+    listConversations: async (profileId) =>
+      (await agent.listSessions(profileId)).map((session) => ({
+        sessionId: session.id,
+        title: session.title,
+        eventCount: session.messageCount,
+      })),
+    readConversation: async (profileId, sessionId) =>
+      await agent.conversationFor(profileId, sessionId),
   });
 
   const agent: AgentRuntime = new AgentRuntime({

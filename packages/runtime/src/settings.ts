@@ -22,11 +22,13 @@ import {
   appearanceSchema,
   companionSettingsSchema,
   defaultAppearance,
+  defaultRecallSettings,
   defaultCompanionSettings,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
   defaultWindowState,
   defaultDiscordSettings,
   discordSettingsSchema,
+  recallSettingsSchema,
   settingsPatchSchema,
   settingsSchema,
   windowStateSchema,
@@ -86,6 +88,9 @@ export function defaultStoredSettings(): StoredSettings {
     // Where the agent starts being told that memory.md is getting full. Well
     // under the hard cap, so the warning arrives while there is room to prune.
     memorySoftLimitBytes: DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+    // Recall off: it downloads a model and starts an engine, and neither is
+    // something a fresh install should do without being asked.
+    recall: defaultRecallSettings(),
   };
 }
 
@@ -240,6 +245,17 @@ export class SettingsStore {
             defaults.window,
             rawObject['window'],
           ),
+          /*
+           * And recall, which has the same problem as the rest: it is a block, and
+           * a hand-edited switch inside it must cost that block rather than every
+           * other setting the user has. It is also what a file written before the
+           * feature existed gets, which is the off state.
+           */
+          recall: fillBlock(
+            recallSettingsSchema,
+            defaults.recall,
+            rawObject['recall'],
+          ),
         }
       : raw;
 
@@ -274,12 +290,16 @@ export class SettingsStore {
       const appearance = defined.appearance
         ? {...current.appearance, ...definedOnly(defined.appearance)}
         : current.appearance;
+      const recall = defined.recall
+        ? {...current.recall, ...definedOnly(defined.recall)}
+        : current.recall;
       const merged = settingsSchema.parse({
         ...current,
         ...defined,
         discord,
         companion,
         appearance,
+        recall,
       });
       await this.write(merged);
       this.cache = merged;

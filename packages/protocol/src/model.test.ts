@@ -16,10 +16,18 @@
 import {describe, expect, it} from 'vitest';
 
 import {
+  DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
   MODEL_TIERS,
   MODEL_TIER_CHOICES,
+  defaultAppearance,
+  defaultCompanionSettings,
+  defaultDiscordSettings,
+  defaultRecallSettings,
+  defaultWindowState,
   modelTierChoiceSchema,
   modelTierSchema,
+  recallSettingsSchema,
+  settingsPatchSchema,
   settingsSchema,
 } from './index.js';
 
@@ -80,3 +88,72 @@ describe('the tier in a settings file', () => {
     expect(field.parse(undefined)).toBe('auto');
   });
 });
+
+/**
+ * The recall block, and the default that downloads nothing.
+ *
+ * Recall is off until somebody asks for it: turning it on fetches 310 MB and
+ * starts a second engine process, and a fresh install that did that unasked would
+ * be the same failure Discord's default exists to prevent. So the default is
+ * asserted rather than left to a `false` in whichever file builds it first.
+ */
+describe('the recall settings', () => {
+  it('is off, with both corpora ready for when it is on', () => {
+    expect(defaultRecallSettings()).toEqual({
+      enabled: false,
+      memory: true,
+      workspace: true,
+    });
+  });
+
+  it('is part of the settings document', () => {
+    expect(settingsSchema.shape.recall).toBeDefined();
+    expect(settingsSchema.safeParse({...settingsShape(), recall: undefined}).success).toBe(
+      false,
+    );
+  });
+
+  /*
+   * A window that moved one switch must not have to send the other two back: a
+   * stale copy of them is exactly what must not win, which is why this is a
+   * partial block merged over what is stored.
+   */
+  it('accepts a patch touching one switch of the block', () => {
+    const parsed = settingsPatchSchema.safeParse({recall: {enabled: true}});
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.recall).toEqual({enabled: true});
+  });
+
+  it('refuses a block whose switches are not switches', () => {
+    expect(
+      recallSettingsSchema.safeParse({enabled: 'yes', memory: true, workspace: true})
+        .success,
+    ).toBe(false);
+  });
+});
+
+/** The smallest object the settings schema accepts, for the one test that needs it. */
+function settingsShape(): Record<string, unknown> {
+  return {
+    experienceMode: 'power',
+    appearance: defaultAppearance(),
+    temperature: 0.7,
+    modelTier: 'auto',
+    allowPrivateNetworkFetch: false,
+    mcpServers: [],
+    discord: defaultDiscordSettings(),
+    companion: defaultCompanionSettings(),
+    sidebarWidth: 272,
+    todosWidth: 288,
+    jobsWidth: 288,
+    notesWidth: 288,
+    filesWidth: 320,
+    filesOpen: false,
+    expandedSections: [],
+    disabledCommands: [],
+    window: defaultWindowState(),
+    memorySoftLimitBytes: DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+    recall: defaultRecallSettings(),
+  };
+}

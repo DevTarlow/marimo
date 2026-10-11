@@ -33,6 +33,7 @@ import type {
   DeskService,
   DiscordService,
   JobService,
+  RecallLookup,
   McpToolsetSource,
   PendingGate,
   Skill,
@@ -73,6 +74,17 @@ export interface RuntimeServices {
   deskService?: DeskService;
   skillService?: SkillService;
   discordService?: DiscordService;
+  /**
+   * Recall, when this install has it switched on.
+   *
+   * **One instance per profile, for the life of the process.** The host drops its
+   * cached runner whenever this changes identity, because a runner holds the tool
+   * closures it was built with — so a supplier that built a new object per call
+   * would rebuild the agent on every turn. It is the same rule the model and the
+   * MCP connections follow: stable things are handed in, changing things are
+   * notified.
+   */
+  recallService?: RecallLookup;
 }
 
 /**
@@ -124,6 +136,15 @@ export interface AgentRuntimeOptions {
    * sentence rather than half-answered.
    */
   localModel?: LocalModelRunner;
+  /**
+   * The recall engine, so the app can stop it on the way out.
+   *
+   * Only `stop`: whether it is running, and what it is doing, is the window's
+   * business — this package starts nothing and describes nothing, and a runtime
+   * that carried a status type would be a second place that could disagree about
+   * which engine is up.
+   */
+  recall?: {stop: () => Promise<void>};
 }
 
 /** Either a host ready for a turn, or the sentence explaining why not. */
@@ -238,11 +259,19 @@ export class AgentRuntime {
     const workspaceRoot =
       workspaceRootFor(await this.workspaceStore.load()) ??
       this.options.paths.defaultWorkspace;
+    const settings = await this.settingsStore.load();
 
     const tools = describeTools({
       workspaceRoot,
       model: LOCAL_MODEL_ID,
       ...(this.options.webSearch ? {webSearch: this.options.webSearch} : {}),
+      /*
+       * The switch for recall exists exactly when recall does, which is the rule
+       * the comment below is about: a tool the host builds but the catalogue omits
+       * can never be granted, and one the catalogue lists but the host cannot
+       * build grants nothing when it is ticked.
+       */
+      ...(settings.recall.enabled ? {recall: true} : {}),
       /*
        * The host always builds the helper tool; the profile decides whether
        * this agent may use it, which is what the pick-list is for.
@@ -761,6 +790,18 @@ export class AgentRuntime {
 
     host.updateConfig(resolved.config);
     this.applyMcpServers(host, profileId);
+    /*
+     * Recall is handed over here rather than in `ensureHost`, because whether it
+     * is on is a *setting* and this is the one place that has read it. A setting
+     * the user turned off leaves the host with nothing, which is how a capability
+     * switched off becomes absent rather than discouraged — and the tool list the
+     * model is offered is rebuilt from that on the next turn.
+     */
+    host.setRecallService(
+      settings.recall.enabled
+        ? this.options.services?.(profileId).recallService
+        : undefined,
+    );
 
     return {ok: true, host, profile};
   }
@@ -877,6 +918,9 @@ export class AgentRuntime {
     this.hosts.clear();
     this.applied.clear();
     await this.options.localModel?.stop();
+    // Its own engine, and gigabytes of nobody's business if it is left behind —
+    // 400 MB of weights and a fan with no window to explain them.
+    await this.options.recall?.stop();
   }
 
   /**

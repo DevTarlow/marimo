@@ -934,4 +934,86 @@ describe('the built-in model', () => {
     await agent.dispose();
     expect(model.stops).toBe(1);
   });
+  /*
+   * Recall, as the runtime sees it: a setting, a service, and a process.
+   *
+   * The runtime does not own the engine — the window does — so what is tested
+   * here is the two things this layer decides: whether the capability is offered
+   * at all, and whether the process outlives the app.
+   */
+  describe('recall', () => {
+    const model: LocalModelRunner = {
+      ensureRunning: async () => ({ok: true, baseUrl: 'http://127.0.0.1:1/v1'}),
+      stop: async () => undefined,
+    };
+
+    /*
+     * Built here rather than through a helper in this file: two describes above
+     * have a `runtime` of their own with a different shape, and the one this block
+     * landed inside takes a model rather than an options object. Being explicit
+     * costs three lines and cannot be read wrongly.
+     */
+    function withRecall(recall?: {stop: () => Promise<void>}): AgentRuntime {
+      return new AgentRuntime({
+        paths,
+        localModel: model,
+        ...(recall === undefined ? {} : {recall}),
+      });
+    }
+
+    /*
+     * The switch has to exist before it can be turned on, and it must not exist on
+     * an install that has no recall — a tick-box that grants nothing is worse than
+     * no tick-box, because the user believes they granted something.
+     */
+    it('lists the recall tool only when the feature is switched on', async () => {
+      const agent = withRecall();
+      const before = await agent.catalog();
+      expect(before.tools.map((tool) => tool.name)).not.toContain('recall');
+
+      await agent.updateSettings({recall: {enabled: true}});
+
+      const after = await agent.catalog();
+      expect(after.tools.map((tool) => tool.name)).toContain('recall');
+      // And it is granted to a new profile out of the box, so turning the feature
+      // on is the whole of turning it on.
+      const entry = after.tools.find((tool) => tool.name === 'recall');
+      expect(entry?.byDefault).toBe(true);
+      expect(entry?.blurb).toContain('mean');
+    });
+
+    it('takes the switch back off when it is turned off again', async () => {
+      const agent = withRecall();
+      await agent.updateSettings({recall: {enabled: true}});
+      await agent.updateSettings({recall: {enabled: false}});
+
+      expect((await agent.catalog()).tools.map((tool) => tool.name)).not.toContain(
+        'recall',
+      );
+    });
+
+    /*
+     * The engine is 400 MB of weights and a fan, and this is the last moment
+     * anything can stop it. The window's own service owns the process; the runtime
+     * only knows to tell it.
+     */
+    it('stops the recall engine on the way out', async () => {
+      let stops = 0;
+      const agent = withRecall({
+        stop: async () => {
+          stops += 1;
+        },
+      });
+
+      await agent.dispose();
+
+      expect(stops).toBe(1);
+    });
+
+    it('does not require a recall engine to be there at all', async () => {
+      const agent = withRecall();
+      await expect(agent.dispose()).resolves.toBeUndefined();
+    });
+  });
 });
+

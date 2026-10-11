@@ -970,3 +970,85 @@ describe('SettingsStore companion', () => {
     expect((await settings.load()).companion.visibleMessages).toBe(6);
   });
 });
+
+/**
+ * The recall block, in the settings store.
+ *
+ * It is a nested block, which means it is read the way the window block and the
+ * Discord block are: validated whole against its defaults, so a hand-edited value
+ * inside it costs that block rather than every other preference the user has —
+ * and so a settings file written before recall existed loads as "off" rather than
+ * failing.
+ */
+describe('the recall block', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-settings-recall-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  it('defaults to off, on an install with no settings file at all', async () => {
+    const store = new SettingsStore(join(dir, 'settings.json'));
+
+    expect((await store.load()).recall).toEqual({
+      enabled: false,
+      memory: true,
+      workspace: true,
+    });
+  });
+
+  it('reads a file that predates the feature as off', async () => {
+    const file = join(dir, 'settings.json');
+    await writeFile(
+      file,
+      JSON.stringify({version: 1, temperature: 0.4, memorySoftLimitBytes: 8192}),
+      'utf8',
+    );
+
+    const settings = await new SettingsStore(file).load();
+
+    expect(settings.recall.enabled).toBe(false);
+    // And the setting beside it survives, which is the whole point of filling the
+    // block in rather than resetting the document.
+    expect(settings.temperature).toBe(0.4);
+  });
+
+  /*
+   * The leniency, tested at the one place it can go wrong: a block that does not
+   * validate is replaced whole, and everything *around* it is kept. A parse that
+   * took the document down with the block would lose the user's width and theme
+   * because of one typo in a switch.
+   */
+  it('costs the block, not the document, when a switch is hand-edited wrong', async () => {
+    const file = join(dir, 'settings.json');
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        temperature: 0.3,
+        sidebarWidth: 300,
+        recall: {enabled: 'yes', memory: true, workspace: true},
+      }),
+      'utf8',
+    );
+
+    const settings = await new SettingsStore(file).load();
+
+    expect(settings.recall.enabled).toBe(false);
+    expect(settings.temperature).toBe(0.3);
+    expect(settings.sidebarWidth).toBe(300);
+  });
+
+  /* A patch touching one switch leaves the others as they were. */
+  it('merges a partial block over what is stored', async () => {
+    const store = new SettingsStore(join(dir, 'settings.json'));
+    await store.patch({recall: {enabled: true}});
+    const merged = await store.patch({recall: {workspace: false}});
+
+    expect(merged.recall).toEqual({enabled: true, memory: true, workspace: false});
+  });
+});

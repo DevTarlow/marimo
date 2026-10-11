@@ -447,6 +447,39 @@ export const experienceModeSchema = z.enum(EXPERIENCE_MODES);
 export type ExperienceMode = z.infer<typeof experienceModeSchema>;
 
 /**
+ * Recall: the embedding model, and what of it this install uses.
+ *
+ * **Off until the user asks for it**, because turning it on downloads 310 MB and
+ * starts a second engine process. Discord is off for the same reason — a fresh
+ * install makes no network calls it was not asked to make — and a model download
+ * nobody asked for is that failure with a bigger number attached.
+ *
+ * The two corpora are separate switches because they are separate consents. The
+ * folder is the user's work; memory is what the agent has written *about* them,
+ * and somebody who wants "find my file about retries" may reasonably not want
+ * their remembered preferences indexed alongside it. `memory` defaults on because
+ * it is the half that changes what the agent is told on every request, which is
+ * the reason to turn the feature on at all.
+ */
+export const recallSettingsSchema = z.object({
+  /*
+   * No `.catch` on any of them, unlike the flat fields above. A block that does
+   * not validate is replaced *whole* by the settings store, which is the same
+   * leniency by a different route — and the defaults it lands on are off, which
+   * is the state that downloads nothing and starts nothing.
+   */
+  enabled: z.boolean(),
+  memory: z.boolean(),
+  workspace: z.boolean(),
+});
+
+export type RecallSettings = z.infer<typeof recallSettingsSchema>;
+
+export function defaultRecallSettings(): RecallSettings {
+  return {enabled: false, memory: true, workspace: true};
+}
+
+/**
  * Settings are what applies to the app as a whole: how it looks, how literal the
  * model's wording is, and the escape hatches. Anything about *an agent's*
  * behaviour — who it is, which folder it works in, which tools it may use — lives
@@ -618,6 +651,15 @@ export const settingsSchema = z.object({
     .min(MEMORY_SOFT_LIMIT_MIN_BYTES)
     .max(MEMORY_SOFT_LIMIT_MAX_BYTES)
     .multipleOf(1024),
+  /**
+   * Recall: the model that finds things by meaning, and which corpora it indexes.
+   *
+   * A block rather than three flat fields, for the reason the window block is one:
+   * the two switches mean nothing with the feature off, and the store merges a
+   * partial block over what is stored so flipping one does not mean sending the
+   * others back from a stale window.
+   */
+  recall: recallSettingsSchema,
 });
 
 /**
@@ -635,6 +677,8 @@ export const settingsPatchSchema = settingsSchema.partial().extend({
   discord: discordSettingsPatchSchema.optional(),
   companion: companionSettingsPatchSchema.optional(),
   appearance: appearancePatchSchema.optional(),
+  /* Any subset of the block, merged over what is stored — the reason above. */
+  recall: recallSettingsSchema.partial().optional(),
 });
 
 /*

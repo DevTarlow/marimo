@@ -10,7 +10,7 @@
  * that lands with Settings — but the tokens underneath it are the real ones, so
  * what it previews is what will ship.
  */
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 
 import {COMMAND_IDS, COMMANDS, THEME_MODES} from '@marimo/protocol';
 import type {
@@ -23,6 +23,7 @@ import type {
 
 import {Composer} from './components/Composer.js';
 import {Onboarding} from './components/Onboarding.js';
+import {RecallIntro} from './components/RecallIntro.js';
 import {Search} from './components/Search.js';
 import {Settings} from './components/Settings.js';
 import {Transcript} from './components/Transcript.js';
@@ -35,6 +36,15 @@ export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [searching, setSearching] = useState(false);
+  /**
+   * Whether the recall offer is up.
+   *
+   * Shown at the one moment somebody is watching a download finish, and only
+   * then: this is not a nag kept in a store, it is the second half of the first
+   * run. A later launch — or a user who answered it — finds the switch in
+   * Settings, where every other capability lives.
+   */
+  const [recallIntro, setRecallIntro] = useState(false);
   /**
    * The settings as the window needs them for the first-run question.
    *
@@ -167,6 +177,22 @@ export function App(): React.JSX.Element {
   }, [agent.modelRevision, loadSettings]);
 
   /*
+   * The transition, not the state. `settings.modelReady` is true on every launch
+   * for anybody who has used the app, and offering recall to somebody who is
+   * already using it would be the nag this is shaped to avoid — so the offer
+   * belongs to the moment it goes from false to true, which is a download
+   * finishing.
+   */
+  const modelReady = settings?.modelReady ?? false;
+  const wasReady = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (wasReady.current === false && modelReady) {
+      setRecallIntro(true);
+    }
+    wasReady.current = modelReady;
+  }, [modelReady]);
+
+  /*
    * The commands the `+` menu offers: the catalogue filtered by what the user
    * has switched off. Drawn from the protocol constant rather than from a list
    * here, so the menu and the Settings switches cannot describe different sets.
@@ -175,6 +201,22 @@ export function App(): React.JSX.Element {
   const commands = COMMAND_IDS.filter(
     (id) => !disabledCommands.includes(id),
   ).map((id) => ({id, ...COMMANDS[id]}));
+
+  /*
+   * It stays up until the user answers *it*, rather than disappearing the moment
+   * the setting flips: pressing "Turn on Recall" starts a 310 MB download, and
+   * dropping somebody into the app mid-download would leave them with no sign it
+   * is happening. The screen's own buttons close it.
+   */
+  if (recallIntro && settings !== null) {
+    return (
+      <RecallIntro
+        onDone={() => {
+          setRecallIntro(false);
+        }}
+      />
+    );
+  }
 
   if (showSettings) {
     return (

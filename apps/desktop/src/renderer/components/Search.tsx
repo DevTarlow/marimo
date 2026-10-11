@@ -54,8 +54,16 @@ export function Search({
     }
     const trimmed = query.trim();
     if (trimmed.length < 2) {
+      /*
+       * A query that shrank back below the threshold abandons whatever was in
+       * flight: the sequence moves so its answer is ignored, and the wheel stops
+       * instead of turning until a question nobody is asking any more comes
+       * back.
+       */
+      sequence.current += 1;
       setResult(null);
       setSelected(0);
+      setBusy(false);
       return;
     }
     const mine = sequence.current + 1;
@@ -113,7 +121,7 @@ export function Search({
         }
       }}
     >
-      <div className="search">
+      <div className="search" aria-busy={busy}>
         <div className="search-head">
           <input
             className="search-field"
@@ -135,6 +143,18 @@ export function Search({
               }
             }}
           />
+          {/*
+            The wheel, in the field where the eye already is. A query can take a
+            few seconds and the results below may still be the previous ones, so
+            without this a search in flight looks like a search that finished.
+          */}
+          {busy && (
+            <span
+              className="search-spinner"
+              role="img"
+              aria-label="Searching"
+            />
+          )}
           {/*
             The way out, in the corner where people look for it. Escape works and
             always did, but a panel with nothing to click is one somebody sits in.
@@ -187,8 +207,17 @@ export function Search({
                 </li>
               ))}
               {hits.length === 0 && (
-                <li className="search-note">
-                  {busy ? 'Searching…' : 'Nothing found.'}
+                <li
+                  className={busy ? 'search-note search-searching' : 'search-note'}
+                >
+                  {busy ? (
+                    <>
+                      <span className="search-spinner" aria-hidden="true" />
+                      Searching…
+                    </>
+                  ) : (
+                    'Nothing found.'
+                  )}
                 </li>
               )}
             </ul>
@@ -237,7 +266,19 @@ export function Search({
           </div>
         )}
 
-        {result === null && (
+        {/*
+          The first search of a session has nothing to show behind it — no list,
+          no previous results — so the wheel goes where the results will be, and
+          the hint that explains the box steps aside while it turns.
+        */}
+        {result === null && busy && (
+          <p className="search-note search-foot search-searching" role="status">
+            <span className="search-spinner" aria-hidden="true" />
+            Searching…
+          </p>
+        )}
+
+        {result === null && !busy && (
           <p className="search-note search-foot">
             Meaning, not spelling: ask for what you are looking for.
           </p>

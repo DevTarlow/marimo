@@ -65,6 +65,47 @@
   opacity: 1;
 }
 
+/*
+ * The wheel that says a search is in flight.
+ *
+ * Worth having because a query can take a few seconds and nothing else in the
+ * panel says so: the engine starts on demand and the first query of a session
+ * pays for that, and a box that sits still for two seconds reads as one that did
+ * not hear the keystroke. Drawn in `currentColor` so it follows the panel's text
+ * in either theme, and left turning under reduced-motion rather than stopped —
+ * a frozen ring is indistinguishable from a decoration, and this one is the only
+ * sign that anything is happening.
+ */
+.search-spinner {
+  display: inline-block;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.7;
+  animation: search-spin 0.7s linear infinite;
+}
+
+.search-searching {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@keyframes search-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
 .search-body {
   display: grid;
   grid-template-columns: minmax(240px, 42%) 1fr;

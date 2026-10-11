@@ -9,11 +9,12 @@
  * is already instant, at the price of a dependency in the one package that has to
  * run inside both Electron and a plain Node process.
  *
- * What is worth reading is the *caps*. Finding the nearest vectors is the easy
- * half; the hard half is that the eight nearest chunks in a file are usually the
- * same paragraph, and a result list that returns them is one nobody reads. So
- * results are capped per source, and what a "source" is differs by kind: a path
- * for a file, a section for memory. That is the whole judgement in this file.
+ * What is worth reading is the two *judgements* here, and they are the same
+ * question asked twice: which of the nearest vectors is an answer. Finding them
+ * is the easy half. The first judgement is the floor below which nothing counts
+ * as one, and the second is that the eight nearest chunks in a file are usually
+ * the same paragraph, so results are capped per source — a path for a file, a
+ * section for memory.
  */
 import type {IndexRecord} from './store.js';
 
@@ -23,6 +24,42 @@ export const DEFAULT_LIMIT = 8;
 export const MAX_LIMIT = 50;
 /** The most hits one source may contribute by default. */
 export const DEFAULT_PER_SOURCE = 2;
+
+/**
+ * The score below which a vector is not an answer at all.
+ *
+ * Without this there is no such thing as "not found": the list is the nearest
+ * `limit` vectors, so a query that matches nothing still comes back with the
+ * least-unrelated things in the index, which on a small index is *everything* in
+ * it. A folder of nine records answered "love" with nine rows, and none of them
+ * said love. That is what this number is for.
+ *
+ * 0.68 is measured rather than chosen. Two corpora were indexed with the pinned
+ * engine, the same prefixes, the same mean pooling, and asked questions whose
+ * answers were known: a 900-chunk slice of this repository's source, and the
+ * practice folder of prose notes and stored chats that produced the report.
+ *
+ * - Questions the corpus could answer scored 0.69 to 0.87 at the top, and the
+ *   weakest of them — "where is the api key stored", which lands in `config.ts`
+ *   — was 0.6873. A memory bullet asked for by meaning scored 0.72 to 0.87.
+ * - Questions the corpus could not answer scored 0.56 to 0.69: "love" 0.646,
+ *   "music" 0.642, "chocolate cake recipe" 0.563, "hello" 0.694, "quantum
+ *   chromodynamics of the early universe" 0.591.
+ *
+ * The bands overlap by six thousandths, so no number separates them cleanly, and
+ * this one is rounded the way that costs least: it is the lowest score a *good*
+ * result was ever seen to produce. Missing the best answer is worse than keeping
+ * something the reader can dismiss, which is why "hello" survives it and "love"
+ * does not.
+ *
+ * It is a property of this use rather than of the model. Cosine against
+ * EmbeddingGemma sits high for any two pieces of English — the model's own card
+ * says its scores are not calibrated — and where the floor belongs moves with the
+ * corpus, the length of the question, and whether the code prompts are in use. So
+ * a caller that wants the old behaviour passes `minScore: 0`, and the window's
+ * search box does exactly that when the user asks to see the nearest anyway.
+ */
+export const MIN_SCORE = 0.68;
 
 export interface SearchHit extends IndexRecord {
   /** Cosine similarity against the query, in `[-1, 1]`. */
@@ -38,6 +75,14 @@ export interface SearchOptions {
   query: Float32Array;
   limit?: number;
   perSource?: number;
+  /**
+   * The score a hit has to reach to be returned at all.
+   *
+   * Defaults to `MIN_SCORE`. `0` means "rank everything", which is a question
+   * about the index rather than a search: the caller gets the nearest vectors
+   * whatever they score, and is expected to say so.
+   */
+  minScore?: number;
 }
 
 /**
@@ -53,6 +98,7 @@ export function searchVectors(options: SearchOptions): SearchHit[] {
   const {vectors, dims, records, query} = options;
   const limit = Math.min(Math.max(options.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const perSource = Math.max(options.perSource ?? DEFAULT_PER_SOURCE, 1);
+  const minScore = options.minScore ?? MIN_SCORE;
 
   const scored: Array<{index: number; score: number}> = [];
   for (const [index, record] of records.entries()) {
@@ -76,6 +122,15 @@ export function searchVectors(options: SearchOptions): SearchHit[] {
   const hits: SearchHit[] = [];
   const used = new Map<string, number>();
   for (const {index, score} of scored) {
+    /*
+     * Sorted, so the first one under the floor is followed only by others under
+     * it. Stopping here rather than filtering the list is the same answer for
+     * less: the floor is not a cap that something else could satisfy, it is the
+     * end of what this index has to say.
+     */
+    if (score < minScore) {
+      break;
+    }
     if (hits.length >= limit) {
       break;
     }

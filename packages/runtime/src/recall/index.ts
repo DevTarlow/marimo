@@ -85,6 +85,7 @@ export {
   DEFAULT_LIMIT,
   DEFAULT_PER_SOURCE,
   MAX_LIMIT,
+  MIN_SCORE,
   searchVectors,
 } from './search.js';
 export type {SearchHit, SearchOptions} from './search.js';

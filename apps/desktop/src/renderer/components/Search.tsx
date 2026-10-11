@@ -39,6 +39,16 @@ export function Search({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   /**
+   * Whether to show the nearest vectors even when none of them is near.
+   *
+   * The index has a floor below which a vector is not an answer, because a list
+   * of the least-unrelated things in a folder reads as a list of answers. That
+   * floor can be wrong for a question phrased in words the corpus never uses, so
+   * the results it withheld are one press away rather than gone. Reset with the
+   * query, because the next question is a new one.
+   */
+  const [nearest, setNearest] = useState(false);
+  /**
    * The newest query's sequence number.
    *
    * Answers are matched to questions rather than to arrival order: a slow reply
@@ -71,7 +81,11 @@ export function Search({
     setBusy(true);
     const timer = setTimeout(() => {
       void window.marimo
-        .call('recall.query', {query: trimmed, limit: LIMIT})
+        .call('recall.query', {
+          query: trimmed,
+          limit: LIMIT,
+          ...(nearest ? {minScore: 0} : {}),
+        })
         .then((answer) => {
           if (sequence.current !== mine) {
             return;
@@ -94,7 +108,7 @@ export function Search({
     return () => {
       clearTimeout(timer);
     };
-  }, [open, query]);
+  }, [open, query, nearest]);
 
   if (!open) {
     return null;
@@ -128,7 +142,15 @@ export function Search({
             autoFocus
             placeholder="Find something by what it means…"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              /*
+               * A new question is a new question: the previous one's decision to
+               * look past the floor does not carry over, or a second search would
+               * quietly be the old one with the guard off.
+               */
+              setNearest(false);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 onClose();
@@ -175,6 +197,17 @@ export function Search({
         {result !== null && (
           <div className="search-body">
             <ul className="search-list">
+              {/*
+                Said before the rows rather than after them, because it changes
+                how every row below should be read: these are what the index has,
+                and none of them cleared the bar that normally makes a result.
+              */}
+              {nearest && hits.length > 0 && (
+                <li className="search-note">
+                  None of these was close enough to be a match. They are the
+                  nearest things in the index.
+                </li>
+              )}
               {grouped.map((group) => (
                 <li key={group.label}>
                   <p className="search-group">{group.label}</p>
@@ -215,8 +248,27 @@ export function Search({
                       <span className="search-spinner" aria-hidden="true" />
                       Searching…
                     </>
+                  ) : result.index.records === 0 ? (
+                    'Nothing is indexed yet.'
                   ) : (
-                    'Nothing found.'
+                    /*
+                     * Two different nothings. One is an empty index; the other is
+                     * a folder with something in it that this question did not
+                     * reach, and the person is offered the rows the floor
+                     * withheld rather than being told they are not there.
+                     */
+                    <>
+                      Nothing was close enough.
+                      {!nearest && (
+                        <button
+                          type="button"
+                          className="button button-quiet search-nearest"
+                          onClick={() => setNearest(true)}
+                        >
+                          Show the nearest anyway
+                        </button>
+                      )}
+                    </>
                   )}
                 </li>
               )}

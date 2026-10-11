@@ -95,6 +95,15 @@ export interface RecallQuery {
   /** Which corpora to search; absent means all of them. */
   scopes?: readonly RecallScope[];
   limit?: number;
+  /**
+   * The score a hit has to reach to come back at all.
+   *
+   * Absent means the index's own floor, which is what makes "nothing found" a
+   * possible answer to a search. `0` is the other question a caller can ask —
+   * what is nearest, whatever it scores — and it is how the window shows the
+   * results a floor withheld.
+   */
+  minScore?: number;
 }
 
 export interface RecallIndexStatus {
@@ -355,17 +364,47 @@ export class RecallService {
      * filtered copy: the record order *is* the vector order, so a filter that
      * renumbered anything would attach every score to the wrong text.
      */
+    const limit = Math.min(request.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
     const ranked = searchVectors({
       vectors: data.vectors,
       dims: data.file.model.dims,
       records: data.file.records,
       query: vector,
-      limit: Math.min(request.limit ?? DEFAULT_LIMIT, MAX_LIMIT),
+      limit,
+      ...(request.minScore === undefined ? {} : {minScore: request.minScore}),
     }).filter((hit) => wanted.includes(scopeOf(hit)));
 
     const hits: RecallHit[] = [];
     for (const hit of ranked) {
       hits.push(await this.read(hit));
+    }
+
+    /*
+     * Why the list is empty, when it is because of the floor.
+     *
+     * "Nothing found" and "nothing near enough" are different answers and a
+     * caller acts on them differently: the first says the words are not in the
+     * folder, the second says the folder has something and this question did not
+     * reach it. So the nearest vector is asked for once more, unsifted, and its
+     * score is what the sentence carries. The second pass costs one more ranking
+     * over an index that is already in memory, and only on the path where there
+     * is nothing else to do.
+     */
+    if (hits.length === 0 && request.minScore !== 0) {
+      const nearest = searchVectors({
+        vectors: data.vectors,
+        dims: data.file.model.dims,
+        records: data.file.records,
+        query: vector,
+        limit,
+        minScore: 0,
+      }).filter((hit) => wanted.includes(scopeOf(hit)))[0];
+      if (nearest !== undefined) {
+        notes.push(
+          `Nothing was close enough to show as a result: the nearest was ` +
+            `${nearest.score.toFixed(2)}.`,
+        );
+      }
     }
 
     return {hits, searched: wanted, coverage, index, notes};

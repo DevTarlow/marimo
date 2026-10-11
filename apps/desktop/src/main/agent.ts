@@ -501,6 +501,7 @@ export class AgentService {
     query: string,
     scopes?: readonly RecallScopeName[],
     limit?: number,
+    minScore?: number,
   ): Promise<RecallQueryResult> {
     const empty = {
       records: 0,
@@ -531,6 +532,7 @@ export class AgentService {
       query,
       ...(scopes === undefined ? {} : {scopes}),
       ...(limit === undefined ? {} : {limit}),
+      ...(minScore === undefined ? {} : {minScore}),
     });
     return {
       hits: answer.hits.map((hit) => ({

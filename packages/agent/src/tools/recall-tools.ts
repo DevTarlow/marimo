@@ -184,8 +184,17 @@ export function createRecallTool(context: RecallToolContext) {
  * then `path:lines` — with two additions that exist because a hit carries its
  * text: a score, and a memory hit's section instead of a line range. Scores are
  * printed because a model that can see 0.79 beside 0.31 knows how much to trust
- * the list; they are *not* a threshold, because the right floor is not a number
- * anybody can pick for every question.
+ * the list.
+ *
+ * What is *not* printed is anything the index refused to call an answer. There is
+ * a floor on the score, in `search.ts`, and below it a vector is not a result —
+ * which is the difference between "the folder does not say this" and "the folder
+ * says thirty things that are all about something else", and a model cannot tell
+ * those apart from a list of scores it was never given a scale for. When the floor
+ * is what emptied the list, the answer says so and names the nearest score, so a
+ * model that gets it back knows to rephrase rather than to conclude the folder is
+ * empty. The window can ask for the withheld rows (`minScore: 0`); a tool call
+ * cannot, and should not — the model's next move is a better question.
  */
 function render(
   query: string,

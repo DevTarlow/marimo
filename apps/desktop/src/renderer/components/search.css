@@ -188,6 +188,16 @@
   opacity: 0.72;
 }
 
+/*
+ * The way to the results the floor withheld, under the sentence that says they
+ * were withheld. Quiet and centred, because it is the second answer to the
+ * question rather than the one the search is making.
+ */
+.search-nearest {
+  display: block;
+  margin: 8px auto 0;
+}
+
 .search-foot {
   margin-top: 12px;
   padding-top: 8px;

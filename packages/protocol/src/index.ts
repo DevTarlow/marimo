@@ -2270,6 +2270,13 @@ export const agentCallSchemas = {
     query: z.string().min(1),
     scopes: z.array(recallScopeSchema).optional(),
     limit: z.number().int().min(1).max(50).optional(),
+    /*
+     * How near a hit has to be to be a result. Left out, the index's own floor
+     * applies and a query nothing in the folder comes close to answers with
+     * nothing; `0` asks for the nearest vectors whatever they score, which is
+     * what the search box does when somebody asks to see what was withheld.
+     */
+    minScore: z.number().min(0).max(1).optional(),
   }),
 
   /* What this agent is allowed to do, and what it is. */

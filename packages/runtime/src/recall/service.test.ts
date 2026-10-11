@@ -187,6 +187,34 @@ describe('RecallService', () => {
    * exist here, must not be a search that reads the whole folder and then says
    * nothing was found.
    */
+  /*
+   * The floor, as a caller meets it. A question nothing in the index comes close
+   * to is a question with no answer here, and the answer has to *say* that
+   * rather than hand back the least-unrelated rows — because "the folder does not
+   * say this" and "the folder says thirty things about something else" are
+   * different sentences and a reader acts on them differently.
+   */
+  it('answers nothing when nothing here is close, and says so', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+
+    const answer = await service().search({query: 'bake'});
+
+    expect(answer.hits).toEqual([]);
+    expect(answer.notes.join(' ')).toMatch(/close enough/u);
+  });
+
+  /*
+   * And the way back: `minScore: 0` is the same ranking with the floor off, which
+   * is what the window asks for when somebody chooses to see what was withheld.
+   */
+  it('returns the nearest anyway when the caller asks for them', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+
+    const answer = await service().search({query: 'bake', minScore: 0});
+
+    expect(answer.hits.map((hit) => hit.path)).toContain('src/retry.ts');
+  });
+
   it('does no work for an empty question or an impossible scope', async () => {
     await write('src/retry.ts', 'export function withRetry() {}');
 

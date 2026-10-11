@@ -1,15 +1,14 @@
 /**
- * Ranking, and the cap that makes a result list worth reading.
+ * Ranking, and the two judgements that make a result list worth reading.
  *
- * The maths is a dot product and hardly needs testing. What does is the cap: the
- * eight nearest chunks of a long file are usually eight consecutive paragraphs of
- * the *same* file, and a list built from that is one where the answer the user
- * needed, one paragraph into another file, never appears. So the interesting
- * assertions are about what is *withheld*.
+ * The maths is a dot product and hardly needs testing. What does is what gets
+ * left out: the floor below which a vector is not an answer at all, and the cap
+ * that stops the eight nearest chunks of one long file from filling the list.
+ * So the interesting assertions are about what is *withheld*.
  */
 import {describe, expect, it} from 'vitest';
 
-import {searchVectors} from './search.js';
+import {MIN_SCORE, searchVectors} from './search.js';
 import type {IndexRecord} from './store.js';
 
 /** A record whose text is its own name, for readable assertions. */
@@ -35,9 +34,9 @@ describe('searchVectors', () => {
   it('ranks by similarity and reports the score', () => {
     const hits = searchVectors({
       vectors: vectors([
-        [0, 1, 0],
+        [0.7, 0.714, 0],
         [1, 0, 0],
-        [0.5, 0.5, 0],
+        [0.8, 0.6, 0],
       ]),
       dims: 3,
       records: [record('far'), record('exact'), record('near')],
@@ -46,6 +45,62 @@ describe('searchVectors', () => {
 
     expect(hits.map((hit) => hit.path)).toEqual(['exact', 'near', 'far']);
     expect(hits[0]?.score).toBeCloseTo(1);
+    expect(hits[2]?.score).toBeCloseTo(0.7);
+  });
+
+  /*
+   * The floor, which is what makes "nothing found" an answer this can give at
+   * all. Without it the result list is the nearest `limit` vectors whatever they
+   * score, so a question the index cannot answer still comes back full — and on a
+   * small index that is every record in it, which is how a folder of nine notes
+   * answered "love" with nine rows that never said love.
+   */
+  it('leaves out what is nowhere near the question', () => {
+    const hits = searchVectors({
+      vectors: vectors([
+        [1, 0, 0],
+        [0.5, 0.5, 0],
+        [0, 1, 0],
+      ]),
+      dims: 3,
+      records: [record('exact'), record('half'), record('nothing')],
+      query,
+    });
+
+    expect(hits.map((hit) => hit.path)).toEqual(['exact']);
+  });
+
+  it('keeps a hit that sits exactly on the floor', () => {
+    const hits = searchVectors({
+      vectors: vectors([[MIN_SCORE, Math.sqrt(1 - MIN_SCORE * MIN_SCORE), 0]]),
+      dims: 3,
+      records: [record('borderline')],
+      query,
+    });
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.score).toBeCloseTo(MIN_SCORE);
+  });
+
+  /*
+   * The window's second question, after the floor has withheld everything: what
+   * is nearest, whatever it scores. It is the same ranking with the floor taken
+   * off rather than a second implementation of one.
+   */
+  it('ranks everything when the caller takes the floor off', () => {
+    const hits = searchVectors({
+      vectors: vectors([
+        [1, 0, 0],
+        [0.5, 0.5, 0],
+        [0, 1, 0],
+      ]),
+      dims: 3,
+      records: [record('exact'), record('half'), record('nothing')],
+      query,
+      minScore: 0,
+    });
+
+    expect(hits.map((hit) => hit.path)).toEqual(['exact', 'half', 'nothing']);
     expect(hits[2]?.score).toBeCloseTo(0);
   });
 

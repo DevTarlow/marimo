@@ -38,7 +38,7 @@ different app.
 | ✅  | Scheduled jobs while the app is open, and a headless runner plus an OS service that keeps them going while it is closed                                                                                                                |
 | ✅  | The desktop companion: a frameless, transparent, click-through moss ball that answers in bubbles above itself, with its own chat bar underneath and its own settings for how long it answers, how much it shows, and whether it floats |
 | ✅  | A first run that downloads the model it needs, with progress and a resumed download, instead of showing a chat that refuses                                                                                                            |
-| ✅  | A memory review: after a conversation goes quiet the agent proposes what is worth remembering, and asks before writing it                                                                                                              |
+| ✅  | A memory review: after a conversation goes quiet the agent proposes what is worth remembering and asks before writing it — reading a long session in stretches rather than only once it ends, and remembering the facts you turned down |
 | 🚧  | Windows and macOS installers (the config is written and both package; the installers are unbuilt — see [Building a release](#building-a-release))                                                                                      |
 
 ## Quick start

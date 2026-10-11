@@ -20,13 +20,24 @@
 import {useEffect, useState} from 'react';
 
 import {
+  DEFAULT_MEMORY_REVIEW_EVENTS,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+  MEMORY_REVIEW_EVENTS_MAX,
+  MEMORY_REVIEW_EVENTS_MIN,
   MEMORY_SOFT_LIMIT_MAX_BYTES,
   MEMORY_SOFT_LIMIT_MIN_BYTES,
 } from '@marimo/protocol';
-import type {MemoryProposal, MemoryUsage} from '@marimo/protocol';
+import type {
+  DismissedMemory,
+  MemoryProposal,
+  MemoryUsage,
+} from '@marimo/protocol';
 
-import {formatKiB, summarizeMemory} from '../memory-format.js';
+import {
+  formatKiB,
+  summarizeDismissed,
+  summarizeMemory,
+} from '../memory-format.js';
 import {SettingsSection} from './SettingsSection.js';
 
 export function Memory({
@@ -39,6 +50,14 @@ export function Memory({
   onChange?: () => void;
 }): React.JSX.Element {
   const [proposals, setProposals] = useState<MemoryProposal[] | null>(null);
+  /**
+   * What the user has refused, so the panel can show it and clear it.
+   *
+   * Held here rather than only counted, because the count is the thing that has
+   * to be visible and the text is the thing that makes the count meaningful —
+   * "12 suggestions are being suppressed" is a number nobody can check.
+   */
+  const [dismissed, setDismissed] = useState<DismissedMemory[]>([]);
   const [usage, setUsage] = useState<MemoryUsage | null>(null);
   /**
    * The slider's own value while it is being dragged.
@@ -58,6 +77,7 @@ export function Memory({
         window.marimo.call('memory.usage', {}),
       ]);
       setProposals(listed.proposals);
+      setDismissed(listed.dismissed);
       setUsage(measured);
       setDraftLimit(null);
     } catch (failure) {
@@ -126,8 +146,60 @@ export function Memory({
   };
 
   const summary = usage === null ? null : summarizeMemory(usage);
+  const dismissals = summarizeDismissed(dismissed.length);
   const limit =
     draftLimit ?? usage?.limitBytes ?? DEFAULT_MEMORY_SOFT_LIMIT_BYTES;
+
+  /**
+   * The cadence, which is a number of events rather than of turns.
+   *
+   * Events rather than turns because that is what the review counts, and a field
+   * labelled in turns would be a number the user sets and a different number the
+   * app obeys. The explanation says what it means in the units a person thinks
+   * in, which is exchanges.
+   */
+  const commitReviewEvents = async (events: number): Promise<void> => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await window.marimo.call('settings.set', {
+        patch: {memoryReviewEvents: events},
+      });
+      await load();
+      onChange?.();
+    } catch (failure) {
+      setProblem(describe(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /*
+   * Clearing is total and has no undo, so it asks first. That is the one place
+   * this panel interrupts, and it is because the alternative is a user finding
+   * out what the button did by reading a list that is now empty.
+   */
+  const clearDismissed = async (): Promise<void> => {
+    if (
+      !window.confirm(
+        `Forget all ${String(dismissed.length)} of these? The agent will be ` +
+          'able to suggest them again.',
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setProblem(null);
+    try {
+      const result = await window.marimo.call('memory.forgetDismissals', {});
+      setDismissed(result.dismissed);
+      onChange?.();
+    } catch (failure) {
+      setProblem(describe(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <SettingsSection title="Memory" opened={opened} onToggle={onToggle}>
@@ -182,6 +254,52 @@ export function Memory({
               <span>{formatKiB(MEMORY_SOFT_LIMIT_MAX_BYTES)}</span>
             </span>
           </label>
+
+          <label className="settings-field memory-cadence">
+            <span>
+              Read the conversation back after
+              <em className="settings-why">
+                A review normally waits for a quiet minute, so it is reading a
+                conversation you have finished. In a long session that minute
+                may never come, and something you said at the start would go
+                unremembered for as long as you keep typing. This is how much
+                unreviewed conversation is enough to stop waiting — roughly one
+                exchange per four or five.
+              </em>
+            </span>
+            <input
+              className="settings-input"
+              type="number"
+              min={MEMORY_REVIEW_EVENTS_MIN}
+              max={MEMORY_REVIEW_EVENTS_MAX}
+              value={usage.reviewEvents}
+              disabled={busy}
+              aria-label="Unreviewed events before the agent reads a conversation back"
+              onChange={(event) => {
+                const reviewEvents = Number(event.target.value);
+                /*
+                 * A field being cleared, or a keypress that would leave a number
+                 * the schema refuses, is allowed to disagree with the stored one
+                 * until it is a number worth saving — the same rule the companion
+                 * panel's count follows, and for the same reason: writing an
+                 * out-of-range value is a failed call and an error line.
+                 */
+                if (
+                  !Number.isInteger(reviewEvents) ||
+                  reviewEvents < MEMORY_REVIEW_EVENTS_MIN ||
+                  reviewEvents > MEMORY_REVIEW_EVENTS_MAX
+                ) {
+                  return;
+                }
+                void commitReviewEvents(reviewEvents);
+              }}
+            />
+            <span className="memory-limit-range">
+              <span>
+                default {String(DEFAULT_MEMORY_REVIEW_EVENTS)}, in events
+              </span>
+            </span>
+          </label>
         </>
       )}
 
@@ -234,6 +352,46 @@ export function Memory({
             </div>
           </div>
         ))
+      )}
+
+      {/*
+       * Only drawn when there is something to draw, which `summarizeDismissed`
+       * decides rather than this expression: a "Nothing refused yet" panel is a
+       * heading that exists to explain a capability nobody has reached for.
+       */}
+      {dismissals.heading !== undefined && (
+        <>
+          <h4 className="memory-proposals-heading">{dismissals.heading}</h4>
+          <p className="settings-muted">
+            Facts you turned down, so the agent does not ask about them twice.
+            It learns from the refusal only: a fact you decline here is still
+            stored the moment you state it yourself, and this list never reaches
+            the prompt.
+          </p>
+          <p className="settings-why">{dismissals.count}</p>
+          <details className="memory-why">
+            <summary>Show them</summary>
+            <ul className="memory-dismissed">
+              {dismissed.map((entry) => (
+                <li key={`${entry.profileId}\u0000${entry.text}`}>
+                  {entry.text}
+                </li>
+              ))}
+            </ul>
+          </details>
+          <div className="memory-actions">
+            <button
+              type="button"
+              className="button button-quiet button-small"
+              disabled={busy}
+              onClick={() => {
+                void clearDismissed();
+              }}
+            >
+              Let it suggest them again
+            </button>
+          </div>
+        </>
       )}
 
       {problem !== null && (

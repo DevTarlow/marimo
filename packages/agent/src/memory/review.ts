@@ -102,7 +102,10 @@ const answerSchema = z.object({
  * whether it is still relevant. The example therefore uses a real section
  * instead of the fallback — a model copies the shape of the example.
  */
-export function reviewPrompt(conversation: string): string {
+export function reviewPrompt(
+  conversation: string,
+  refused: readonly RefusedFact[] = [],
+): string {
   return [
     'You are reviewing a conversation between a user and their desktop agent,',
     "to find facts worth keeping in the agent's long-term memory.",
@@ -118,16 +121,38 @@ export function reviewPrompt(conversation: string): string {
     '- something they asked the agent to always or never do',
     '',
     'Do not propose:',
-    '- anything already in the memory below',
+    /*
+     * "what the user already knows" rather than "the memory below", which is what
+     * this said and was not true: the memory file is never put in this prompt.
+     * The filter against it is code (`isNewProposal`), and the prompt names the
+     * rule only because a model told what *not* to send produces less to filter.
+     * A sentence pointing at a section that is not there is the kind of small lie
+     * that makes a model invent an answer to match it.
+     */
+    '- anything the user already knows, or that is already in the agent memory',
     '- the content of the task itself, or what the agent did to complete it',
     '- pleasantries, or that the conversation happened at all',
     '- anything you inferred rather than were told',
     '- secrets, keys, passwords or tokens — never these, under any framing',
+    ...(refused.length === 0
+      ? []
+      : [
+          '',
+          /*
+           * Named as a block rather than as more bullets, because the reason is
+           * different from the rest of the list: this is not a rule about what
+           * matters, it is a record of this person's answers. A model that
+           * understands *why* keeps applying it to paraphrases.
+           */
+          'The user has already been shown these and said no. Do not propose them',
+          'again, and do not propose the same fact in different words:',
+          ...refused.map((entry) => `- ${entry.text}`),
+        ]),
     '',
     'Put each proposal in the layer it belongs in:',
     renderSectionGuide(),
     '',
-    'Those are the common layers, not the only ones: a section the memory below',
+    'Those are the common layers, not the only ones: a section the memory file',
     'already has is fine to use, and "Notes" is the fallback when nothing fits.',
     '',
     'Answer with JSON only, no prose around it:',
@@ -258,10 +283,31 @@ export interface ReviewEvent {
   content?: {parts?: Array<{text?: string; thought?: boolean}>};
 }
 
+/**
+ * A fact the user refused, as the reviewer reads it.
+ *
+ * The text alone: the profile it belongs to and when it was refused are the
+ * store's business, and a reviewer that could see the timestamps would be tempted
+ * to weigh them, which is not a judgement this prompt asks for.
+ */
+export interface RefusedFact {
+  text: string;
+}
+
 export interface ReviewRequest {
   events: readonly ReviewEvent[];
   /** The memory as it stands, so nothing already known is proposed again. */
   memory: string;
+  /**
+   * Facts the user has already said no to, so they are not asked about twice.
+   *
+   * Not folded into `memory`: the memory file is what the agent *knows*, and this
+   * is what it was told not to suggest. Keeping them apart matters because the
+   * agent may still know a refused fact — the user can refuse a *suggestion* and
+   * still say the thing themselves later — and a prompt that confused the two
+   * would have the reviewer arguing with the memory file.
+   */
+  refused?: readonly RefusedFact[];
   /** Asks the model. Injected, so the whole review is testable without one. */
   ask: (prompt: string) => Promise<string>;
 }
@@ -288,14 +334,46 @@ export async function runReview(
 
   let answer: string;
   try {
-    answer = await request.ask(reviewPrompt(conversation));
+    answer = await request.ask(
+      reviewPrompt(conversation, request.refused ?? []),
+    );
   } catch {
     return [];
   }
 
-  return parseProposals(answer).filter((proposal) =>
-    isNewProposal(proposal, request.memory),
+  return parseProposals(answer).filter(
+    (proposal) =>
+      isNewProposal(proposal, request.memory) &&
+      !wasRefused(proposal, request.refused ?? []),
   );
+}
+
+/**
+ * Whether the user has already said no to this suggestion.
+ *
+ * Compared the same way the store dedupes refusals and the same way
+ * `isNewProposal` compares against memory — collapsed and case-insensitive —
+ * because the model will re-word a fact slightly and a filter that only caught
+ * exact repeats would let it ask again in a way nobody could see. Deliberately
+ * *not* a prefix or substring match: a refusal is of a specific sentence, and
+ * treating a shared opening as the same fact would silence a whole subject
+ * because one sentence about it was refused.
+ *
+ * The prompt asks for this too. Both are here because the two fail differently:
+ * a model that ignores an instruction wastes a call, and a model that ignores
+ * this filter puts a rejected fact back in front of the user.
+ */
+export function wasRefused(
+  proposal: MemoryProposal,
+  refused: readonly RefusedFact[],
+): boolean {
+  const normalise = (value: string): string =>
+    value.toLowerCase().replaceAll(/\s+/gu, ' ').trim();
+  const target = normalise(proposal.text);
+  if (target.length === 0) {
+    return false;
+  }
+  return refused.some((entry) => normalise(entry.text) === target);
 }
 
 /**

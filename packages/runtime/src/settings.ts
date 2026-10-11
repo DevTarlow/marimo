@@ -24,6 +24,7 @@ import {
   defaultAppearance,
   defaultRecallSettings,
   defaultCompanionSettings,
+  DEFAULT_MEMORY_REVIEW_EVENTS,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
   defaultWindowState,
   defaultDiscordSettings,
@@ -88,6 +89,12 @@ export function defaultStoredSettings(): StoredSettings {
     // Where the agent starts being told that memory.md is getting full. Well
     // under the hard cap, so the warning arrives while there is room to prune.
     memorySoftLimitBytes: DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+    // How much unreviewed conversation a session may hold before the memory look
+    // stops waiting for it to go quiet. The default reads a long conversation
+    // back in stretches rather than only after it ends, which is what stops a
+    // fact mentioned early from going unremembered for as long as somebody keeps
+    // typing.
+    memoryReviewEvents: DEFAULT_MEMORY_REVIEW_EVENTS,
     // Recall off: it downloads a model and starts an engine, and neither is
     // something a fresh install should do without being asked.
     recall: defaultRecallSettings(),

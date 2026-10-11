@@ -1892,6 +1892,37 @@
   user-select: text;
 }
 
+/*
+ * The facts the user turned down, inside the details element.
+ *
+ * Set as a list rather than as prose because these are quotations of the user's
+ * own answers — one per line, selectable, and readable without the surrounding
+ * sentence. The marker is kept: it is what makes a run of them scannable, and
+ * this list is meant to be skimmed rather than read.
+ */
+.memory-dismissed {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+  line-height: 1.5;
+  user-select: text;
+}
+
+.memory-dismissed li {
+  margin-top: var(--space-1);
+}
+
+/*
+ * The cadence field sits under the size slider and belongs to the same panel, so
+ * it is spaced from it rather than from the section above.
+ */
+.memory-cadence {
+  margin-top: var(--space-4);
+}
+
+.memory-cadence .settings-input {
+  max-width: 8ch;
+}
+
 .memory-actions {
   display: flex;
   align-items: center;

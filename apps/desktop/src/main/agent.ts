@@ -74,6 +74,18 @@ const MCP_RECONCILE_MS = 30_000;
 const IDLE_REVIEW_MS = 60_000;
 
 /**
+ * How long to wait when the conversation has not gone quiet but has piled up.
+ *
+ * Ten seconds rather than zero, and the reason is the model rather than the user:
+ * a review is a second request, and firing one the instant a turn ends puts it in
+ * front of the chat model on a local install — for a turn whose answer the user
+ * is still watching arrive. Ten seconds lets a natural pause happen first, and is
+ * short enough that a fact stated early in a long conversation is remembered
+ * while the conversation is still about it.
+ */
+const BUSY_REVIEW_MS = 10_000;
+
+/**
  * How often to look again when a background run owns the jobs.
  *
  * A run is seconds to a minute, so this is quick enough that the app takes over
@@ -168,7 +180,9 @@ export class AgentService {
           label: progress.label,
           receivedBytes: progress.receivedBytes,
           totalBytes: progress.totalBytes,
-          ...(progress.percent === undefined ? {} : {percent: progress.percent}),
+          ...(progress.percent === undefined
+            ? {}
+            : {percent: progress.percent}),
         });
       },
       onInstalled: (tier) => {
@@ -207,7 +221,9 @@ export class AgentService {
           label: progress.label,
           receivedBytes: progress.receivedBytes,
           totalBytes: progress.totalBytes,
-          ...(progress.percent === undefined ? {} : {percent: progress.percent}),
+          ...(progress.percent === undefined
+            ? {}
+            : {percent: progress.percent}),
         });
       },
       onInstalled: (piece) => {
@@ -580,6 +596,12 @@ export class AgentService {
    * The timer is reset by each new turn, so a conversation in progress is never
    * reviewed halfway through — and a turn the user is still having is not a
    * conversation they have finished.
+   *
+   * **Unless it never goes quiet.** A user typing for twenty minutes never leaves
+   * the minute of silence this is waiting for, so the look is also armed on the
+   * short delay once enough of the conversation has gone unread. Which of the two
+   * applies is `reviewDelay`, decided from the watermark rather than from how
+   * long the conversation is — see `review-cadence.ts`.
    */
   private noteForReview(event: AgentUiEvent): void {
     if (
@@ -606,12 +628,29 @@ export class AgentService {
     }
 
     this.idleReview = this.clearIdle(this.idleReview);
-    this.idleReview = setTimeout(() => {
-      this.idleReview = undefined;
-      void this.reviewNow(profileId, sessionId);
-    }, IDLE_REVIEW_MS);
-    // Not a reason to keep the process alive on its own.
-    this.idleReview.unref?.();
+    /*
+     * Decided asynchronously, because the answer is a count of stored events and
+     * a setting — and the turn this is reacting to has already finished, so
+     * nothing is waiting on the read. A failure falls back to the idle delay:
+     * reading a conversation back late is a smaller mistake than reading it back
+     * mid-turn, and the timer is a nicety on top of a feature that still works
+     * without it.
+     */
+    void this.runtime
+      .reviewDelayFor(profileId, sessionId, {
+        idleMs: IDLE_REVIEW_MS,
+        shortlyMs: BUSY_REVIEW_MS,
+      })
+      .catch(() => IDLE_REVIEW_MS)
+      .then((delay) => {
+        this.idleReview = this.clearIdle(this.idleReview);
+        this.idleReview = setTimeout(() => {
+          this.idleReview = undefined;
+          void this.reviewNow(profileId, sessionId);
+        }, delay);
+        // Not a reason to keep the process alive on its own.
+        this.idleReview.unref?.();
+      });
   }
 
   private clearIdle(handle: NodeJS.Timeout | undefined): undefined {
@@ -632,7 +671,20 @@ export class AgentService {
       return;
     }
     try {
+      /*
+       * What was read, before the review, so the event can carry the same numbers
+       * the decision was made on. Read here rather than returned by the review
+       * because the review answers with what it *found*, and the interesting case
+       * is finding nothing — a review that reports only when it has something to
+       * say is indistinguishable from one that never ran.
+       */
+      const progress = await this.runtime.reviewProgress(profileId, sessionId);
       const found = await this.runtime.reviewMemory(profileId, sessionId);
+      this.options.sendEvent({
+        type: 'memory.reviewed',
+        events: progress.reviewed,
+        found: found.length,
+      });
       if (found.length > 0) {
         this.options.sendEvent({type: 'memory.proposed', count: found.length});
       }
@@ -797,6 +849,16 @@ export class AgentService {
   /** Accepts one into memory, or drops it. */
   async resolveMemoryProposal(proposalId: string, accept: boolean) {
     return await this.runtime.resolveMemoryProposal(proposalId, accept);
+  }
+
+  /** Every suggestion this user has refused, newest last. */
+  async dismissedMemory() {
+    return await this.runtime.dismissedMemory();
+  }
+
+  /** Forgets every refusal, so the reviewer may propose them again. */
+  async forgetDismissedMemory() {
+    return await this.runtime.forgetDismissedMemory();
   }
 
   /** Reads a conversation back and proposes what is worth remembering. */

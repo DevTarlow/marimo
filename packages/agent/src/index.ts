@@ -38,6 +38,8 @@ export {
 } from './models/openai-compat-llm.js';
 export type {OpenAiCompatLlmOptions} from './models/openai-compat-llm.js';
 export {FileSessionService} from './sessions/file-session-service.js';
+export {reviewDelay} from './review-cadence.js';
+export type {ReviewDelay, ReviewDueOptions} from './review-cadence.js';
 export type {
   AdkEvent,
   SessionIndexEntry,

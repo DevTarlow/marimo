@@ -80,3 +80,40 @@ export function summarizeMemory(usage: MemoryUsage): MemorySummary {
     percent,
   };
 }
+
+export interface DismissedSummary {
+  /** The count in words, e.g. `3 suggestions are being suppressed.` */
+  count: string;
+  /**
+   * The list's heading, or `undefined` when there is nothing to draw.
+   *
+   * The `undefined` is the judgement this exists to pin: a fresh install has
+   * nothing refused, and a heading explaining a capability nobody has reached
+   * for is one more thing to read on the way to the parts that matter. The panel
+   * asks this rather than testing `length > 0` itself, so the rule has one home
+   * and a name in a test.
+   */
+  heading?: string;
+}
+
+/**
+ * What to say about the facts the user refused.
+ *
+ * The count leads because it is the only part that is actionable in a glance —
+ * the text is there to be checked, not read — and it is phrased as a sentence
+ * rather than as a number because "3 being suppressed" is a fragment nobody
+ * finishes. Singular and plural both, since one refusal is the state a user
+ * reaches first and the one most likely to be read.
+ */
+export function summarizeDismissed(count: number): DismissedSummary {
+  if (count <= 0) {
+    return {count: ''};
+  }
+  return {
+    heading: 'What it has stopped suggesting',
+    count:
+      count === 1
+        ? 'One suggestion is being suppressed.'
+        : `${String(count)} suggestions are being suppressed.`,
+  };
+}

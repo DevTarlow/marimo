@@ -24,7 +24,9 @@ function answer(proposals: unknown): string {
 
 describe('the prompt', () => {
   it('carries the conversation', () => {
-    expect(reviewPrompt('USER: I prefer tabs')).toContain('USER: I prefer tabs');
+    expect(reviewPrompt('USER: I prefer tabs')).toContain(
+      'USER: I prefer tabs',
+    );
   });
 
   /*
@@ -45,7 +47,9 @@ describe('the prompt', () => {
    * reliably infers from "facts worth keeping".
    */
   it('forbids secrets in as many words', () => {
-    expect(reviewPrompt('anything')).toMatch(/secrets, keys, passwords or tokens/u);
+    expect(reviewPrompt('anything')).toMatch(
+      /secrets, keys, passwords or tokens/u,
+    );
   });
 
   it('asks for JSON and says how much of it', () => {
@@ -60,14 +64,18 @@ describe('the prompt', () => {
    * the user stops opening.
    */
   it('says that nothing is a good answer', () => {
-    expect(reviewPrompt('anything')).toContain('An empty list is the right answer');
+    expect(reviewPrompt('anything')).toContain(
+      'An empty list is the right answer',
+    );
   });
 });
 
 describe('reading the answer', () => {
   it('reads a plain answer', () => {
     const proposals = parseProposals(
-      answer([{section: 'Notes', text: 'Prefers tabs.', reason: 'they said so'}]),
+      answer([
+        {section: 'Notes', text: 'Prefers tabs.', reason: 'they said so'},
+      ]),
     );
     expect(proposals).toEqual([
       {section: 'Notes', text: 'Prefers tabs.', reason: 'they said so'},
@@ -121,7 +129,9 @@ describe('reading the answer', () => {
         reason: 'observed',
       },
     ]);
-    expect(parseProposals(tricky)[0]?.text).toBe('They write "quotes" like this.');
+    expect(parseProposals(tricky)[0]?.text).toBe(
+      'They write "quotes" like this.',
+    );
   });
 
   describe('refuses what it cannot trust', () => {
@@ -130,7 +140,9 @@ describe('reading the answer', () => {
      * something nobody said into the agent's permanent memory.
      */
     it('proposes nothing for prose with no JSON', () => {
-      expect(parseProposals('I could not find anything worth remembering.')).toEqual([]);
+      expect(
+        parseProposals('I could not find anything worth remembering.'),
+      ).toEqual([]);
     });
 
     it('proposes nothing for malformed JSON', () => {
@@ -202,7 +214,9 @@ describe('whether a fact is already known', () => {
    * again is how a queue stops being read.
    */
   it('is not new when only the spacing differs', () => {
-    expect(isNewProposal(proposal, '-   prefers   TABS over spaces.')).toBe(false);
+    expect(isNewProposal(proposal, '-   prefers   TABS over spaces.')).toBe(
+      false,
+    );
   });
 
   it('is new when the memory says something unrelated', () => {
@@ -245,7 +259,10 @@ describe('whether a fact is already known', () => {
 });
 
 /** A stored event, in the shape the session service writes. */
-function said(author: string, text: string): {
+function said(
+  author: string,
+  text: string,
+): {
   author: string;
   content: {parts: Array<{text: string; thought?: boolean}>};
 } {
@@ -254,9 +271,9 @@ function said(author: string, text: string): {
 
 describe('rendering a conversation for the reviewer', () => {
   it('marks who said what', () => {
-    expect(renderConversation([said('user', 'hello'), said('marimo', 'hi')])).toBe(
-      'USER: hello\n\nAGENT: hi',
-    );
+    expect(
+      renderConversation([said('user', 'hello'), said('marimo', 'hi')]),
+    ).toBe('USER: hello\n\nAGENT: hi');
   });
 
   /*
@@ -268,7 +285,10 @@ describe('rendering a conversation for the reviewer', () => {
     const withThought = {
       author: 'marimo',
       content: {
-        parts: [{text: 'maybe they like tabs', thought: true}, {text: 'Noted.'}],
+        parts: [
+          {text: 'maybe they like tabs', thought: true},
+          {text: 'Noted.'},
+        ],
       },
     };
     expect(renderConversation([withThought])).toBe('AGENT: Noted.');
@@ -276,7 +296,10 @@ describe('rendering a conversation for the reviewer', () => {
 
   it('leaves out events with no words', () => {
     expect(
-      renderConversation([{author: 'marimo', content: {parts: []}}, said('user', 'hi')]),
+      renderConversation([
+        {author: 'marimo', content: {parts: []}},
+        said('user', 'hi'),
+      ]),
     ).toBe('USER: hi');
   });
 
@@ -313,7 +336,11 @@ describe('running a review', () => {
         // The conversation reached the prompt, which is the whole point.
         expect(prompt).toContain('never npm');
         return answer([
-          {section: 'Notes', text: 'Uses pnpm, not npm.', reason: 'they said so'},
+          {
+            section: 'Notes',
+            text: 'Uses pnpm, not npm.',
+            reason: 'they said so',
+          },
         ]);
       },
     });
@@ -328,7 +355,11 @@ describe('running a review', () => {
       memory: '- Uses pnpm, not npm.',
       ask: async () =>
         answer([
-          {section: 'Notes', text: 'Uses pnpm, not npm.', reason: 'they said so'},
+          {
+            section: 'Notes',
+            text: 'Uses pnpm, not npm.',
+            reason: 'they said so',
+          },
         ]),
     });
 
@@ -366,5 +397,124 @@ describe('running a review', () => {
     expect(proposals).toEqual([]);
     // Spending a request to be told nothing about nothing.
     expect(asked).toBe(false);
+  });
+});
+
+/*
+ * What the user refused.
+ *
+ * The queue alone cannot carry this: a proposal that is merely removed leaves no
+ * trace, so a refused fact and one nobody has proposed yet look identical to the
+ * next review. Both halves are here — the prompt that asks the model not to, and
+ * the filter that holds when it does anyway — because a model that ignores an
+ * instruction wastes a request, while a model that ignores the filter puts a
+ * rejected fact back in front of the user.
+ */
+describe('facts the user refused', () => {
+  const refused = [{text: 'Scans their receipts every Sunday.'}];
+  const said = (text: string) => [{author: 'user', content: {parts: [{text}]}}];
+
+  it('names them in the prompt and says why', () => {
+    const prompt = reviewPrompt('USER: hello', refused);
+    expect(prompt).toContain('Scans their receipts every Sunday.');
+    expect(prompt).toContain('said no');
+  });
+
+  it('says nothing about refusals when there are none', () => {
+    expect(reviewPrompt('USER: hello')).not.toContain('said no');
+  });
+
+  it('drops a proposal the user already refused', async () => {
+    const proposals = await runReview({
+      events: said('I scan receipts.'),
+      memory: '',
+      refused,
+      ask: async () =>
+        answer([
+          {
+            section: 'About the user',
+            text: 'Scans their receipts every Sunday.',
+            reason: 'they said so',
+          },
+        ]),
+    });
+
+    expect(proposals).toEqual([]);
+  });
+
+  /*
+   * The model will re-word a refusal, and a filter that only caught exact repeats
+   * would let it ask again in a way nobody could see. Collapsed and
+   * case-insensitive — the same comparison the store dedupes with.
+   */
+  it('recognises a refusal that was re-worded in spacing or case', async () => {
+    const proposals = await runReview({
+      events: said('I scan receipts.'),
+      memory: '',
+      refused,
+      ask: async () =>
+        answer([
+          {
+            section: 'About the user',
+            text: '  scans their RECEIPTS every   sunday. ',
+            reason: 'they said so',
+          },
+        ]),
+    });
+
+    expect(proposals).toEqual([]);
+  });
+
+  /*
+   * And the boundary: a refusal is of one sentence, not of its subject. A
+   * substring match here would silence a whole topic because one sentence about
+   * it was turned down.
+   */
+  it('still proposes a different fact that happens to share a word', async () => {
+    const proposals = await runReview({
+      events: said('Receipts are a chore.'),
+      memory: '',
+      refused,
+      ask: async () =>
+        answer([
+          {
+            section: 'About the user',
+            text: 'Finds filing receipts a chore.',
+            reason: 'they said so',
+          },
+        ]),
+    });
+
+    expect(proposals).toHaveLength(1);
+  });
+
+  it('applies the memory filter and the refusal filter together', async () => {
+    const proposals = await runReview({
+      events: said('lots of things'),
+      memory: '- Works in Rust.',
+      refused,
+      ask: async () =>
+        answer([
+          {
+            section: 'About the user',
+            text: 'Works in Rust.',
+            reason: 'already known',
+          },
+          {
+            section: 'About the user',
+            text: 'Scans their receipts every Sunday.',
+            reason: 'refused',
+          },
+          {
+            section: 'About the user',
+            text: 'Has a dog named Bramble.',
+            reason: 'new',
+          },
+        ]),
+    });
+
+    expect(proposals.map((entry) => entry.text)).toEqual([
+      'Has a dog named Bramble.',
+    ]);
   });
 });

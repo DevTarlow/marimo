@@ -419,6 +419,33 @@ export const MEMORY_SOFT_LIMIT_MAX_BYTES = 32 * 1024;
 export const DEFAULT_MEMORY_SOFT_LIMIT_BYTES = 8 * 1024;
 
 /**
+ * How much unreviewed conversation a session may accumulate before the idle
+ * look stops waiting for the conversation to end.
+ *
+ * In *events*, which is the same unit as the review watermark — deliberately, so
+ * the number the user sets and the number the store keeps are the same number
+ * rather than two that have to be converted. One exchange is roughly five to
+ * six events (the user's message, an assistant message, and a tool call with its
+ * result), so the default of 40 is about seven turns.
+ *
+ * The default is a judgement, and the reason it is not lower is on both sides of
+ * it. A review costs a model call competing with the chat model on a local
+ * install, so reviewing every turn would spend a second request per message. And
+ * waiting for a full minute of silence — which is what the idle timer does, and
+ * what a real conversation usually reaches — loses nothing at all. This number
+ * only decides the case in between: a session that is still going after enough
+ * turns that a fact mentioned early would otherwise be unremembered for as long
+ * as it continues.
+ *
+ * The floor is where a review would be reading back less than one exchange; the
+ * ceiling is high enough that a user who wants the old behaviour of "only when
+ * the conversation ends" can have it by setting it past any realistic session.
+ */
+export const MEMORY_REVIEW_EVENTS_MIN = 10;
+export const MEMORY_REVIEW_EVENTS_MAX = 500;
+export const DEFAULT_MEMORY_REVIEW_EVENTS = 40;
+
+/**
  * The size a first launch opens at, and the window's own bounds in the CSS
  * pixels Electron reports.
  *
@@ -800,6 +827,24 @@ export const settingsSchema = z.object({
     .max(MEMORY_SOFT_LIMIT_MAX_BYTES)
     .multipleOf(1024),
   /**
+   * How many unreviewed events a session may hold before the look happens
+   * without waiting for the conversation to go quiet.
+   *
+   * A power-user field rather than a slider, unlike the size limit above it: the
+   * size limit is a quantity the user has a feel for because it is their own
+   * words, and this is a number about the app's own bookkeeping. It still
+   * belongs in Settings rather than as a constant, because "the agent proposed
+   * something mid-conversation" and "it waited until I stopped" are both
+   * reasonable things to want and only the user knows which one they are.
+   *
+   * Bounded but not stepped: this is a number typed into a field, not dragged.
+   */
+  memoryReviewEvents: z
+    .number()
+    .int()
+    .min(MEMORY_REVIEW_EVENTS_MIN)
+    .max(MEMORY_REVIEW_EVENTS_MAX),
+  /**
    * Recall: the model that finds things by meaning, and which corpora it indexes.
    *
    * A block rather than three flat fields, for the reason the window block is one:
@@ -1139,7 +1184,12 @@ export interface LocalModelStatus extends EngineStatus {
    * mid-download has missed every event and would otherwise draw an idle card
    * over a download in progress.
    */
-  installing?: {label: string; receivedBytes: number; totalBytes: number; percent?: number};
+  installing?: {
+    label: string;
+    receivedBytes: number;
+    totalBytes: number;
+    percent?: number;
+  };
 }
 
 /**
@@ -1647,6 +1697,14 @@ export const memoryUsageSchema = z.object({
   bytes: z.number().int().nonnegative(),
   limitBytes: z.number().int().positive(),
   capBytes: z.number().int().positive(),
+  /**
+   * The review cadence, carried here rather than read from settings separately.
+   *
+   * The same reasoning as `limitBytes` above: the panel that draws the control
+   * and the agent that obeys it must be quoting one number, and the dialog has
+   * already made this call.
+   */
+  reviewEvents: z.number().int().positive(),
 });
 
 export type MemoryUsage = z.infer<typeof memoryUsageSchema>;
@@ -1658,17 +1716,63 @@ export type MemoryUsage = z.infer<typeof memoryUsageSchema>;
  * review that forgot how far it had read would re-propose the same facts every
  * time the app went quiet, and a queue that refills itself is one nobody reads.
  */
+/**
+ * One thing the user said no to.
+ *
+ * Kept because the *absence* of a fact from memory is not evidence that it was
+ * refused — it is also what a fact the review has never seen looks like. Without
+ * this, the only negative signal the reviewer has is the memory file, and a fact
+ * the user rejected is indistinguishable from one nobody has proposed yet.
+ *
+ * There is no reason to store the model's justification. What has to survive is
+ * enough text to recognise the same suggestion again, and the user's answer is
+ * the only part of the exchange that is theirs.
+ */
+export const dismissedMemorySchema = z.object({
+  /** The profile that refused it: one agent's no is not another's. */
+  profileId: z.string().min(1),
+  /** The fact as it was proposed, so the reviewer can recognise it again. */
+  text: z.string().min(1),
+  at: z.string().min(1),
+});
+
+export type DismissedMemory = z.infer<typeof dismissedMemorySchema>;
+
+/**
+ * The proposals, how far the review has read, and what the user has refused.
+ *
+ * The watermark is per conversation and lives here rather than in memory: a
+ * review that forgot how far it had read would re-propose the same facts every
+ * time the app went quiet, and a queue that refills itself is one nobody reads.
+ *
+ * **Version 2 added `dismissed`, and that is why the version moved.** A build
+ * that understood only version 1 would parse this file, drop the field it did not
+ * know, and write it back — every refusal silently forgotten, which is the exact
+ * shape of the failure invariant 12 exists to prevent. One added field is still a
+ * format change when the field is the one thing that cannot be regenerated.
+ */
 export const memoryProposalsFileSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   proposals: z.array(memoryProposalSchema),
   /** Conversation id to the number of events already reviewed. */
   reviewed: z.record(z.string(), z.number().int().nonnegative()),
+  /**
+   * Facts the user refused, newest last.
+   *
+   * Capped, and capped by dropping the oldest: a refusal is a preference about
+   * the reviewer's judgement, and the ones from a thousand conversations ago are
+   * the ones most likely to be about a phase the user has moved past. The clearer
+   * that memory can be cleared from the dialog is the other half of the same
+   * judgement — a cap the user cannot undo is a queue that silences things
+   * nobody can see.
+   */
+  dismissed: z.array(dismissedMemorySchema),
 });
 
 export type MemoryProposalsFile = z.infer<typeof memoryProposalsFileSchema>;
 
 export function emptyMemoryProposals(): MemoryProposalsFile {
-  return {version: 1, proposals: [], reviewed: {}};
+  return {version: 2, proposals: [], reviewed: {}, dismissed: []};
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1816,7 +1920,14 @@ export type AgentUiEvent =
    * the background while a turn is running, and a chatty event that forced a
    * round trip would be a poll wearing an event's clothes.
    */
-  | {type: 'recall.indexed'; records: number; chunks: number; memory: number; conversations: number; media: number}
+  | {
+      type: 'recall.indexed';
+      records: number;
+      chunks: number;
+      memory: number;
+      conversations: number;
+      media: number;
+    }
   /**
    * The active profile or workspace changed, so what the window is looking at is
    * no longer what the agent would answer as. The renderer reloads its session
@@ -1864,6 +1975,17 @@ export type AgentUiEvent =
    * this is only ever "there is something to see".
    */
   | {type: 'memory.proposed'; count: number}
+  /*
+   * A look at the conversation finished, and what it read.
+   *
+   * Emitted whether or not anything was proposed — which is the point, because
+   * finding nothing is the usual answer. The count is what makes the review
+   * cadence visible at all: the look either waits for the conversation to go
+   * quiet or fires once enough of it has piled up, and when the second of those
+   * happens a window with no event to draw it looks exactly like a review that
+   * never ran.
+   */
+  | {type: 'memory.reviewed'; events: number; found: number}
   /*
    * A helper agent, while it runs.
    *
@@ -2212,12 +2334,28 @@ export const agentCallSchemas = {
   }),
 
   /*
-   * What the agent would remember, waiting for an answer.
+   * What the agent would remember, waiting for an answer, and what the user has
+   * already refused.
    *
-   * `accept` writes it into memory, `dismiss` does not — and both remove it from
-   * the queue, because both are answers.
+   * Both in one call because the dialog shows them together and one of them is
+   * the explanation for the other: a queue that looks short is partly a queue of
+   * things already rejected, and the count is what makes that visible. Two calls
+   * would be two chances for the window to draw one of them from a stale read.
+   *
+   * `accept` writes a proposal into memory, `dismiss` does not — and both remove
+   * it from the queue and, when dismissed, record the refusal, because both are
+   * answers.
    */
   'memory.proposals': z.object({}),
+  /*
+   * Forgets every refusal, so the reviewer may propose them again.
+   *
+   * A deliberate act with no undo, which is why it is its own call rather than a
+   * flag on the one above: the whole point of remembering a no is that it is
+   * quiet, and the thing that makes it safe to be quiet is that the user can
+   * always see the list and clear it.
+   */
+  'memory.forgetDismissals': z.object({}),
   /*
    * How full this agent's memory is, for the size control in Settings. A read
    * rather than event: nothing changes it but a write, and the dialog asks again
@@ -2349,7 +2487,12 @@ export interface AgentCallResults {
   'mcp.remove': {servers: McpServer[]; statuses: Record<string, McpStatus>};
   'mcp.setSecret': {set: string[]};
   'mcp.test': {ok: boolean; detail: string};
-  'memory.proposals': {proposals: MemoryProposal[]};
+  'memory.proposals': {
+    proposals: MemoryProposal[];
+    /** Every refusal on record, across profiles, newest last. */
+    dismissed: DismissedMemory[];
+  };
+  'memory.forgetDismissals': {dismissed: DismissedMemory[]};
   'memory.usage': MemoryUsage;
   'memory.resolve': {ok: boolean; problem?: string};
   'companion.status': {visible: boolean};

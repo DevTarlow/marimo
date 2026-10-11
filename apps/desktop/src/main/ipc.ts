@@ -315,6 +315,11 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'memory.proposals': async () => ({
       proposals: await agent().memoryProposals(),
+      dismissed: await agent().dismissedMemory(),
+    }),
+
+    'memory.forgetDismissals': async () => ({
+      dismissed: await agent().forgetDismissedMemory(),
     }),
 
     'memory.usage': async (params) =>
@@ -421,7 +426,8 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     /* Recall: a read and four buttons, on the same terms as the model's. */
     'recall.status': async () => await agent().recallStatus(),
-    'recall.install': async (params) => await agent().recallInstall(params.piece),
+    'recall.install': async (params) =>
+      await agent().recallInstall(params.piece),
     'recall.cancel': () => agent().recallCancel(),
     'recall.reindex': async () => await agent().recallReindex(),
     'recall.forget': async () => await agent().recallForget(),

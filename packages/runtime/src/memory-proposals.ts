@@ -24,7 +24,11 @@ import {
   emptyMemoryProposals,
   memoryProposalsFileSchema,
 } from '@marimo/protocol';
-import type {MemoryProposal, MemoryProposalsFile} from '@marimo/protocol';
+import type {
+  DismissedMemory,
+  MemoryProposal,
+  MemoryProposalsFile,
+} from '@marimo/protocol';
 
 import {withFileLock} from './lock.js';
 import {
@@ -32,9 +36,56 @@ import {
   DocumentTooNewError,
   readVersionedDocument,
 } from '@marimo/agent';
+import type {DocumentMigration, ReadVersionedOptions} from '@marimo/agent';
 
 /** How many proposals may wait at once. */
 export const MAX_PENDING_PROPOSALS = 50;
+
+/**
+ * How many refusals are kept.
+ *
+ * Generous, because this is the half that makes the reviewer improve and a user
+ * who says no forty times in a month is a user the feature is working for. A cap
+ * at all because the list is read on every review and written on every refusal,
+ * and a document that grows forever is one that eventually slows down the thing
+ * that is supposed to be cheap. Past the cap the oldest go, which is the right
+ * end to drop: a refusal is a statement about the reviewer's judgement at the
+ * time, and the one from a phase the user has moved past is the one most likely
+ * to be wrong now.
+ */
+export const MAX_DISMISSED = 200;
+
+/**
+ * The version this file writes, and the reason it is not `DOCUMENT_VERSION`.
+ *
+ * The shared constant is one number for every document because one release reads
+ * them all — but this document moved to 2 while the rest are still 1, and saying
+ * so is the whole point. It is what makes an older build refuse this file rather
+ * than parse it, drop the one field it does not know, and write the refusals away.
+ */
+export const PROPOSALS_VERSION = 2;
+
+/**
+ * Version 1 to version 2: the refusals arrived.
+ *
+ * A migration rather than a default, even though the field it adds is a list, so
+ * that a version 1 file is *upgraded and rewritten* rather than merely tolerated.
+ * The difference matters the moment somebody goes back to an older build: an
+ * upgraded file carries version 2 and is refused, while a tolerated one still
+ * looks like version 1 and is overwritten.
+ */
+const ADD_DISMISSED: DocumentMigration = {
+  from: 1,
+  to: 2,
+  summary: 'started recording the facts the user refused',
+  migrate: (document) => ({...document, dismissed: []}),
+};
+
+const READ_OPTIONS: ReadVersionedOptions = {
+  label: 'The memory proposals file',
+  current: PROPOSALS_VERSION,
+  migrations: [ADD_DISMISSED],
+};
 
 export interface MemoryProposalStoreOptions {
   file: string;
@@ -69,9 +120,7 @@ export class MemoryProposalStore {
     if (this.cache) {
       return this.cache;
     }
-    const read = await readVersionedDocument(this.options.file, {
-      label: 'The memory proposals file',
-    });
+    const read = await readVersionedDocument(this.options.file, READ_OPTIONS);
     if (read.state === 'too-new') {
       throw new DocumentTooNewError(
         'The memory proposals file',
@@ -111,7 +160,9 @@ export class MemoryProposalStore {
   ): Promise<MemoryProposalsFile> {
     return await this.mutate((current) => {
       const existing = new Set(
-        current.proposals.map((proposal) => `${proposal.profileId}\u0000${proposal.text}`),
+        current.proposals.map(
+          (proposal) => `${proposal.profileId}\u0000${proposal.text}`,
+        ),
       );
 
       const added: MemoryProposal[] = [];
@@ -143,23 +194,95 @@ export class MemoryProposalStore {
           : combined;
 
       return {
-        version: 1,
+        version: PROPOSALS_VERSION,
         proposals: kept,
         // Moved whether or not anything was proposed: "I looked and found
         // nothing" is the answer most of the time, and not recording it means
         // looking again on every idle moment forever.
         reviewed: {...current.reviewed, [sessionId]: reviewed},
+        // Carried rather than rebuilt: this write is about the queue and the
+        // watermark, and a record function that dropped the refusals would make
+        // every review quietly undo every "no" the user had given.
+        dismissed: current.dismissed,
       };
     });
   }
 
-  /** Removes one proposal, whether it was accepted or dismissed. */
-  async remove(proposalId: string): Promise<MemoryProposalsFile> {
+  /**
+   * Remembers that the user refused something.
+   *
+   * Stored with the profile rather than globally: one agent's no is not
+   * another's, and a fact a user refused in their work agent may be exactly what
+   * they want their personal one to know. Deduped on the text alone within that
+   * profile, because refusing the same phrasing twice is one refusal — the
+   * timestamps would differ and nothing else would.
+   */
+  async dismiss(dismissal: {
+    profileId: string;
+    text: string;
+  }): Promise<MemoryProposalsFile> {
+    const text = dismissal.text.trim();
+    if (text.length === 0) {
+      return await this.load();
+    }
+    return await this.mutate((current) => ({
+      ...current,
+      dismissed: withRefusal(
+        current.dismissed,
+        dismissal.profileId,
+        text,
+        this.now(),
+      ),
+    }));
+  }
+
+  /**
+   * Forgets every refusal, so the reviewer may propose them again.
+   *
+   * The undo for the whole feature, and deliberately total rather than
+   * per-entry: the list exists to make the reviewer quieter, and a user clearing
+   * it is saying the reviewer's judgement was being held back by decisions they
+   * no longer stand behind. Restoring them one at a time would mean scrolling a
+   * list of things they already read and refused.
+   */
+  async clearDismissed(): Promise<MemoryProposalsFile> {
+    return await this.mutate((current) => ({...current, dismissed: []}));
+  }
+
+  /**
+   * Removes one proposal, and records the refusal when that is what it was.
+   *
+   * The two happen in one write rather than two calls from the caller, because
+   * they are one decision and the store is the only thing that can make them
+   * atomic: a crash between "removed from the queue" and "remembered as refused"
+   * would leave the suggestion gone and its refusal unrecorded, so the next
+   * review would propose it again — which is the behaviour this exists to stop.
+   *
+   * `dismissed` is absent for an acceptance. Nothing is recorded there, because
+   * the fact lands in `memory.md` and the reviewer already filters against that:
+   * a second list of things the user said *yes* to would be a copy of the memory
+   * file, free to drift from it.
+   */
+  async remove(
+    proposalId: string,
+    dismissed?: {profileId: string; text: string},
+  ): Promise<MemoryProposalsFile> {
+    const text = dismissed?.text.trim() ?? '';
     return await this.mutate((current) => ({
       ...current,
       proposals: current.proposals.filter(
         (proposal) => proposal.id !== proposalId,
       ),
+      ...(dismissed === undefined || text.length === 0
+        ? {}
+        : {
+            dismissed: withRefusal(
+              current.dismissed,
+              dismissed.profileId,
+              text,
+              this.now(),
+            ),
+          }),
     }));
   }
 
@@ -194,9 +317,7 @@ export class MemoryProposalStore {
          * it is what lets the window open with an unreadable file rather than
          * refusing to start.
          */
-        await assertWritable(this.options.file, {
-          label: 'The memory proposals file',
-        });
+        await assertWritable(this.options.file, READ_OPTIONS);
 
         const current = await this.load();
         const next = edit(current);
@@ -232,4 +353,42 @@ export class MemoryProposalStore {
     );
     return await run;
   }
+}
+
+/**
+ * The refusals, with one more on the end.
+ *
+ * Deduped on the text within the profile and capped by dropping the oldest, which
+ * is the same judgement twice: a list read on every review has to stay small, and
+ * the refusal a user has moved past is the one at the front.
+ */
+function withRefusal(
+  existing: readonly DismissedMemory[],
+  profileId: string,
+  text: string,
+  now: Date,
+): DismissedMemory[] {
+  const kept = existing.filter(
+    (entry) =>
+      !(
+        entry.profileId === profileId &&
+        comparable(entry.text) === comparable(text)
+      ),
+  );
+  kept.push({profileId, text, at: now.toISOString()});
+  return kept.length > MAX_DISMISSED
+    ? kept.slice(kept.length - MAX_DISMISSED)
+    : kept;
+}
+
+/**
+ * Lowercased with every run of whitespace reduced to one space.
+ *
+ * The same comparison `isNewProposal` makes when it decides whether a proposal is
+ * one memory already holds. A refusal is recognised by the same rule for the same
+ * reason: a model that re-proposed the fact with different spacing said the same
+ * thing, and holding both is holding one refusal twice.
+ */
+function comparable(text: string): string {
+  return text.trim().toLowerCase().replaceAll(/\s+/gu, ' ');
 }

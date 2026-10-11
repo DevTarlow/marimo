@@ -120,6 +120,7 @@ describe('AgentRuntime', () => {
         bytes: Buffer.byteLength('- a fact\n', 'utf8'),
         limitBytes: 16 * 1024,
         capBytes: MAX_MEMORY_BYTES,
+        reviewEvents: 40,
       });
     });
 
@@ -246,7 +247,6 @@ describe('AgentRuntime', () => {
       await expect(runtime().dispose()).resolves.toBeUndefined();
     });
   });
-
 });
 
 /*
@@ -831,6 +831,49 @@ describe('folders and filing', () => {
       readFile(resolveMemoryFile(join(dir, 'beta'), profileId), 'utf8'),
     ).rejects.toThrow();
   });
+
+  /*
+   * A refusal is remembered, and the memory is not written.
+   *
+   * Both halves matter and they fail in opposite directions: a refusal that was
+   * not recorded is a suggestion the reviewer will make again, and a refusal that
+   * *was* written to memory is the worse of the two — the user said no, and the
+   * fact is now in every future prompt.
+   */
+  it('remembers a refusal without writing it into memory', async () => {
+    const agent = runtime();
+    const session = await agent.createSession(profileId);
+
+    const proposals = new MemoryProposalStore({file: paths.memoryProposals});
+    const recorded = await proposals.record(session?.id ?? '', 1, [
+      {
+        sessionId: session?.id ?? null,
+        profileId,
+        section: 'About the user',
+        text: 'Scans their receipts every Sunday.',
+        reason: 'Said so in that conversation.',
+      },
+    ]);
+
+    const result = await agent.resolveMemoryProposal(
+      recorded.proposals[0]?.id ?? '',
+      false,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(await agent.memoryProposals()).toEqual([]);
+    expect((await agent.dismissedMemory()).map((entry) => entry.text)).toEqual([
+      'Scans their receipts every Sunday.',
+    ]);
+    // The fact itself never reached the memory file.
+    await expect(
+      readFile(resolveMemoryFile(dir, profileId), 'utf8'),
+    ).rejects.toThrow();
+
+    // And the undo is total, which is what makes the quiet list safe to keep.
+    expect(await agent.forgetDismissedMemory()).toEqual([]);
+    expect(await agent.dismissedMemory()).toEqual([]);
+  });
 });
 
 /*
@@ -990,9 +1033,9 @@ describe('the built-in model', () => {
       await agent.updateSettings({recall: {enabled: true}});
       await agent.updateSettings({recall: {enabled: false}});
 
-      expect((await agent.catalog()).tools.map((tool) => tool.name)).not.toContain(
-        'recall',
-      );
+      expect(
+        (await agent.catalog()).tools.map((tool) => tool.name),
+      ).not.toContain('recall');
     });
 
     /*
@@ -1019,4 +1062,3 @@ describe('the built-in model', () => {
     });
   });
 });
-

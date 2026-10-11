@@ -276,6 +276,14 @@ export type {
   ReadVersionedOptions,
 } from '@marimo/agent';
 
+/*
+ * The review cadence, re-exported for the same reason as the version machinery:
+ * the decision lives with the memory it is about, and the app that arms the timer
+ * should not have to import the agent package to ask which delay to use.
+ */
+export {reviewDelay} from '@marimo/agent';
+export type {ReviewDelay, ReviewDueOptions} from '@marimo/agent';
+
 /* The agent, assembled from what the user configured. */
 export {AgentRuntime} from './agent/runtime.js';
 export type {

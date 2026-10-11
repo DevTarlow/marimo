@@ -33,8 +33,9 @@ export {
   renderConversation,
   reviewPrompt,
   runReview,
+  wasRefused,
 } from './review.js';
-export type {ReviewEvent, ReviewRequest} from './review.js';
+export type {RefusedFact, ReviewEvent, ReviewRequest} from './review.js';
 
 export {
   CANONICAL_SECTIONS,

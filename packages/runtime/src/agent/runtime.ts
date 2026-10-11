@@ -47,6 +47,7 @@ import type {
   AgentUiEvent,
   CatalogEntry,
   CompactResult,
+  DismissedMemory,
   MemoryProposal,
   MemoryUsage,
   TranscriptMessage,
@@ -59,6 +60,7 @@ import type {
   Workspace,
   WorkspaceState,
 } from '@marimo/protocol';
+import {reviewDelay} from '@marimo/agent';
 
 import type {AppPaths} from '../paths.js';
 import {ProfileStore} from '../profiles.js';
@@ -415,10 +417,20 @@ export class AgentRuntime {
     }
 
     const memory = await host.memoryText();
+    /*
+     * What this agent has already been told no about. Read from the same document
+     * the proposals live in, so a refusal and the queue it came from cannot
+     * disagree — and scoped to the profile, because a fact refused in one agent's
+     * conversation is not a refusal by the person in another's.
+     */
+    const refused = (await this.proposals.load()).dismissed
+      .filter((entry) => entry.profileId === profileId)
+      .map((entry) => ({text: entry.text}));
     const found = await runReview({
       // Only what has not been read before.
       events: events.slice(from),
       memory,
+      refused,
       ask: async (prompt) => await host.ask(prompt),
     });
 
@@ -472,6 +484,7 @@ export class AgentRuntime {
         bytes: await host.memoryBytes(),
         limitBytes: settings.memorySoftLimitBytes,
         capBytes: MAX_MEMORY_BYTES,
+        reviewEvents: settings.memoryReviewEvents,
       };
     }
 
@@ -493,6 +506,7 @@ export class AgentRuntime {
       bytes: await store.bytes(),
       limitBytes: store.softLimitBytes,
       capBytes: MAX_MEMORY_BYTES,
+      reviewEvents: settings.memoryReviewEvents,
     };
   }
 
@@ -534,8 +548,84 @@ export class AgentRuntime {
       await result.host.remember(proposal.section, proposal.text);
     }
 
-    await this.proposals.remove(proposalId);
+    /*
+     * A refusal is recorded with the agent it was refused in. The fact may be
+     * exactly what this same agent is told later — the user can refuse a
+     * *suggestion* and then say the thing themselves — and that is fine: the
+     * refusal only silences the reviewer, never `update_memory`.
+     */
+    await this.proposals.remove(
+      proposalId,
+      accept ? undefined : {profileId: proposal.profileId, text: proposal.text},
+    );
     return {ok: true};
+  }
+
+  /**
+   * What the user has refused, newest last.
+   *
+   * Read for the memory panel rather than for the reviewer, so it answers with
+   * the whole list and lets the caller group it: the dialog shows how many
+   * judgements are being carried, and that is a number about the app's behaviour
+   * rather than about one agent.
+   */
+  async dismissedMemory(): Promise<DismissedMemory[]> {
+    return (await this.proposals.load()).dismissed;
+  }
+
+  /** Forgets every refusal, so the reviewer may propose them again. */
+  async forgetDismissedMemory(): Promise<DismissedMemory[]> {
+    return (await this.proposals.clearDismissed()).dismissed;
+  }
+
+  /**
+   * How far the memory review has read a conversation.
+   *
+   * Asked so the idle timer can choose between waiting for the conversation to
+   * end and reading it back in stretches. Deliberately built on `ensureHost`
+   * rather than `host`: this runs at the end of every turn, and `host` starts the
+   * model engine — which is seconds of work to answer a question about a counter.
+   *
+   * `total` counts the events the review counts — the settled ones — because a
+   * partial event is not something anything should be reading, and the two
+   * numbers have to be in the same units as the threshold they are compared
+   * against.
+   */
+  async reviewProgress(
+    profileId: string,
+    sessionId: string,
+  ): Promise<{reviewed: number; total: number}> {
+    const host = await this.ensureHost(profileId);
+    const events = await host.eventsFor(sessionId);
+    const total = events.filter((event) => event.partial !== true).length;
+    const reviewed = await this.proposals.reviewedUpTo(sessionId);
+    return {reviewed, total};
+  }
+
+  /**
+   * How long the idle timer should wait before reading this conversation back.
+   *
+   * Here rather than in the window because the threshold is a setting and this is
+   * the layer that already reads settings — the app that arms the timer asks one
+   * question and gets a number, and never learns that there were two rules behind
+   * it. The two delays are passed in because they are the *caller's* judgement:
+   * ten seconds rather than a minute is about what else is running on the machine,
+   * which is the app's business rather than the agent's.
+   */
+  async reviewDelayFor(
+    profileId: string,
+    sessionId: string,
+    delays: {idleMs: number; shortlyMs: number},
+  ): Promise<number> {
+    const settings = await this.settingsStore.load();
+    const progress = await this.reviewProgress(profileId, sessionId);
+    return reviewDelay({
+      total: progress.total,
+      reviewed: progress.reviewed,
+      threshold: settings.memoryReviewEvents,
+    }) === 'shortly'
+      ? delays.shortlyMs
+      : delays.idleMs;
   }
 
   async profiles(): Promise<AgentProfile[]> {
@@ -835,7 +925,8 @@ export class AgentRuntime {
      */
     host.setRecallService(
       settings.recall.enabled
-        ? (await this.options.services?.(profileId, workspaceRoot))?.recallService
+        ? (await this.options.services?.(profileId, workspaceRoot))
+            ?.recallService
         : undefined,
     );
 
@@ -1073,9 +1164,8 @@ export class AgentRuntime {
        */
       onSessionsDeleted: async (sessionIds) => {
         const root = workspaceRootFor(await this.workspaceStore.load());
-        const recall = (
-          await this.options.services?.(profileId, root)
-        )?.recallService;
+        const recall = (await this.options.services?.(profileId, root))
+          ?.recallService;
         /*
          * Best effort, and deliberately swallowed. The conversation is already
          * deleted by the time this runs, and an index that cannot be rewritten —

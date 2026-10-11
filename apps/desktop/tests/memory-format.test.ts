@@ -11,7 +11,11 @@
  */
 import {describe, expect, it} from 'vitest';
 
-import {formatKiB, summarizeMemory} from '../src/renderer/memory-format.js';
+import {
+  formatKiB,
+  summarizeDismissed,
+  summarizeMemory,
+} from '../src/renderer/memory-format.js';
 
 const LIMIT = 8 * 1024;
 
@@ -41,6 +45,7 @@ describe('summarizeMemory', () => {
       bytes: 0,
       limitBytes: LIMIT,
       capBytes: 64 * 1024,
+      reviewEvents: 40,
     });
     expect(summary.pressure).toBe('empty');
     expect(summary.size).toBe('0 bytes of 8 KB used');
@@ -52,6 +57,7 @@ describe('summarizeMemory', () => {
       bytes: 2048,
       limitBytes: LIMIT,
       capBytes: 64 * 1024,
+      reviewEvents: 40,
     });
     expect(summary.pressure).toBe('room');
     expect(summary.size).toBe('2 KB of 8 KB used');
@@ -68,6 +74,7 @@ describe('summarizeMemory', () => {
       bytes: LIMIT,
       limitBytes: LIMIT,
       capBytes: 64 * 1024,
+      reviewEvents: 40,
     });
     expect(summary.pressure).toBe('room');
     expect(summary.percent).toBe(100);
@@ -78,6 +85,7 @@ describe('summarizeMemory', () => {
       bytes: LIMIT + 1,
       limitBytes: LIMIT,
       capBytes: 64 * 1024,
+      reviewEvents: 40,
     });
     expect(summary.pressure).toBe('over');
     expect(summary.detail).toContain('prune');
@@ -92,8 +100,46 @@ describe('summarizeMemory', () => {
       bytes: 64 * 1024,
       limitBytes: LIMIT,
       capBytes: 64 * 1024,
+      reviewEvents: 40,
     });
     expect(summary.pressure).toBe('over');
     expect(summary.percent).toBe(100);
+  });
+});
+
+/*
+ * The refusals, which are the one part of the memory panel that only appears
+ * after a user has decided something — so the case that has to hold is the one
+ * where there is nothing to draw.
+ */
+describe('summarizeDismissed', () => {
+  it('draws nothing at all when nothing has been refused', () => {
+    const summary = summarizeDismissed(0);
+    expect(summary.heading).toBeUndefined();
+    expect(summary.count).toBe('');
+  });
+
+  /*
+   * One is the state a user reaches first, and the one most likely to be read —
+   * "1 suggestions" is the kind of sentence that makes a panel look unfinished.
+   */
+  it('says one refusal in the singular', () => {
+    const summary = summarizeDismissed(1);
+    expect(summary.heading).toBeDefined();
+    expect(summary.count).toBe('One suggestion is being suppressed.');
+  });
+
+  it('counts many', () => {
+    expect(summarizeDismissed(4).count).toBe(
+      '4 suggestions are being suppressed.',
+    );
+  });
+
+  /*
+   * A negative length is not a thing React can pass, but a count that came from
+   * anywhere else has to read as empty rather than as "-1 suggestions".
+   */
+  it('treats a nonsense count as empty rather than rendering it', () => {
+    expect(summarizeDismissed(-3).heading).toBeUndefined();
   });
 });

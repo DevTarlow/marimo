@@ -10,7 +10,6 @@
 import {safeStorage} from 'electron';
 
 import {FileSecretStore} from '@marimo/runtime';
-import type {AppPaths} from '@marimo/runtime';
 import type {SecretCipher} from '@marimo/runtime';
 
 export const safeStorageCipher: SecretCipher = {
@@ -35,11 +34,3 @@ export function secretStore(
   return new FileSecretStore(file, label, safeStorageCipher);
 }
 
-/** The API key for a provider, with the label a refusal should name. */
-export function providerSecretStore(
-  paths: AppPaths,
-  providerId: keyof AppPaths['providerSecrets'],
-  label: string,
-): FileSecretStore {
-  return secretStore(paths.providerSecrets[providerId], label);
-}

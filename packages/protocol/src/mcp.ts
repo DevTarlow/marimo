@@ -42,9 +42,8 @@ export type McpTransport = z.infer<typeof mcpTransportSchema>;
  *
  * `target` says where the value is used when the server is started: injected
  * into its environment, or sent as a request header. The value itself is stored
- * separately and never travels to the window, which is the same rule provider
- * API keys follow — the document records that a secret *exists*, and where it
- * goes, not what it is.
+ * separately and never travels to the window — the document records that a
+ * secret *exists*, and where it goes, not what it is.
  */
 export const mcpSecretRefSchema = z.object({
   target: z.enum(['env', 'header']),

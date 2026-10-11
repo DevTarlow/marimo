@@ -9,10 +9,10 @@
  * Neither is visible from a test that starts a real server, and one of them
  * cannot be seen from the window at all.
  */
+import {LOCAL_MODEL_ID} from '@marimo/protocol';
 import {describe, expect, it} from 'vitest';
 
 import {defaultGpuLayers, engineArgs} from './args.js';
-import {MODEL_ALIAS} from './files.js';
 
 function args(overrides: Partial<Parameters<typeof engineArgs>[0]> = {}) {
   return engineArgs({
@@ -32,7 +32,7 @@ describe('engineArgs', () => {
       '--model',
       '/opt/model/Qwen3-1.7B-Q4_K_M.gguf',
       '--alias',
-      MODEL_ALIAS,
+      LOCAL_MODEL_ID,
       '--host',
       '127.0.0.1',
       '--port',

@@ -200,7 +200,6 @@ export function describeTools(options: {
 }): CatalogTool[] {
   const built = createTools(
     {
-      apiKey: '',
       baseUrl: '',
       model: options.model,
       temperature: 0,

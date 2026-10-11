@@ -1,13 +1,12 @@
 /**
- * The one OpenAI-compatible client, and the two places a provider's differences
- * actually reach the wire.
+ * The one OpenAI-compatible client, and what it puts on the wire.
  *
- * Everything else about a request is identical across DeepSeek, a local
- * llama.cpp server and Gemini, which is the whole reason there is one client. The
- * exception is `stream_options`: Gemini's compatibility layer rejects it, and
- * sending it there fails every turn rather than costing a token count. That is
- * the kind of difference that is invisible until someone switches provider, so it
- * is pinned here.
+ * There is one backend now — the llama.cpp engine the app starts on loopback —
+ * so the request shape is a fact rather than a choice: usage is always asked for,
+ * and there is never an `Authorization` header because there is no credential.
+ * Both used to travel with a provider descriptor, and both are the kind of
+ * difference that is invisible until the wrong one is sent, so they are pinned
+ * here rather than described.
  */
 import type {LlmRequest} from '@google/adk';
 import {describe, expect, it} from 'vitest';
@@ -57,7 +56,7 @@ function client(
 
   const llm = new OpenAiCompatLlm({
     model: 'test-model',
-    apiKey: 'k',
+    baseUrl: 'http://127.0.0.1:8137/v1',
     fetchImpl,
     ...options,
   });
@@ -81,62 +80,51 @@ async function drain(llm: OpenAiCompatLlm): Promise<unknown[]> {
 }
 
 describe('OpenAiCompatLlm request shape', () => {
-  it('asks DeepSeek for a trailing usage chunk', async () => {
-    const {llm, calls} = client({provider: 'deepseek'});
-    await drain(llm);
-
-    expect(calls[0]!.url).toBe('https://api.deepseek.com/chat/completions');
-    expect(calls[0]!.body['stream_options']).toEqual({include_usage: true});
-    expect(calls[0]!.headers['Authorization']).toBe('Bearer k');
-  });
-
-  it('leaves stream_options off for Gemini', async () => {
-    const {llm, calls} = client({provider: 'gemini'});
-    await drain(llm);
-
-    expect(calls[0]!.url).toBe(
-      'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-    );
-    // The field is not merely empty: its absence is what the layer requires.
-    expect(calls[0]!.body).not.toHaveProperty('stream_options');
-  });
-
-  it('keeps stream_options for a llama.cpp server', async () => {
-    const {llm, calls} = client({provider: 'llamacpp'});
-    await drain(llm);
-
-    expect(calls[0]!.url).toBe('http://127.0.0.1:8080/v1/chat/completions');
-    expect(calls[0]!.body['stream_options']).toEqual({include_usage: true});
-  });
-
-  it('omits the header entirely when there is no key', async () => {
-    const {llm, calls} = client({provider: 'llamacpp', apiKey: ''});
-    await drain(llm);
-
-    // Not `Bearer ` with nothing after it: a local server usually has no
-    // credential at all, and an empty one is a claim that there is.
-    expect(calls[0]!.headers).not.toHaveProperty('Authorization');
-  });
-
-  it('defaults to DeepSeek when no provider is named', async () => {
+  it('posts to the engine address it was given', async () => {
     const {llm, calls} = client();
     await drain(llm);
 
-    expect(calls[0]!.url).toBe('https://api.deepseek.com/chat/completions');
+    expect(calls[0]!.url).toBe(
+      'http://127.0.0.1:8137/v1/chat/completions',
+    );
   });
 
-  it('names the provider in an error the user will read', async () => {
+  it('normalises a trailing slash rather than doubling it', async () => {
+    const {llm, calls} = client({baseUrl: 'http://127.0.0.1:8137/v1/'});
+    await drain(llm);
+
+    expect(calls[0]!.url).toBe(
+      'http://127.0.0.1:8137/v1/chat/completions',
+    );
+  });
+
+  it('always asks for a trailing usage chunk', async () => {
+    const {llm, calls} = client();
+    await drain(llm);
+
+    expect(calls[0]!.body['stream_options']).toEqual({include_usage: true});
+  });
+
+  it('never sends an Authorization header', async () => {
+    const {llm, calls} = client();
+    await drain(llm);
+
+    // Not `Bearer ` with nothing after it, and not a key: the engine this app
+    // starts takes no credential, and an empty one is a claim that there is.
+    expect(calls[0]!.headers).not.toHaveProperty('Authorization');
+  });
+
+  it('names the local model in an error the user will read', async () => {
     const llm = new OpenAiCompatLlm({
       model: 'test-model',
-      apiKey: 'k',
-      provider: 'gemini',
+      baseUrl: 'http://127.0.0.1:8137/v1',
       fetchImpl: (async () =>
-        new Response('quota exceeded', {
+        new Response('model not loaded', {
           status: 429,
         })) as unknown as typeof fetch,
     });
 
     await expect(drain(llm)).rejects.toThrow(OpenAiCompatRequestError);
-    await expect(drain(llm)).rejects.toThrow(/Google Gemini returned 429/);
+    await expect(drain(llm)).rejects.toThrow(/The local model returned 429/);
   });
 });

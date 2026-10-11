@@ -506,7 +506,7 @@ function SecretEditor({
       <span>Secrets</span>
       <em className="settings-why">
         Values the connector needs — an API key in an environment variable, or a
-        token in a header. Each is stored like an API key and never shown again.
+        token in a header. Each is encrypted at rest and never shown again.
         {draft.id.length === 0 &&
           ' Save the connector first, then come back to add these.'}
       </em>

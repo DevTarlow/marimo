@@ -28,22 +28,15 @@ export type {
   McpToolInfo,
 } from './mcp/index.js';
 /*
- * One OpenAI-compatible client serves every provider. `DeepSeekLlm` remains as
- * an alias of it, because the class was named after the only backend the app had
- * and that name is part of this package's surface.
+ * The one client, for the one backend: the engine this app starts on loopback.
+ * The `DeepSeekLlm` alias and the `/models` reader went with the catalogue they
+ * described.
  */
 export {
   OpenAiCompatLlm,
   OpenAiCompatRequestError,
 } from './models/openai-compat-llm.js';
 export type {OpenAiCompatLlmOptions} from './models/openai-compat-llm.js';
-export {DeepSeekLlm, DeepSeekRequestError} from './models/deepseek-llm.js';
-export type {DeepSeekLlmOptions} from './models/deepseek-llm.js';
-export {
-  fetchProviderModels,
-  ProviderModelsError,
-} from './models/provider-models.js';
-export type {ProviderModelsOptions} from './models/provider-models.js';
 export {FileSessionService} from './sessions/file-session-service.js';
 export type {
   AdkEvent,

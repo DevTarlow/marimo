@@ -14,9 +14,9 @@ scheduled jobs going while the app is closed.
 
 ```
 packages/protocol   The typed contract: zod schemas for every IPC call, the
-                    AgentUiEvent union, providers, cron, the profile and job
+                    AgentUiEvent union, the model id, cron, the profile and job
                     documents. No Electron, no Node, no React.
-packages/agent      Everything ADK: the OpenAI-compatible provider, tool set,
+packages/agent      Everything ADK: the OpenAI-compatible client, tool set,
                     skills that compose the system instruction, the file-backed
                     memory and session stores, AgentHost, and the
                     document-version machinery. No Electron.
@@ -64,7 +64,9 @@ Each of these is silent when it breaks. That is the whole reason they are listed
    the workspace, and a symlink that leaves it are one refusal.
 7. **Truncation is visible.** A capped tool result says so, so the model knows
    there is more rather than believing it read everything.
-8. **Secrets never cross to the renderer.** Settings report `hasKey`, never a key.
+8. **Secrets never cross to the renderer.** Settings report whether a connector's
+   secret is *set*, never its value — and there is a test that walks the payload
+   rather than trusting one call site.
 9. **A capability the user turned off is absent, not discouraged.**
 10. **One turn at a time holds across processes.** The app and the runner are
     serialised by a lock, not by hope.
@@ -93,11 +95,11 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     in a turn is refused rather than run, because a model that loops arrives at
     that silence by itself. Nothing here is a prompt: a prompt is what a 1.7B
     model loses first.
-16. **A managed provider's stored base URL is never sent.** The built-in model's
-    engine comes up on whatever port was free, so the settings file holds a
-    placeholder and the resolver substitutes the live address — or refuses, with
-    a sentence. Falling back to the placeholder is not a broken turn, it is a
-    conversation sent to whatever else is listening on that port. `--jinja` is
+16. **The engine's address exists only in the process that started it.** The
+    engine comes up on whatever port was free, so no address is stored anywhere:
+    the resolver takes the live one from the caller or refuses, with a sentence.
+    There is no placeholder to fall back to, which is the point — a fixed port
+    would send a conversation to whatever else is listening there. `--jinja` is
     the other half of the same feature and is just as silent when missing: the
     engine runs perfectly and the agent is offered no tools at all.
 
@@ -349,12 +351,18 @@ resources. A checkout has none of it, which is why `MARIMO_MODEL_DIR` exists:
 without it the app opens saying the model engine is not installed, and that is
 the state the smoke check runs in.
 
-Three things about this are easy to get wrong and expensive to find:
+Four things about this are easy to get wrong and expensive to find:
 
 - **`--jinja` is load-bearing.** Without it llama.cpp does not apply the model's
   own chat template, and Qwen3's template is what turns a `<tool_call>` block into
   a call this app can see. The engine runs perfectly, every request succeeds, and
   the agent is offered no tools at all.
+- **The argv is fixed, and there is nothing to configure.** The context window,
+  thinking off and `--parallel 1` are constants in `local-model/files.ts` and
+  `local-model/args.ts`; `MARIMO_MODEL_DIR` is the only override. The app carries
+  one model and runs it, so a setting here would be a second way to describe the
+  same process — and the engine cannot honour a change anyway without being
+  restarted.
 - **`fs.cp` rewrites relative symlinks to absolute ones** unless
   `verbatimSymlinks: true`. The released engine archives link their libraries
   relatively, so a copy points into a scratch directory that is deleted a line

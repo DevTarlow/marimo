@@ -11,8 +11,9 @@
  * the scheduler starts with the app, notices a job that came due while nothing
  * was running, dispatches it, gives it a conversation of its own, runs a real
  * turn, and writes the outcome back — including when that outcome is a refusal.
- * Without a provider key the expected result is exactly what it prints: the job
- * recorded as an error saying so, rather than silence.
+ * A checkout has no weights in it, so the expected result here is exactly what it
+ * prints: the job recorded as an error saying the model is not installed, rather
+ * than silence.
  */
 import {mkdtemp, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';

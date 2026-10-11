@@ -8,10 +8,15 @@
  *
  * So this asserts the *shape* rather than one call site: whatever a settings
  * payload grows into, no key may appear in it.
+ *
+ * The payload got smaller when the provider catalogue went — there are no model
+ * keys left to leak — and the guard is more valuable now, not less: the only
+ * secrets this app still keeps are connector tokens, and a field carrying one
+ * would be the first credential this boundary had ever seen.
  */
 import {describe, expect, it} from 'vitest';
 
-import {defaultProviders} from '@marimo/protocol';
+import {defaultStoredSettings} from '@marimo/runtime';
 
 /** The fields of a settings payload that could ever hold a credential. */
 const FORBIDDEN = ['apikey', 'key', 'token', 'secret', 'password'] as const;
@@ -22,6 +27,12 @@ const FORBIDDEN = ['apikey', 'key', 'token', 'secret', 'password'] as const;
  * Checked by key name rather than by value: a key that happened to be short
  * would not be caught by a length or entropy test, and a false positive is
  * cheaper here than a leak.
+ *
+ * The last *word* of the name rather than the whole string, so `botToken` is
+ * caught as well as `bot_token` — the app writes camelCase, and a guard that
+ * only knew snake_case would pass over exactly the field a hurried change would
+ * add. Whole words, so `secrets` (which names where a value goes, not what it
+ * is) is not a false positive.
  */
 function credentialFieldsIn(value: unknown, path = ''): string[] {
   if (value === null || typeof value !== 'object') {
@@ -35,10 +46,8 @@ function credentialFieldsIn(value: unknown, path = ''): string[] {
   return Object.entries(value as Record<string, unknown>).flatMap(
     ([key, entry]) => {
       const here = path.length > 0 ? `${path}.${key}` : key;
-      const lower = key.toLowerCase();
-      const looksSecret = FORBIDDEN.some(
-        (word) => lower === word || lower.endsWith(`_${word}`),
-      );
+      const lastWord = (key.split(/(?=[A-Z])|_/u).pop() ?? '').toLowerCase();
+      const looksSecret = FORBIDDEN.some((word) => lastWord === word);
       return [
         ...(looksSecret ? [here] : []),
         ...credentialFieldsIn(entry, here),
@@ -50,31 +59,12 @@ function credentialFieldsIn(value: unknown, path = ''): string[] {
 describe('a settings payload', () => {
   /*
    * The real shape, as `settings.get` builds it: the stored settings spread,
-   * plus the derived booleans the window is allowed to see.
+   * plus the facts the window is allowed to see.
    */
   function payload(): Record<string, unknown> {
     return {
-      ...{
-        providers: defaultProviders(),
-        temperature: 0.7,
-        allowPrivateNetworkFetch: false,
-        allowPlaintextApiKey: false,
-        mcpServers: [],
-        appearance: {theme: 'system'},
-        disabledCommands: [],
-      },
-      hasApiKey: true,
-      providerReady: true,
-      providerKeys: {
-        builtin: false,
-        deepseek: true,
-        gemini: false,
-        llamacpp: false,
-        opencode_go: false,
-        openrouter: false,
-      },
-      encryptionAvailable: true,
-      availableModels: ['deepseek-chat'],
+      ...defaultStoredSettings(),
+      modelReady: true,
       profiles: [],
       activeProfileId: 'p1',
     };
@@ -90,21 +80,40 @@ describe('a settings payload', () => {
    * failure mode of every "assert nothing bad is present" test.
    */
   it('would notice a key if one were added', () => {
-    expect(credentialFieldsIn({...payload(), apiKey: 'sk-test'})).toEqual(['apiKey']);
-    expect(
-      credentialFieldsIn({...payload(), providers: {...defaultProviders(), apiKey: 'x'}}),
-    ).toContain('providers.apiKey');
+    expect(credentialFieldsIn({...payload(), apiKey: 'sk-test'})).toEqual([
+      'apiKey',
+    ]);
     expect(
       credentialFieldsIn({...payload(), mcpServers: [{secrets: [], token: 'x'}]}),
     ).toContain('mcpServers[0].token');
+    expect(
+      credentialFieldsIn({
+        ...payload(),
+        discord: {botToken: 'x'},
+      }),
+    ).toContain('discord.botToken');
   });
 
-  it('reports what a provider block actually holds, which is not a key', () => {
-    // The provider config carries a model and a base URL and nothing else. This
-    // is the assertion that would break first if somebody added one.
-    expect(Object.keys(defaultProviders().configs.deepseek).sort()).toEqual([
-      'baseUrl',
-      'model',
-    ]);
+  it('reports a connector as a name and a target, never a value', () => {
+    /*
+     * The shape a saved connector actually has. `secrets` names where a value
+     * goes; the value lives in the keychain and is never read back into this
+     * payload. This is the assertion that would break first if somebody stored
+     * one here for convenience.
+     */
+    const payloadWithConnector = {
+      ...payload(),
+      mcpServers: [
+        {
+          id: 'notes',
+          name: 'Notes',
+          transport: 'stdio',
+          command: 'notes-mcp',
+          secrets: [{target: 'env', name: 'NOTES_TOKEN'}],
+        },
+      ],
+    };
+
+    expect(credentialFieldsIn(payloadWithConnector)).toEqual([]);
   });
 });

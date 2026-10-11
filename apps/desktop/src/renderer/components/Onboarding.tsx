@@ -2,19 +2,20 @@
  * The first thing a new install should say.
  *
  * It used to be a screen that asked for an API key, which was the honest answer
- * when every provider was somebody else's service. It is not any more: the app
+ * when every model was somebody else's service. It is not any more: the app
  * carries a model, so a fresh install can answer the first question without an
  * account, a key or an address — and a welcome screen that asked for one anyway
  * would be the app describing a requirement it does not have.
  *
  * So this says what is ready, and gets out of the way. What it is *gated* on is
- * `providerReady` rather than `hasApiKey`: the built-in model needs no
- * credential, and what can stop it working is a file that is not where the app
- * looked — a different problem, fixed in a different place, and the reason the
- * readiness answer carries a sentence with it.
+ * `modelReady`: what can stop this install answering is the weights or the engine
+ * not being where the app looked, or an engine that refused to start — a
+ * different problem, fixed in a different place, and the reason the readiness
+ * answer carries a sentence with it.
  *
  * Nothing here decides whether the app can answer. The main process does, before
- * this is ever rendered: a working provider means the app opens on a normal chat.
+ * this is ever rendered: a model that could answer means the app opens on a
+ * normal chat.
  */
 export function Onboarding({
   problem,

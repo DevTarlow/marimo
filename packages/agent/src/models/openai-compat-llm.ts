@@ -1,25 +1,22 @@
 /**
- * The OpenAI-compatible provider for Google ADK-JS.
+ * The OpenAI-compatible client for Google ADK-JS, over the app's own engine.
  *
  * ADK ships Gemini and Apigee model classes only, so an OpenAI-compatible
- * provider is a normal `BaseLlm` implementation registered with `LLMRegistry`.
+ * client is a normal `BaseLlm` implementation registered with `LLMRegistry`.
  * Everything here is transport: message translation lives in
  * `openai-mapping.ts`, SSE framing in `sse.ts`.
  *
- * One client serves every backend the app offers — DeepSeek, a local server
- * (llama.cpp, LM Studio, Unsloth), and Gemini through Google's
- * OpenAI-compatibility layer — because all three expose the same
- * `/chat/completions` shape. What differs between them is
- * a property of the endpoint rather than of a request, so it arrives as the
- * `provider` option and is looked up in the protocol's catalogue instead of
- * being branched on here. The one real difference today is
- * `stream_options.include_usage`, which Gemini's compatibility layer rejects:
- * sending it there would fail every turn, while omitting it elsewhere would only
- * cost the token counts in the UI.
+ * One client, and one backend: the llama.cpp `llama-server` the app starts and
+ * supervises on loopback. It used to serve six of them, and two details travelled
+ * with the choice — whether thinking arrives as `reasoning_content`, and whether
+ * `stream_options.include_usage` may be sent (Gemini's compatibility layer
+ * rejects it, and a rejected field is a 400 on every turn). With one backend
+ * those are facts rather than options, so they are written where they are used:
+ * usage is always asked for, and `reasoning_content` is always read if it
+ * arrives.
  *
  * Protocol references:
- *   https://api-docs.deepseek.com/api/create-chat-completion
- *   https://ai.google.dev/gemini-api/docs/openai
+ *   https://github.com/ggml-org/llama.cpp/blob/master/examples/server/README.md
  */
 import {BaseLlm} from '@google/adk';
 import type {BaseLlmConnection, LlmRequest, LlmResponse} from '@google/adk';
@@ -30,8 +27,7 @@ import type {
   Part,
 } from '@google/genai';
 
-import {PROVIDERS} from '@marimo/protocol';
-import type {ProviderId} from '@marimo/protocol';
+import {LOCAL_MODEL_ID} from '@marimo/protocol';
 
 import {
   systemInstructionToText,
@@ -43,21 +39,21 @@ import {iterateSseData} from './sse.js';
 
 export interface OpenAiCompatLlmOptions {
   model: string;
-  apiKey: string;
-  baseUrl?: string;
+  /**
+   * Where the engine is listening, from the process that started it.
+   *
+   * Required rather than defaulted: there is no catalogue address to fall back
+   * to, and a client built without one would post a conversation to `undefined`.
+   */
+  baseUrl: string;
   temperature?: number;
   maxOutputTokens?: number;
   timeoutMs?: number;
-  /**
-   * Which backend is behind `baseUrl`. Absent means DeepSeek, so a caller with
-   * no settings file (a test, a future CLI) keeps the behaviour it had.
-   */
-  provider?: ProviderId;
   /** Injectable for tests; defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
 }
 
-/** Raised when the provider answers with a non-2xx status or the call fails. */
+/** Raised when the engine answers with a non-2xx status or the call fails. */
 export class OpenAiCompatRequestError extends Error {
   readonly status: number;
 
@@ -76,6 +72,16 @@ interface StreamToolCallAccumulator {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+/**
+ * How the backend is named in an error the user will read.
+ *
+ * A constant rather than a descriptor lookup, and phrased for the person reading
+ * the chat rather than for a developer: the only thing that can answer is the
+ * engine this app started, so an error naming a company would be naming somebody
+ * who was never involved.
+ */
+const LOCAL_MODEL_LABEL = 'The local model';
+
 export class OpenAiCompatLlm extends BaseLlm {
   /**
    * Only documentation, today: `AgentHost` constructs this class directly and
@@ -87,25 +93,20 @@ export class OpenAiCompatLlm extends BaseLlm {
    * registry lookup meant for ADK's native Gemini client.
    */
   static override readonly supportedModels: Array<string | RegExp> = [
-    /^deepseek-.*$/,
-    /^gemini-.*$/,
+    LOCAL_MODEL_ID,
   ];
 
-  private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly temperature?: number;
   private readonly maxOutputTokens?: number;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
-  private readonly provider: ProviderId;
 
   constructor(options: OpenAiCompatLlmOptions) {
     super({model: options.model});
-    this.provider = options.provider ?? 'deepseek';
-    this.apiKey = options.apiKey;
-    this.baseUrl = (
-      options.baseUrl ?? PROVIDERS[this.provider].defaultBaseUrl
-    ).replace(/\/+$/, '');
+    // A trailing slash here and a leading one on the path would be a different
+    // URL, so the address is normalised at the one place it enters.
+    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.temperature = options.temperature;
     this.maxOutputTokens = options.maxOutputTokens;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -144,13 +145,8 @@ export class OpenAiCompatLlm extends BaseLlm {
    */
   override async connect(): Promise<BaseLlmConnection> {
     throw new Error(
-      `${this.label} does not support live (bidirectional) connections.`,
+      `${LOCAL_MODEL_LABEL} does not support live (bidirectional) connections.`,
     );
-  }
-
-  /** How the provider is named in an error the user will read. */
-  private get label(): string {
-    return PROVIDERS[this.provider].label;
   }
 
   private buildRequestBody(
@@ -188,10 +184,10 @@ export class OpenAiCompatLlm extends BaseLlm {
       body.tools = tools;
       body.tool_choice = 'auto';
     }
-    if (stream && PROVIDERS[this.provider].usageInStream) {
-      // Ask for a trailing usage-only chunk so token counts reach the UI. Not
-      // every endpoint understands the field, and the ones that do not answer
-      // with an error rather than ignoring it.
+    if (stream) {
+      // Ask for a trailing usage-only chunk so token counts reach the UI. The
+      // app's engine understands the field; it was optional because Gemini's
+      // compatibility layer answers it with an error rather than ignoring it.
       body.stream_options = {include_usage: true};
     }
 
@@ -204,18 +200,14 @@ export class OpenAiCompatLlm extends BaseLlm {
   ): Promise<Response> {
     const signal = this.combineSignals(abortSignal);
     /*
-     * A local server — llama.cpp, LM Studio, Unsloth — usually runs without a
-     * key and does not care what is in the header, but an empty `Bearer ` is
-     * still a lie about there being a credential; the header is simply left off
-     * when there is nothing to send.
+     * No `Authorization` header, and that is a fact about the backend rather than
+     * an omission: the app starts its own engine on loopback without `--api-key`,
+     * so there is no credential to send.
      */
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     };
-    if (this.apiKey.length > 0) {
-      headers['Authorization'] = `Bearer ${this.apiKey}`;
-    }
 
     let response: Response;
     try {
@@ -232,7 +224,7 @@ export class OpenAiCompatLlm extends BaseLlm {
       const reason = error instanceof Error ? error.message : String(error);
       throw new OpenAiCompatRequestError(
         0,
-        `${this.label} request failed: ${reason}`,
+        `${LOCAL_MODEL_LABEL} request failed: ${reason}`,
       );
     }
 
@@ -240,7 +232,7 @@ export class OpenAiCompatLlm extends BaseLlm {
       const detail = await readErrorBody(response);
       throw new OpenAiCompatRequestError(
         response.status,
-        `${this.label} returned ${response.status}: ${detail}`,
+        `${LOCAL_MODEL_LABEL} returned ${response.status}: ${detail}`,
       );
     }
 
@@ -254,7 +246,7 @@ export class OpenAiCompatLlm extends BaseLlm {
     if (!response.body) {
       throw new OpenAiCompatRequestError(
         response.status,
-        `${this.label} returned a streaming response with no body.`,
+        `${LOCAL_MODEL_LABEL} returned a streaming response with no body.`,
       );
     }
 
@@ -288,11 +280,10 @@ export class OpenAiCompatLlm extends BaseLlm {
       const delta = choice.delta ?? {};
 
       /*
-       * Parsed for every provider rather than only the ones that document it.
-       * The field is DeepSeek's, and llama.cpp emits it for reasoning models
-       * under `--reasoning-format deepseek`; an endpoint that never sends it
-       * costs one `typeof` check. Refusing to read it would throw away thinking
-       * that did arrive.
+       * Read whenever it arrives, which is one `typeof` check on a field the
+       * engine may not send. The name is DeepSeek's convention and llama.cpp
+       * emits it under `--reasoning-format deepseek`; refusing to read it would
+       * throw away thinking that did arrive.
        */
       if (
         typeof delta.reasoning_content === 'string' &&
@@ -339,8 +330,9 @@ export class OpenAiCompatLlm extends BaseLlm {
     const parts: Part[] = [];
     // Reasoning first, as a thought part: ADK persists it with the turn, the UI
     // shows it as the reasoning block, and the mapping layer echoes it back as
-    // `reasoning_content` on the next request, which DeepSeek requires whenever
-    // tools are in play.
+    // `reasoning_content` on the next request. That echo is not decoration — a
+    // backend that rejects a tool-carrying turn whose reasoning is missing is
+    // the reason it exists, and it costs one field when nothing needs it.
     if (reasoning.length > 0) {
       parts.push({text: reasoning, thought: true});
     }

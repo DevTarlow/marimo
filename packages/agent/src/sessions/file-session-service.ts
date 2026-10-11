@@ -56,12 +56,6 @@ export interface SessionIndexEntry {
   appName: string;
   userId: string;
   /**
-   * Model chosen for this conversation. Absent means the conversation follows
-   * the app-wide default, so changing the default also moves every chat that
-   * never picked a model of its own.
-   */
-  model?: string;
-  /**
    * Agent profile that owns this conversation. Absent for sessions created
    * before profiles existed, which the app adopts into its first profile.
    */
@@ -105,7 +99,6 @@ const sessionIndexEntrySchema = z
     messageCount: z.number().int().nonnegative(),
     appName: z.string(),
     userId: z.string(),
-    model: z.string().optional(),
     profileId: z.string().optional(),
     workspaceId: z.string().optional(),
   })
@@ -176,42 +169,6 @@ export class FileSessionService extends BaseSessionService {
   }
 
   /**
-   * Records the model this conversation should use, or clears the choice.
-   *
-   * It lives in the sidebar index so a per-chat choice survives a restart, and
-   * `undefined` *removes* it rather than storing a sentinel: absent is what "no
-   * choice of its own, follow the app default" means, and it is the state every
-   * conversation that has never used the picker is already in. An empty string
-   * would be a second spelling of the same thing, resolved by a coincidence in
-   * `resolveModel`.
-   *
-   * `updatedAt` is left alone, for the reason `setSessionWorkspace` below leaves
-   * it alone: the sidebar sorts on it and reads it as when the conversation last
-   * had something happen *in* it. It used to be stamped here, which meant
-   * choosing a model reordered the rail under the cursor of the person who had
-   * just used the picker. Picking a model is not a turn.
-   */
-  async setSessionModel(
-    sessionId: string,
-    model: string | undefined,
-  ): Promise<SessionIndexEntry | undefined> {
-    return await this.withLock(async () => {
-      const index = await this.readIndex();
-      const entry = index.sessions[sessionId];
-      if (!entry) {
-        return undefined;
-      }
-      if (model === undefined) {
-        delete entry.model;
-      } else {
-        entry.model = model;
-      }
-      await this.writeIndex(index);
-      return entry;
-    });
-  }
-
-  /**
    * Re-files a conversation under another folder, or under none at all.
    *
    * `updatedAt` is deliberately left alone: it is what the sidebar sorts on and
@@ -276,7 +233,6 @@ export class FileSessionService extends BaseSessionService {
 
     await this.withLock(async () => {
       const index = await this.readIndex();
-      const model = readString(request.state, 'model');
       const profileId = readString(request.state, 'profileId');
       const workspaceId = readString(request.state, 'workspaceId');
       const source = readSource(request.state);
@@ -288,7 +244,6 @@ export class FileSessionService extends BaseSessionService {
         messageCount: 0,
         appName: request.appName,
         userId: request.userId ?? '',
-        ...(model ? {model} : {}),
         ...(profileId ? {profileId} : {}),
         ...(workspaceId ? {workspaceId} : {}),
         ...(source ? {source} : {}),

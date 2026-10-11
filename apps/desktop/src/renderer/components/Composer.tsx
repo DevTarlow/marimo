@@ -9,15 +9,13 @@
  * the control you reach for next is where the one you just pressed was.
  *
  * The foot row is where the actions that act on the *message* live: `+` on the
- * left, the keyboard hint in the middle, the model picker on the right. The
- * textarea grows with what is in it up to a point, because a prompt worth
- * sending is often more than one line and a box that scrolls after two lines
- * hides the question the user is still writing.
+ * left and the keyboard hint beside it. The textarea grows with what is in it up
+ * to a point, because a prompt worth sending is often more than one line and a
+ * box that scrolls after two lines hides the question the user is still writing.
  *
- * The model picker is here rather than in Settings because it is a fact about
- * *this* conversation: which model answers the question being typed. It chooses
- * for the conversation only, and the popover offers the way back to the app
- * default, so using it once does not pin the chat for good.
+ * There is no model picker here any more. There was one, for a conversation's own
+ * choice of model, and it went with the second model: a control that cannot
+ * change what answers is a control that wastes a look.
  *
  * `+` is on the left of the same row, for the things a message can carry that
  * are not typed: a file to hand over, and the commands that act on the
@@ -36,7 +34,6 @@ import type {CommandId, PickedFile, SkippedFile} from '@marimo/protocol';
 
 import {composeMessage, describeSkipped} from '../attachments.js';
 import {describe} from '../describe.js';
-import {ModelPicker} from './ModelPicker.js';
 import {Popover, PopoverItem} from './Popover.js';
 import type {PopoverAnchor} from './Popover.js';
 
@@ -45,10 +42,6 @@ export function Composer({
   onStop,
   busy,
   disabled,
-  models,
-  model,
-  usingDefault,
-  onSelectModel,
   onPickFiles,
   commands,
   onRunCommand,
@@ -65,14 +58,6 @@ export function Composer({
   onStop: () => void;
   busy: boolean;
   disabled: boolean;
-  /** The active provider's catalogue. Must contain `model`. */
-  models: readonly string[];
-  /** The model this conversation will use: its own choice, else the default. */
-  model: string;
-  /** True when that model is the app default rather than this chat's choice. */
-  usingDefault: boolean;
-  /** `null` gives up the choice, so the conversation follows the default again. */
-  onSelectModel: (model: string | null) => Promise<void>;
   /**
    * Asks for files, judged against the folder this conversation works in.
    *
@@ -280,27 +265,6 @@ export function Composer({
           >
             {hint}
           </span>
-
-          <div className="composer-model">
-            <ModelPicker
-              models={models}
-              value={model}
-              disabled={disabled}
-              // Upwards: this box is at the bottom of the window.
-              placement="above"
-              {...(usingDefault ? {note: 'default'} : {})}
-              {...(usingDefault
-                ? {}
-                : {
-                    onUseDefault: () => {
-                      void onSelectModel(null);
-                    },
-                  })}
-              onChange={(next) => {
-                void onSelectModel(next);
-              }}
-            />
-          </div>
         </div>
       </div>
 

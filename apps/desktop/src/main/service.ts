@@ -3,21 +3,18 @@
  *
  * The plan and the install live in `@marimo/runtime`, which knows nothing about
  * Electron. This file is the part that can only be answered here: which binary to
- * name, where the runner script is, and whether the keys this install holds are
- * ones a process without a keychain could read.
+ * name, and where the runner script is.
  *
- * That last question is the one worth having a file for. The runner has no
- * `safeStorage`, so an encrypted key is one it cannot decrypt — and a service
- * switched on over an encrypted key does not fail loudly. It runs every minute,
- * refuses for want of a key, records that against the job, and does it again.
- * Nobody is watching. So it is asked *before* the switch is offered, not after.
+ * It used to answer a third question — whether the keys this install held were
+ * ones a process without a keychain could read — and that went with the keys. A
+ * background run needs no secret: the model is a local engine and the runner does
+ * not dial connectors, so switching the service on is a plain choice now.
  */
 import {join} from 'node:path';
 
-import {FileSecretStore, installService, nodeServiceHost, serviceState, uninstallService} from '@marimo/runtime';
+import {installService, nodeServiceHost, serviceState, uninstallService} from '@marimo/runtime';
 import type {AppPaths, ServiceSpec} from '@marimo/runtime';
 
-import {activeProvider, PROVIDERS} from '@marimo/protocol';
 import type {ServiceChange, ServiceStatus} from '@marimo/protocol';
 
 import {PRODUCT_NAME} from '../shared/product.js';
@@ -39,8 +36,6 @@ export interface ServiceContext {
   appPath: string;
   home: string;
   configHome: string;
-  /** How the app's settings describe the provider, for the key check. */
-  providers: () => Promise<Parameters<typeof activeProvider>[0]>;
 }
 
 /** The service definition for this install. */
@@ -63,40 +58,11 @@ export function serviceSpec(context: ServiceContext): ServiceSpec {
   };
 }
 
-/**
- * Whether the configured key would survive the trip to a windowless process.
- *
- * Read with *no cipher*, which is exactly the runner's situation: an encrypted
- * file answers `unreadable` with the message that names the fix. Absent is not
- * reported as unreadable — a key that has not been entered yet is a different
- * problem, and the toggle should not blame encryption for it.
- */
-export async function keysAreReadable(
-  context: ServiceContext,
-): Promise<boolean> {
-  try {
-    const provider = activeProvider(await context.providers());
-    const store = new FileSecretStore(
-      context.paths.providerSecrets[provider.id],
-      `${PROVIDERS[provider.id].label} API key`,
-    );
-    return (await store.read()).state !== 'unreadable';
-  } catch {
-    /*
-     * A settings file that cannot be read is not a reason to refuse to answer.
-     * Reporting "not readable" errs towards telling the user about a problem
-     * rather than towards switching on a service that will fail silently.
-     */
-    return false;
-  }
-}
-
 export async function statusOf(context: ServiceContext): Promise<ServiceStatus> {
   const spec = serviceSpec(context);
   const state = await serviceState(spec, nodeServiceHost());
   return {
     installed: state.installed,
-    keysReadable: await keysAreReadable(context),
     definitionPath: state.definitionPath,
   };
 }

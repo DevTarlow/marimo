@@ -220,11 +220,17 @@ describe('AgentHost', () => {
     await rm(workDir, {recursive: true, force: true});
   });
 
-  function createConfig(baseUrl: string, apiKey = 'test-key'): AgentConfig {
+  /*
+   * The model id the fake engine is asked for. Arbitrary on purpose: what these
+   * tests exercise is the transport and the host, and the id is a string between
+   * two processes — the real one comes from `LOCAL_MODEL_ID`.
+   */
+  const TEST_MODEL = 'test-model';
+
+  function createConfig(baseUrl: string): AgentConfig {
     return {
-      apiKey,
       baseUrl,
-      model: 'deepseek-chat',
+      model: TEST_MODEL,
       temperature: 0,
       systemPrompt: TEST_IDENTITY,
       workspaceRoot: workDir,
@@ -234,7 +240,6 @@ describe('AgentHost', () => {
 
   function createHost(
     baseUrl: string,
-    apiKey = 'test-key',
     webSearch?: WebSearchProvider,
     jobService?: JobService,
     profileId?: string,
@@ -242,7 +247,7 @@ describe('AgentHost', () => {
     const host = new AgentHost({
       sessionsDir: join(workDir, 'sessions'),
       config: {
-        ...createConfig(baseUrl, apiKey),
+        ...createConfig(baseUrl),
         ...(profileId ? {profileId} : {}),
       },
       ...(webSearch ? {webSearch} : {}),
@@ -255,11 +260,10 @@ describe('AgentHost', () => {
 
   async function startHost(
     responder: Responder,
-    apiKey?: string,
     webSearch?: WebSearchProvider,
   ): Promise<{host: AgentHost; session: string}> {
     fake = await startFakeDeepSeek(responder);
-    const host = createHost(fake.baseUrl, apiKey, webSearch);
+    const host = createHost(fake.baseUrl, webSearch);
     const session = await host.createSession();
     return {host, session: session.id};
   }
@@ -293,7 +297,7 @@ describe('AgentHost', () => {
 
     const request = fake?.requests[0];
     expect(request?.body['stream']).toBe(true);
-    expect(request?.body['model']).toBe('deepseek-chat');
+    expect(request?.body['model']).toBe(TEST_MODEL);
 
     const system = request?.messages[0];
     expect(system).toMatchObject({role: 'system'});
@@ -382,7 +386,6 @@ describe('AgentHost', () => {
           ? textChunks('Found it.')
           : toolCallChunks('call_search', 'web_search', {query: 'marimo'});
       },
-      'test-key',
       provider,
     );
 
@@ -437,7 +440,7 @@ describe('AgentHost', () => {
             schedules: ['0 9 * * 1-5'],
           }),
     );
-    const host = createHost(fake.baseUrl, 'test-key', undefined, jobs);
+    const host = createHost(fake.baseUrl, undefined, jobs);
     const session = await host.createSession();
 
     const events = await collect(host.run(session.id, 'set that up'));
@@ -780,7 +783,7 @@ describe('AgentHost', () => {
 
     // Adopt the pre-profile conversation, then give a second profile its own.
     await host.adoptUnownedSessions('profile-alpha');
-    const beta = await host.createSession(undefined, undefined, 'profile-beta');
+    const beta = await host.createSession(undefined, 'profile-beta');
 
     const alphaList = await host.listSessions('profile-alpha');
     const betaList = await host.listSessions('profile-beta');
@@ -802,7 +805,6 @@ describe('AgentHost', () => {
     await host.adoptUnownedSessions('profile-alpha');
 
     const filed = await host.createSession(
-      undefined,
       undefined,
       'profile-alpha',
       'workspace-scratch',
@@ -834,7 +836,6 @@ describe('AgentHost', () => {
 
     const fromBot = await host.createSession(
       'Discord',
-      undefined,
       'profile-alpha',
       undefined,
       'discord',
@@ -948,7 +949,7 @@ describe('AgentHost', () => {
     );
     await collect(host.run(alphaSession, 'alpha work'));
     await host.adoptUnownedSessions('profile-alpha');
-    const beta = await host.createSession(undefined, undefined, 'profile-beta');
+    const beta = await host.createSession(undefined, 'profile-beta');
     await collect(host.run(beta.id, 'beta work'));
 
     const deleted = await host.deleteSessionsForProfile('profile-beta');
@@ -1052,7 +1053,7 @@ describe('AgentHost', () => {
       /Unknown session/,
     );
     await expect(
-      host.setSessionModel(session, 'deepseek-v4-pro', 'profile-beta'),
+      host.renameSession(session, 'beta name', 'profile-beta'),
     ).rejects.toThrow(/Unknown session/);
 
     // A turn for the wrong profile is refused before anything reaches the
@@ -1220,20 +1221,6 @@ describe('AgentHost', () => {
     await collect(stream);
   });
 
-  it('fails with an actionable message when no API key is configured', async () => {    fake = await startFakeDeepSeek(() => textChunks('unused'));
-    const host = createHost(fake.baseUrl, '');
-    const session = await host.createSession();
-
-    const events = await collect(host.run(session.id, 'hi'));
-
-    const failure = events.find((event) => event.type === 'turn.failed');
-    expect(failure).toMatchObject({type: 'turn.failed'});
-    if (failure?.type === 'turn.failed') {
-      expect(failure.message).toMatch(/API key/);
-    }
-    expect(fake.requests).toHaveLength(0);
-  });
-
   it('refuses a second concurrent turn', async () => {
     const {host, session} = await startHost(() => textChunks('slow'));
     const first = host.run(session, 'first');
@@ -1314,47 +1301,21 @@ describe('AgentHost', () => {
     expect(String(assistant?.['content'])).not.toContain('think before');
   });
 
-  it("uses each conversation's own model choice", async () => {
+  it('sends the configured model on every turn', async () => {
+    /*
+     * The id is a string between two processes of this app and the engine's
+     * `--alias` — so what matters is that the configured one reaches the request,
+     * not that any particular one does. It used to be resolved per conversation
+     * from an index entry, and there is nothing left to resolve it from.
+     */
     const {host, session} = await startHost(() => textChunks('ok'));
-    const other = await host.createSession('other chat', 'deepseek-v4-pro');
+    const other = await host.createSession('other chat');
 
-    expect(await host.resolveModel(session)).toBe('deepseek-chat');
-    expect(await host.resolveModel(other.id)).toBe('deepseek-v4-pro');
+    await collect(host.run(session, 'first'));
+    await collect(host.run(other.id, 'second'));
 
-    await collect(host.run(session, 'default model'));
-    await collect(host.run(other.id, 'pro model'));
-
-    expect(fake?.requests[0]?.body['model']).toBe('deepseek-chat');
-    expect(fake?.requests[1]?.body['model']).toBe('deepseek-v4-pro');
-  });
-
-  it('switches a conversation model without touching other chats', async () => {
-    const {host, session} = await startHost(() => textChunks('ok'));
-    const other = await host.createSession();
-
-    await host.setSessionModel(session, 'deepseek-reasoner');
-
-    expect(await host.resolveModel(session)).toBe('deepseek-reasoner');
-    // No explicit choice on the other chat, so it still follows the default.
-    expect(await host.resolveModel(other.id)).toBe('deepseek-chat');
-
-    await collect(host.run(session, 'use the new model'));
-    expect(fake?.requests[0]?.body['model']).toBe('deepseek-reasoner');
-
-    const listed = await host.listSessions();
-    expect(listed.find((entry) => entry.id === session)?.model).toBe(
-      'deepseek-reasoner',
-    );
-    expect(
-      listed.find((entry) => entry.id === other.id)?.model,
-    ).toBeUndefined();
-  });
-
-  it('rejects a model change for an unknown conversation', async () => {
-    const {host} = await startHost(() => textChunks('ok'));
-    await expect(
-      host.setSessionModel('nope', 'deepseek-flash'),
-    ).rejects.toThrow(/Unknown session/);
+    expect(fake?.requests[0]?.body['model']).toBe(TEST_MODEL);
+    expect(fake?.requests[1]?.body['model']).toBe(TEST_MODEL);
   });
 
   /**
@@ -1532,7 +1493,6 @@ describe('AgentHost', () => {
             })
           : textChunks('Answered.');
       },
-      'test-key',
       provider,
     );
 
@@ -1585,7 +1545,6 @@ describe('AgentHost', () => {
               query: 'marimo',
             })
           : textChunks('Found it.'),
-      'test-key',
       provider,
     );
 
@@ -1625,7 +1584,6 @@ describe('AgentHost', () => {
             })
           : textChunks('Both done.');
       },
-      'test-key',
       provider,
     );
 

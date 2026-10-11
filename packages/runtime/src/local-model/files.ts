@@ -32,22 +32,23 @@ export const MODEL_DIR_ENV = 'MARIMO_MODEL_DIR';
 export const MODEL_FILE_NAME = 'Qwen3-1.7B-Q4_K_M.gguf';
 
 /**
- * The model id every request names, and the alias the engine is started with.
+ * How much of a conversation the engine may hold at once.
  *
- * Not the file name, deliberately: the id travels between two processes of this
- * app and nothing else reads it, while the file is an implementation detail a
- * user can replace by pointing at a `.gguf` of their own. Two facts that can
- * differ should not be spelled the same.
+ * The model is trained for far more — 40960 tokens — and this sits well under it
+ * on purpose: a window costs memory that grows with every message, and an app
+ * that has to be restarted because the machine ran out is a worse failure than
+ * one that forgets how a long chat began. It was a setting, and it is a constant
+ * because the value worth having was always this one; `MARIMO_MODEL_DIR` is the
+ * only override this feature has.
  */
-export const MODEL_ALIAS = 'qwen3-1.7b';
+export const LOCAL_CONTEXT_SIZE = 8192;
 
 /**
  * Everything a start needs, in one answer.
  *
- * One shape rather than three callbacks because all three come from the same
- * place — the settings file, plus where this build keeps its model — and asking
- * for them separately means reading that file three times and being able to
- * disagree with itself in between.
+ * One shape rather than three callbacks because all three are decided together,
+ * and asking for them separately is how two callers come to disagree about what
+ * is being started.
  */
 export interface LocalModelSpec {
   files: LocalModelFiles;
@@ -113,13 +114,11 @@ export function bundledModelDir(options: {
 /**
  * The files this install would use, in the order the answers are decided.
  *
- * The override wins over the shipped copy rather than the other way round: it is
- * what a user typed, and a setting that a shipped file can silently outrank is a
- * setting that does not work.
+ * `MARIMO_MODEL_DIR` wins over the shipped copy rather than the other way round:
+ * it is what a development checkout and the smoke check set, and a directory a
+ * shipped file could silently outrank is one that does not work.
  */
 export function resolveLocalModelFiles(options: {
-  /** What the settings file says, if anything. */
-  ggufPath?: string | undefined;
   env?: NodeJS.ProcessEnv;
   resourcesPath?: string | undefined;
   execPath: string;
@@ -143,46 +142,40 @@ export function resolveLocalModelFiles(options: {
       ? 'llama-server.exe'
       : 'llama-server';
   const engine = dir.length > 0 ? join(dir, 'engine', engineName) : '';
-  const shipped = dir.length > 0 ? join(dir, MODEL_FILE_NAME) : '';
-  const chosen = options.ggufPath ?? '';
+  const model = dir.length > 0 ? join(dir, MODEL_FILE_NAME) : '';
 
   return {
     dir,
     engine,
     libraryDir: engine.length > 0 ? dirname(engine) : '',
-    model: chosen.length > 0 ? chosen : shipped,
+    model,
     enginePresent: isFile(engine),
-    modelPresent: isFile(chosen.length > 0 ? chosen : shipped),
+    modelPresent: isFile(model),
   };
 }
 
 /**
- * The spec for the settings as they are, and where this build keeps its model.
+ * The spec for this build's model.
  *
  * Shared by the two processes that start an engine — the window and the headless
  * runner — because the only thing that differs between them is how they find
  * `resourcesPath`, and everything else about the answer has to be identical. One
- * definition means a setting added later cannot reach one process and not the
- * other.
+ * definition means a change made for one process cannot leave the other running
+ * a different engine, which is the failure invariant 13 is about.
+ *
+ * `thinking` is off, and it is a constant rather than a setting for the same
+ * reason the context size is: Qwen3's template thinks by default, thinking makes
+ * every easy question take seconds longer, and most questions are the easy kind.
  */
-export function localModelSpec(
-  settings: {
-    localModel: {ggufPath: string; contextSize: number; thinking: boolean};
-  },
-  where: {
-    resourcesPath?: string | undefined;
-    execPath: string;
-    platform?: NodeJS.Platform;
-  },
-): LocalModelSpec {
+export function localModelSpec(where: {
+  resourcesPath?: string | undefined;
+  execPath: string;
+  platform?: NodeJS.Platform;
+}): LocalModelSpec {
   return {
-    files: resolveLocalModelFiles({
-      ggufPath: settings.localModel.ggufPath,
-      env: process.env,
-      ...where,
-    }),
-    contextSize: settings.localModel.contextSize,
-    thinking: settings.localModel.thinking,
+    files: resolveLocalModelFiles({env: process.env, ...where}),
+    contextSize: LOCAL_CONTEXT_SIZE,
+    thinking: false,
   };
 }
 

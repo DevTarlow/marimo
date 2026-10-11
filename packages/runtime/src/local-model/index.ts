@@ -15,8 +15,8 @@
  */
 export {
   bundledModelDir,
+  LOCAL_CONTEXT_SIZE,
   localModelSpec,
-  MODEL_ALIAS,
   MODEL_DIR_ENV,
   MODEL_FILE_NAME,
   resolveLocalModelFiles,

@@ -13,9 +13,6 @@
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 
-import {PROVIDER_IDS} from '@marimo/protocol';
-import type {ProviderId} from '@marimo/protocol';
-
 export interface AppPaths {
   /** The directory everything below lives under. */
   userData: string;
@@ -32,8 +29,6 @@ export interface AppPaths {
    * so the choice stays visible to anyone who looks.
    */
   secretsDir: string;
-  /** The provider API keys, by provider id. */
-  providerSecrets: Record<ProviderId, string>;
   /** Agent profiles: identities and the capabilities they carry. */
   profiles: string;
   /**
@@ -86,17 +81,11 @@ export interface AppPaths {
 export function resolveAppPaths(userData: string): AppPaths {
   const secretsDir = join(userData, 'secrets');
 
-  const providerSecrets = {} as Record<ProviderId, string>;
-  for (const id of PROVIDER_IDS) {
-    providerSecrets[id] = secretFileIn(secretsDir, id);
-  }
-
   return {
     userData,
     sessions: join(userData, 'sessions'),
     settings: join(userData, 'settings.json'),
     secretsDir,
-    providerSecrets,
     profiles: join(userData, 'profiles.json'),
     workspaces: join(userData, 'workspaces.json'),
     jobs: join(userData, 'jobs.json'),
@@ -160,10 +149,11 @@ export function defaultUserDataDir(options: {
 }
 
 /**
- * The file holding one non-provider secret, such as a connector token.
+ * The file holding one secret, named by the caller.
  *
- * A function rather than a pre-computed map because connector identifiers are
- * user-supplied (`mcp:notes`, `discord`), so the set is not knowable at startup.
+ * A function rather than a pre-computed map because the names are user-supplied
+ * (`mcp:notes`, `discord`), so the set is not knowable at startup. The one thing
+ * it is *not* used for any more is a model API key: the app holds none.
  */
 export function secretFile(paths: AppPaths, name: string): string {
   return secretFileIn(paths.secretsDir, name);

@@ -16,6 +16,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {
   bundledModelDir,
+  LOCAL_CONTEXT_SIZE,
   localModelSpec,
   MODEL_FILE_NAME,
   resolveLocalModelFiles,
@@ -143,11 +144,10 @@ describe('resolveLocalModelFiles', () => {
   });
 
   /*
-   * The override is for the three cases the shipped file cannot cover: a
-   * checkout with no weights in it, a machine that cannot run this model, and
-   * somebody who already has one. It wins over the shipped copy rather than the
-   * other way round — a setting a file on disk can silently outrank is a setting
-   * that does not work.
+   * The override is for the cases the shipped copy cannot cover: a checkout with
+   * no weights in it, and the smoke check, which must run without a 1.1 GB
+   * download. It wins over the shipped copy rather than the other way round — a
+   * directory a file on disk can silently outrank is one that does not work.
    */
   it('prefers the directory the environment names', async () => {
     const resources = await shipped();
@@ -169,25 +169,6 @@ describe('resolveLocalModelFiles', () => {
 
     expect(files.dir).toBe(elsewhere);
     expect(files.modelPresent).toBe(true);
-    expect(files.enginePresent).toBe(true);
-  });
-
-  it('prefers a .gguf the user named over the one that shipped', async () => {
-    const resources = await shipped();
-    const mine = join(dir, 'my-model.gguf');
-    await writeFile(mine, 'weights', 'utf8');
-
-    const files = resolveLocalModelFiles({
-      ggufPath: mine,
-      env: {},
-      resourcesPath: resources,
-      execPath: '/opt/marimo-agent',
-      platform: 'linux',
-    });
-
-    expect(files.model).toBe(mine);
-    expect(files.modelPresent).toBe(true);
-    // The engine is still the shipped one: this setting replaces the weights.
     expect(files.enginePresent).toBe(true);
   });
 
@@ -247,9 +228,8 @@ describe('resolveLocalModelFiles', () => {
  *
  * The window has Electron and hands over `process.resourcesPath`; the runner has
  * no `app` and lets the path be derived from its own executable. Everything else
- * — which file, how much context, whether it thinks — comes from the settings,
- * and it has to come out the same in both or a scheduled job answers questions
- * with a model the window is not using.
+ * is fixed by the build, and it has to come out the same in both or a scheduled
+ * job answers questions with an engine the window is not using.
  */
 describe('localModelSpec', () => {
   let dir: string;
@@ -262,33 +242,22 @@ describe('localModelSpec', () => {
     await rm(dir, {recursive: true, force: true});
   });
 
-  const settings = (
-    overrides: Partial<{
-      ggufPath: string;
-      contextSize: number;
-      thinking: boolean;
-    }> = {},
-  ) => ({
-    localModel: {
-      ggufPath: '',
-      contextSize: 8192,
-      thinking: false,
-      ...overrides,
-    },
+  it('runs the model with a context window that fits on a laptop', () => {
+    const spec = localModelSpec({
+      resourcesPath: '/opt/resources',
+      execPath: '/opt/marimo-agent',
+    });
+
+    // Comfortably under the 40960 the model was trained for. It was a setting
+    // once, and the value worth having was always this one.
+    expect(spec.contextSize).toBe(LOCAL_CONTEXT_SIZE);
+    // Qwen3's template thinks by default and thinking makes every easy question
+    // take seconds longer, so the engine is told not to.
+    expect(spec.thinking).toBe(false);
   });
 
-  it('carries the two settings the engine is started with', () => {
-    const spec = localModelSpec(
-      settings({contextSize: 32768, thinking: true}),
-      {resourcesPath: '/opt/resources', execPath: '/opt/marimo-agent'},
-    );
-
-    expect(spec.contextSize).toBe(32768);
-    expect(spec.thinking).toBe(true);
-  });
-
-  it('finds the shipped model when the settings name none', () => {
-    const spec = localModelSpec(settings(), {
+  it('finds the shipped model', () => {
+    const spec = localModelSpec({
       resourcesPath: join(dir, 'resources'),
       execPath: '/opt/marimo-agent',
     });
@@ -298,18 +267,9 @@ describe('localModelSpec', () => {
     );
   });
 
-  it('uses the file the user named instead', () => {
-    const spec = localModelSpec(settings({ggufPath: '/home/me/other.gguf'}), {
-      resourcesPath: join(dir, 'resources'),
-      execPath: '/opt/marimo-agent',
-    });
-
-    expect(spec.files.model).toBe('/home/me/other.gguf');
-  });
-
   /* The runner's case: no `resourcesPath` at all. */
   it('derives the same directory when there is no app to ask', () => {
-    const spec = localModelSpec(settings(), {
+    const spec = localModelSpec({
       resourcesPath: undefined,
       execPath: join(dir, 'marimo-agent'),
       platform: 'linux',

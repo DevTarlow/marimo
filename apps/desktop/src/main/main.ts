@@ -382,12 +382,6 @@ async function bootstrap(): Promise<void> {
       // timer fires: a service started at login may not have these.
       configHome:
         process.env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config'),
-      providers: async () => {
-        if (agent === undefined) {
-          throw new Error('The agent is not running.');
-        }
-        return await agent.providers();
-      },
     },
   });
 

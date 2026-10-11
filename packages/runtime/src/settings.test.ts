@@ -1,10 +1,10 @@
 /**
- * The default-model rule, which is what stops the app from pointing at a model
- * the provider has retired.
+ * Settings persistence, and the one thing it has to be lenient about.
  *
- * `deepseek-chat` and `deepseek-reasoner` were real model ids once; a build that
- * hardcodes them silently breaks the first time the provider renames its line
- * up, which is exactly what happened here.
+ * The file is hand-editable and has changed shape several times — most recently
+ * when the app stopped having a provider catalogue. A field this build no longer
+ * knows must cost its own value and nothing else, because a settings file that
+ * fails to parse is every preference the user has, reset at once.
  */
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -14,39 +14,11 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
   MEMORY_SOFT_LIMIT_MAX_BYTES,
-  PROVIDERS,
 } from '@marimo/protocol';
 
 import {MAX_MEMORY_BYTES} from '@marimo/agent';
 
-import {chooseModel, readLegacyProfileSeed, SettingsStore} from './settings.js';
-
-describe('chooseModel', () => {
-  it('keeps the current model while the provider still offers it', () => {
-    expect(
-      chooseModel(['deepseek-flash', 'deepseek-v4-pro'], 'deepseek-v4-pro'),
-    ).toBe('deepseek-v4-pro');
-  });
-
-  it('moves off a model that has disappeared', () => {
-    expect(
-      chooseModel(['deepseek-flash', 'deepseek-v4-pro'], 'deepseek-chat'),
-    ).toBe('deepseek-flash');
-  });
-
-  it('prefers a fast tier when the whole list is new', () => {
-    expect(
-      chooseModel(['deepseek-v4-pro', 'deepseek-flash'], 'deepseek-chat'),
-    ).toBe('deepseek-flash');
-    expect(chooseModel(['some-pro-model', 'some-mini-model'], 'gone')).toBe(
-      'some-mini-model',
-    );
-  });
-
-  it('falls back to the first model when nothing looks cheap', () => {
-    expect(chooseModel(['alpha', 'beta'], 'gone')).toBe('alpha');
-  });
-});
+import {readLegacyProfileSeed, SettingsStore} from './settings.js';
 
 describe('readLegacyProfileSeed', () => {
   let dir: string;
@@ -140,23 +112,23 @@ describe('SettingsStore', () => {
   });
 
   it('reads a file written before Discord existed', async () => {
-    await write({model: 'deepseek-v4-pro', sidebarWidth: 320});
+    await write({temperature: 0.3, sidebarWidth: 320});
     const settings = await store().load();
 
     // The old settings survive, and the block arrives at its defaults.
-    expect(settings.providers.configs.deepseek.model).toBe('deepseek-v4-pro');
+    expect(settings.temperature).toBe(0.3);
     expect(settings.sidebarWidth).toBe(320);
     expect(settings.discord.enabled).toBe(false);
   });
 
   it('falls back on a block that does not validate, keeping the rest', async () => {
     await write({
-      model: 'deepseek-v4-pro',
+      temperature: 0.3,
       discord: {enabled: true, channelId: 42},
     });
     const settings = await store().load();
 
-    expect(settings.providers.configs.deepseek.model).toBe('deepseek-v4-pro');
+    expect(settings.temperature).toBe(0.3);
     expect(settings.discord.channelId).toBe('');
   });
 
@@ -200,34 +172,26 @@ describe('SettingsStore', () => {
     expect(after.discord.channelId).toBe('100');
   });
 
-  it('keeps the provider list it was told, across a Discord write', async () => {
-    const settings = store();
-    await settings.setAvailableModels('deepseek', [
-      'deepseek-flash',
-      'deepseek-v4-pro',
-    ]);
-    const after = await settings.patch({discord: {enabled: true}});
-
-    expect(after.availableModels.deepseek).toEqual([
-      'deepseek-flash',
-      'deepseek-v4-pro',
-    ]);
-  });
 });
 
 /**
- * The provider block, which replaced two flat fields.
+ * A settings file written by a build that had a provider catalogue.
  *
- * The upgrade path is the part worth testing: a file written when DeepSeek was
- * the only backend holds `model` and `baseUrl` at the top level, and those two
- * values are the user's — a wrong default here silently points the app at
- * somebody else's idea of a model.
+ * That file holds `providers`, `availableModels` and `localModel`, and it may
+ * name a service — DeepSeek, Gemini, somebody's own llama.cpp server — with an
+ * address and a model id. None of it has a reader now: the app carries one model
+ * and always runs it.
+ *
+ * So the whole point is what *survives*: the connectors, the layout, the
+ * companion and every other preference in the same document must come through
+ * untouched. A read that failed on a field it did not recognise would reset all
+ * of them at once, and the user would have no idea which line did it.
  */
-describe('SettingsStore providers', () => {
+describe('SettingsStore, on a file from the provider era', () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(process.cwd(), '.marimo-providers-'));
+    dir = await mkdtemp(join(process.cwd(), '.marimo-provider-era-'));
   });
 
   afterEach(async () => {
@@ -246,259 +210,77 @@ describe('SettingsStore providers', () => {
     );
   }
 
-  /*
-   * The default a first run gets, which is now the model the app carries rather
-   * than a service that needs an account. It is the whole of "it works when you
-   * install it": a fresh install has no key, no address and nobody to ask, and a
-   * default that refused the first question until all three existed would be an
-   * app asking a stranger to configure it before it said anything.
-   */
-  it('starts on the built-in model, with every other address ready', async () => {
-    const settings = await store().load();
-    expect(settings.providers.active).toBe('builtin');
-    expect(settings.providers.configs.builtin.model).toBe('qwen3-1.7b');
-    expect(settings.providers.configs.llamacpp.baseUrl).toContain('127.0.0.1');
-    expect(settings.providers.configs.gemini.baseUrl).toContain(
-      'generativelanguage.googleapis.com',
-    );
-    expect(settings.providers.configs.openrouter.baseUrl).toBe(
-      PROVIDERS.openrouter.defaultBaseUrl,
-    );
-    expect(settings.providers.configs.opencode_go.baseUrl).toBe(
-      PROVIDERS.opencode_go.defaultBaseUrl,
-    );
-  });
-
-  /**
-   * Two saves from one gesture: the dialog writes a text box when it loses focus
-   * and the menu that took the focus in the same click. Both are
-   * read-modify-write, so without the store's write queue the second one stores
-   * the state from before the first wrote and that edit is gone — silently,
-   * because both writes succeed and neither caller is told.
-   *
-   * Read back through a *new* store, so this is the file that is being asserted
-   * on rather than the first store's cache.
-   */
-  it('keeps both edits when two patches arrive together', async () => {
-    const settings = store();
-    await Promise.all([
-      settings.patch({
-        providers: {configs: {deepseek: {baseUrl: 'http://box.local:8080/v1'}}},
-      }),
-      settings.patch({providers: {active: 'gemini'}}),
-    ]);
-
-    const reread = await store().load();
-    expect(reread.providers.active).toBe('gemini');
-    expect(reread.providers.configs.deepseek.baseUrl).toBe(
-      'http://box.local:8080/v1',
-    );
-  });
-
-  /**
-   * The file that gets written next is the one every earlier version of the app
-   * reads, and OpenRouter is the first provider added after the picker existed.
-   * This is the case that says a settings file predating the fourth entry loads
-   * with the other three untouched and the new one filled from the catalogue
-   * rather than left undefined.
-   */
-  it('adds OpenRouter to a file written before it existed', async () => {
-    await write({
+  /** What such a file looked like: two providers, a list, and the knobs. */
+  function providerEraFile(): Record<string, unknown> {
+    return {
+      version: 1,
       providers: {
-        active: 'gemini',
+        active: 'deepseek',
         configs: {
-          deepseek: {
-            model: 'deepseek-v4-pro',
-            baseUrl: 'https://ds.example/v1',
-          },
-          gemini: {model: 'g-1'},
+          builtin: {baseUrl: 'http://127.0.0.1:8137/v1', model: 'qwen3-1.7b'},
+          deepseek: {baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro'},
         },
       },
-    });
-    const settings = await store().load();
-
-    expect(settings.providers.active).toBe('gemini');
-    expect(settings.providers.configs.deepseek.model).toBe('deepseek-v4-pro');
-    expect(settings.providers.configs.deepseek.baseUrl).toBe(
-      'https://ds.example/v1',
-    );
-    expect(settings.providers.configs.gemini.model).toBe('g-1');
-    expect(settings.providers.configs.openrouter).toEqual({
-      baseUrl: PROVIDERS.openrouter.defaultBaseUrl,
-      model: PROVIDERS.openrouter.fallbackModels[0],
-    });
-    // And it comes back out of a save unmangled, address included.
-    expect(settings.availableModels.openrouter).toEqual([
-      ...PROVIDERS.openrouter.fallbackModels,
-    ]);
-  });
-
-  /**
-   * The same case one provider later, and the reason it is worth a second test:
-   * OpenCode Go is the fifth entry, so a fill that looped over too short a list —
-   * or over a hand-typed one that had grown by one and no more — passes the
-   * OpenRouter case and fails this one.
-   */
-  it('adds OpenCode Go to a file written before it existed', async () => {
-    await write({
-      providers: {
-        active: 'openrouter',
-        configs: {openrouter: {model: 'openrouter/auto'}},
+      availableModels: {
+        builtin: ['qwen3-1.7b'],
+        deepseek: ['deepseek-flash', 'deepseek-v4-pro'],
       },
-    });
+      localModel: {
+        ggufPath: '/home/sam/other.gguf',
+        contextSize: 32768,
+        thinking: true,
+      },
+      allowPlaintextApiKey: true,
+      temperature: 0.2,
+      sidebarWidth: 320,
+      disabledCommands: ['compact'],
+    };
+  }
+
+  it('drops what it no longer knows and keeps everything else', async () => {
+    await write(providerEraFile());
     const settings = await store().load();
 
-    expect(settings.providers.active).toBe('openrouter');
-    expect(settings.providers.configs.opencode_go).toEqual({
-      baseUrl: PROVIDERS.opencode_go.defaultBaseUrl,
-      model: PROVIDERS.opencode_go.fallbackModels[0],
-    });
-    expect(settings.availableModels.opencode_go).toEqual([
-      ...PROVIDERS.opencode_go.fallbackModels,
-    ]);
+    expect(settings).not.toHaveProperty('providers');
+    expect(settings).not.toHaveProperty('availableModels');
+    expect(settings).not.toHaveProperty('localModel');
+    expect(settings).not.toHaveProperty('allowPlaintextApiKey');
+
+    expect(settings.temperature).toBe(0.2);
+    expect(settings.sidebarWidth).toBe(320);
+    expect(settings.disabledCommands).toEqual(['compact']);
   });
 
-  it('moves a pre-picker model and base URL onto DeepSeek', async () => {
-    await write({
-      model: 'deepseek-v4-pro',
-      baseUrl: 'http://box.local:11434/v1',
-      temperature: 0.3,
-    });
-    const settings = await store().load();
+  it('does not write the old fields back on the next save', async () => {
+    await write(providerEraFile());
+    const settings = store();
+    await settings.load();
+    await settings.patch({temperature: 0.4});
 
-    expect(settings.providers.configs.deepseek).toEqual({
-      model: 'deepseek-v4-pro',
-      baseUrl: 'http://box.local:11434/v1',
-    });
-    /*
-     * Pointed at DeepSeek as well as filled in with it. The fields being
-     * DeepSeek's is what says this file came from before the picker existed —
-     * and leaving `active` at the build's default would have quietly moved a
-     * DeepSeek user onto the model the app carries, with their own address and
-     * model sitting in a config nothing points at.
-     */
-    expect(settings.providers.active).toBe('deepseek');
-    expect(settings.temperature).toBe(0.3);
+    const written = JSON.parse(
+      await readFile(join(dir, 'settings.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(written['temperature']).toBe(0.4);
+    expect(written).not.toHaveProperty('providers');
+    expect(written).not.toHaveProperty('localModel');
   });
 
   /*
-   * The case with no evidence either way: a file that names no provider and
-   * holds none of the legacy fields. Nothing was ever chosen, so the choice is
-   * the one a fresh install gets.
+   * The two flat fields at the top level predate the picker, and a build that
+   * had the catalogue moved them onto DeepSeek. There is nowhere for them to go
+   * now, and the one thing they must not do is stop the file from loading.
    */
-  it('points a file with no provider history at the built-in model', async () => {
-    await write({sidebarWidth: 300});
+  it('ignores the flat model and base URL from before the picker', async () => {
+    await write({model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com'});
     const settings = await store().load();
 
-    expect(settings.providers.active).toBe('builtin');
-  });
-
-  it('prefers the block over the legacy fields when both are present', async () => {
-    await write({
-      model: 'legacy-model',
-      providers: {
-        active: 'gemini',
-        configs: {deepseek: {model: 'deepseek-flash'}},
-      },
-    });
-    const settings = await store().load();
-
-    expect(settings.providers.active).toBe('gemini');
-    expect(settings.providers.configs.deepseek.model).toBe('deepseek-flash');
-    // The providers the file never mentioned keep their own defaults.
-    expect(settings.providers.configs.gemini.model).toBe(
-      PROVIDERS.gemini.fallbackModels[0],
-    );
-  });
-
-  it('falls back on one provider without losing the others', async () => {
-    await write({
-      providers: {
-        active: 'llamacpp',
-        configs: {
-          llamacpp: {baseUrl: 'http://192.168.1.20:8080/v1'},
-          gemini: {baseUrl: 42},
-        },
-      },
-    });
-    const settings = await store().load();
-
-    // The hand-typed network address survives a typo in a block nobody was using.
-    expect(settings.providers.active).toBe('llamacpp');
-    expect(settings.providers.configs.llamacpp.baseUrl).toBe(
-      'http://192.168.1.20:8080/v1',
-    );
-    expect(settings.providers.configs.llamacpp.model).toBe(
-      PROVIDERS.llamacpp.fallbackModels[0],
-    );
-    expect(settings.providers.configs.gemini.baseUrl).toBe(
-      PROVIDERS.gemini.defaultBaseUrl,
-    );
-  });
-
-  it('merges a provider patch without touching the other two', async () => {
-    const settings = store();
-    await settings.patch({
-      providers: {active: 'gemini', configs: {gemini: {model: 'g-1'}}},
-    });
-    // A later write that only switches provider must not send the addresses
-    // back — a stale window's copy of those is exactly what must not win.
-    const after = await settings.patch({providers: {active: 'deepseek'}});
-
-    expect(after.providers.active).toBe('deepseek');
-    expect(after.providers.configs.gemini.model).toBe('g-1');
-    expect(after.providers.configs.llamacpp.baseUrl).toBe(
-      PROVIDERS.llamacpp.defaultBaseUrl,
-    );
-  });
-
-  it('keeps one model list per provider', async () => {
-    const settings = store();
-    await settings.setAvailableModels('gemini', ['gemini-a', 'gemini-b']);
-    const after = await settings.setAvailableModels('llamacpp', ['local-x']);
-
-    expect(after.availableModels.gemini).toEqual(['gemini-a', 'gemini-b']);
-    expect(after.availableModels.llamacpp).toEqual(['local-x']);
-    // DeepSeek was never asked, so it keeps the placeholder it shipped with.
-    expect(after.availableModels.deepseek).toEqual([
-      ...PROVIDERS.deepseek.fallbackModels,
-    ]);
-  });
-
-  it('moves only the refreshed provider off a retired model', async () => {
-    const settings = store();
-    await settings.setAvailableModels('gemini', ['gemini-a']);
-    await settings.patch({
-      providers: {configs: {deepseek: {model: 'deepseek-chat'}}},
-    });
-    const after = await settings.setAvailableModels('deepseek', [
-      'deepseek-flash',
-    ]);
-
-    expect(after.providers.configs.deepseek.model).toBe('deepseek-flash');
-    // Untouched: a refresh is an answer about one endpoint.
-    expect(after.providers.configs.gemini.model).toBe('gemini-a');
-  });
-
-  it('ignores a stored list that is not a list, per provider', async () => {
-    await write({availableModels: ['deepseek-flash']});
-    const settings = await store().load();
-
-    // The old flat array was DeepSeek's list, so it is read as exactly that.
-    expect(settings.availableModels.deepseek).toEqual(['deepseek-flash']);
-    expect(settings.availableModels.gemini).toEqual([
-      ...PROVIDERS.gemini.fallbackModels,
-    ]);
+    expect(settings).not.toHaveProperty('model');
+    expect(settings).not.toHaveProperty('baseUrl');
+    // Everything else is at its default, which is a working app.
+    expect(settings.temperature).toBe(0.7);
   });
 });
 
-/**
- * The folded sections of the settings dialog.
- *
- * Layout state, stored beside the rail widths for the same reason: a section the
- * user folded away has to still be folded the next time they open the dialog, or
- * they will fold the same four sections on every launch.
- */
 /**
  * The memory soft limit, which the Settings dialog draws as a slider.
  *
@@ -805,80 +587,6 @@ describe('SettingsStore experienceMode', () => {
 
     expect(settings.experienceMode).toBe('power');
     expect(settings.sidebarWidth).toBe(300);
-  });
-});
-
-/**
- * The model the app carries: which file, how much context, whether it thinks.
- *
- * A block, so the merge is per field — pointing at another `.gguf` must not reset
- * the context window, and the two are written by two different controls on one
- * card. It also carries the defaults a fresh install starts with, which is what
- * the engine is started from before anything has been chosen.
- */
-describe('SettingsStore localModel', () => {
-  let dir: string;
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(process.cwd(), '.marimo-localmodel-'));
-  });
-
-  afterEach(async () => {
-    await rm(dir, {recursive: true, force: true});
-  });
-
-  function store(): SettingsStore {
-    return new SettingsStore(join(dir, 'settings.json'));
-  }
-
-  it('starts on the copy that shipped, with room and no thinking', async () => {
-    expect((await store().load()).localModel).toEqual({
-      // Empty means "the file in this app's own resources", which is the state
-      // nothing has to be written to reach.
-      ggufPath: '',
-      contextSize: 8192,
-      thinking: false,
-    });
-  });
-
-  it('merges one field without clearing the others', async () => {
-    const settings = store();
-    await settings.patch({localModel: {thinking: true}});
-    const after = await settings.patch({
-      localModel: {ggufPath: '/home/sam/other.gguf'},
-    });
-
-    expect(after.localModel).toEqual({
-      ggufPath: '/home/sam/other.gguf',
-      contextSize: 8192,
-      thinking: true,
-    });
-  });
-
-  it('keeps the choice through an unrelated write and a restart', async () => {
-    const settings = store();
-    await settings.patch({localModel: {contextSize: 32768}});
-    await settings.patch({temperature: 0.2});
-
-    expect((await store().load()).localModel.contextSize).toBe(32768);
-  });
-
-  it('falls back on the block alone when it is nonsense', async () => {
-    // A hand-edited context window must cost that block, not the provider, the
-    // connectors and every other preference the user has.
-    await writeFile(
-      join(dir, 'settings.json'),
-      JSON.stringify(
-        {localModel: {contextSize: 40}, providers: {active: 'gemini'}},
-        null,
-        2,
-      ),
-      'utf8',
-    );
-    const settings = await store().load();
-
-    expect(settings.localModel.contextSize).toBe(8192);
-    expect(settings.providers.active).toBe('gemini');
   });
 });
 

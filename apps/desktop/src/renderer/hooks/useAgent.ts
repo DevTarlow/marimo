@@ -155,14 +155,6 @@ export interface AgentController {
     workspaceId: string | null,
   ) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
-  /**
-   * Chooses the model this conversation uses, or `null` to follow the default.
-   *
-   * Per conversation rather than app-wide: the picker sits in the composer, and
-   * a control there that moved every other chat's model would be the wrong
-   * blast radius for a button beside the box you are typing in.
-   */
-  setSessionModel: (sessionId: string, model: string | null) => Promise<void>;
   /** Deletes a conversation, and lands somewhere sensible if it was open. */
   removeSession: (sessionId: string) => Promise<void>;
 }
@@ -795,33 +787,6 @@ export function useAgent(): AgentController {
     [profile],
   );
 
-  const setSessionModel = useCallback(
-    async (sessionId: string, model: string | null): Promise<void> => {
-      if (profile === undefined) {
-        return;
-      }
-      try {
-        const {session} = await window.marimo.call('sessions.setModel', {
-          profileId: profile.id,
-          sessionId,
-          model,
-        });
-        /*
-         * The answer is the stored entry, not the value that was asked for: a
-         * cleared choice comes back with no `model` at all, and the composer
-         * reads that absence as "following the default" rather than as a model
-         * id it should keep showing.
-         */
-        setSessions((current) =>
-          current.map((entry) => (entry.id === session.id ? session : entry)),
-        );
-      } catch (failure) {
-        setError(describe(failure));
-      }
-    },
-    [profile],
-  );
-
   /**
    * Deletes a conversation, and lands somewhere sensible.
    *
@@ -916,7 +881,6 @@ export function useAgent(): AgentController {
     openWorkspace,
     moveSession,
     renameSession,
-    setSessionModel,
     removeSession,
   };
 }

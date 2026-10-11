@@ -29,7 +29,6 @@ const FIXTURE = fileURLToPath(
 
 function config(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
-    apiKey: 'test-key',
     baseUrl: 'http://127.0.0.1:1',
     model: 'deepseek-chat',
     temperature: 0,

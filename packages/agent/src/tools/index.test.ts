@@ -33,7 +33,6 @@ describe('createTools', () => {
 
   function config(): AgentConfig {
     return {
-      apiKey: 'test-key',
       baseUrl: 'http://127.0.0.1:1',
       model: 'deepseek-chat',
       temperature: 0,
@@ -350,7 +349,6 @@ describe('the safe defaults', () => {
   function everything(): string[] {
     return createTools(
       {
-        apiKey: 'test-key',
         baseUrl: 'http://127.0.0.1:1',
         model: 'deepseek-chat',
         temperature: 0,
@@ -423,7 +421,6 @@ describe('the tool catalogue', () => {
 
   function config(): AgentConfig {
     return {
-      apiKey: 'test-key',
       baseUrl: 'http://127.0.0.1:1',
       model: 'deepseek-chat',
       temperature: 0,
@@ -551,7 +548,6 @@ describe('the capability presets', () => {
     return new Set(
       createTools(
         {
-          apiKey: 'test-key',
           baseUrl: 'http://127.0.0.1:1',
           model: 'deepseek-chat',
           temperature: 0,
@@ -662,7 +658,6 @@ describe('the helper tool and the profile filter', () => {
   function withSubagent(enabledTools: string[] | undefined): string[] {
     return createTools(
       {
-        apiKey: 'test-key',
         baseUrl: 'http://127.0.0.1:1',
         model: 'deepseek-chat',
         temperature: 0,
@@ -705,7 +700,6 @@ describe('the helper tool and the profile filter', () => {
   it('is not offered at all when the host supplies no way to build one', () => {
     const names = createTools(
       {
-        apiKey: 'test-key',
         baseUrl: 'http://127.0.0.1:1',
         model: 'deepseek-chat',
         temperature: 0,

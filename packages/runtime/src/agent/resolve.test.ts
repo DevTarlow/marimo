@@ -1,17 +1,16 @@
 /**
  * Turning settings and a profile into an agent configuration.
  *
- * Every branch here is a sentence the user will read instead of a turn. The
- * cases worth testing are the refusals, and the distinction between the two
- * ways a key can be missing — "you have not added one" and "the one you added
- * cannot be read" — because telling somebody to enter a key they have already
- * entered is how a working install comes to look broken.
+ * Every branch here is a sentence the user will read instead of a turn, so the
+ * refusals are the cases worth testing: a profile with no folder, and an engine
+ * that is not running. There is no third one any more — the app holds no model
+ * key, so the two ways a key could be missing went with the key.
  */
 import {describe, expect, it} from 'vitest';
 
+import {LOCAL_MODEL_ID} from '@marimo/protocol';
 import type {AgentProfile} from '@marimo/protocol';
 
-import type {SecretRead} from '../secrets.js';
 import {defaultStoredSettings} from '../settings.js';
 import {parseProfile, resolveAgentConfig} from './resolve.js';
 import type {ResolvedAgent, ResolveAgentOptions} from './resolve.js';
@@ -26,6 +25,9 @@ import type {ResolvedAgent, ResolveAgentOptions} from './resolve.js';
  */
 const WORKSPACE = '/home/someone/dev';
 
+/** Where the process that started the engine says it is listening. */
+const ENGINE = 'http://127.0.0.1:49231/v1';
+
 function profile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   return {
     id: 'profile-1',
@@ -37,39 +39,19 @@ function profile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   };
 }
 
-/** `resolveAgentConfig` with a folder, unless a case says otherwise. */
+/** `resolveAgentConfig` with a folder and an engine, unless a case says otherwise. */
 function resolve(
-  options: Omit<ResolveAgentOptions, 'workspaceRoot'> & {
+  options: Omit<ResolveAgentOptions, 'workspaceRoot' | 'engineBaseUrl'> & {
     workspaceRoot?: string;
+    engineBaseUrl?: string;
   },
 ): Promise<ResolvedAgent> {
-  return resolveAgentConfig({workspaceRoot: WORKSPACE, ...options});
+  return resolveAgentConfig({
+    workspaceRoot: WORKSPACE,
+    engineBaseUrl: ENGINE,
+    ...options,
+  });
 }
-
-/** Settings with one provider live, and its key supplied however the test wants. */
-function settingsWith(
-  providerId:
-    'builtin' | 'deepseek' | 'llamacpp' | 'gemini' | 'openrouter' = 'deepseek',
-) {
-  const settings = defaultStoredSettings();
-  return {
-    ...settings,
-    providers: {
-      active: providerId,
-      configs: {
-        ...settings.providers.configs,
-        [providerId]: {baseUrl: 'https://example.test', model: 'test-model'},
-      },
-    },
-  };
-}
-
-const present = (value: string): SecretRead => ({state: 'present', value});
-const absent: SecretRead = {state: 'absent'};
-const unreadable: SecretRead = {
-  state: 'unreadable',
-  reason: 'The API key is encrypted and this process cannot decrypt it.',
-};
 
 describe('resolveAgentConfig', () => {
   /*
@@ -79,9 +61,8 @@ describe('resolveAgentConfig', () => {
    */
   it('carries the memory soft limit from settings into the configuration', async () => {
     const result = await resolve({
-      settings: {...settingsWith(), memorySoftLimitBytes: 16 * 1024},
+      settings: {...defaultStoredSettings(), memorySoftLimitBytes: 16 * 1024},
       profile: profile(),
-      readSecret: async () => present('sk-test'),
     });
 
     expect(result.ok).toBe(true);
@@ -91,11 +72,10 @@ describe('resolveAgentConfig', () => {
     expect(result.config.memorySoftLimitBytes).toBe(16 * 1024);
   });
 
-  it('builds a configuration from the settings and the profile', async () => {
+  it('builds a configuration from the engine, the settings and the profile', async () => {
     const result = await resolve({
-      settings: settingsWith(),
+      settings: defaultStoredSettings(),
       profile: profile(),
-      readSecret: async () => present('sk-test'),
     });
 
     expect(result.ok).toBe(true);
@@ -103,14 +83,18 @@ describe('resolveAgentConfig', () => {
       return;
     }
     expect(result.config).toMatchObject({
-      apiKey: 'sk-test',
-      baseUrl: 'https://example.test',
-      model: 'test-model',
-      provider: 'deepseek',
+      baseUrl: ENGINE,
+      // The one model this app answers with, which is also the engine's
+      // `--alias`: the same constant on both sides of the wire.
+      model: LOCAL_MODEL_ID,
       profileId: 'profile-1',
       workspaceRoot: '/home/someone/dev',
       systemPrompt: 'You are Marimo.',
     });
+    // No credential exists to carry, and a field for one would be a field that
+    // is always empty.
+    expect(result.config).not.toHaveProperty('apiKey');
+    expect(result.config).not.toHaveProperty('provider');
     // The profile's capability list is carried through untouched: it is the
     // agent's whole surface, and a filter here would be a second place for the
     // user's choices to be overridden.
@@ -124,9 +108,8 @@ describe('resolveAgentConfig', () => {
    */
   it("carries the user's preferences beside the identity", async () => {
     const result = await resolve({
-      settings: settingsWith(),
+      settings: defaultStoredSettings(),
       profile: profile({preferences: 'Call me Tarlow. Skip the emoji.'}),
-      readSecret: async () => present('sk-test'),
     });
 
     expect(result.ok).toBe(true);
@@ -139,9 +122,8 @@ describe('resolveAgentConfig', () => {
 
   it('leaves preferences absent when the user wrote none', async () => {
     const result = await resolve({
-      settings: settingsWith(),
+      settings: defaultStoredSettings(),
       profile: profile(),
-      readSecret: async () => present('sk-test'),
     });
 
     expect(result.ok && result.config.preferences).toBeUndefined();
@@ -149,9 +131,8 @@ describe('resolveAgentConfig', () => {
 
   it('refuses a turn with no folder, and says which agent', async () => {
     const result = await resolve({
-      settings: settingsWith(),
+      settings: defaultStoredSettings(),
       profile: profile(),
-      readSecret: async () => present('sk-test'),
       // The caller has no folder to name: no workspaces at all, or the
       // conversation's folder has been forgotten and there is nothing current.
       workspaceRoot: undefined,
@@ -164,68 +145,19 @@ describe('resolveAgentConfig', () => {
     }
   });
 
-  it('refuses when the provider needs a key and there is none', async () => {
-    const result = await resolve({
-      settings: settingsWith(),
-      profile: profile(),
-      readSecret: async () => absent,
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.problem).toContain('DeepSeek');
-      expect(result.problem).toMatch(/API key/u);
-    }
-  });
-
   /*
-   * The distinction that matters. A key exists and this process cannot read it —
-   * which is exactly the headless runner's situation on a machine whose keyring
-   * is locked. Saying "add an API key" there sends the user to re-enter a key
-   * that is already saved, and the real problem goes unfixed.
-   */
-  it('reports an unreadable key as its own problem, not as a missing one', async () => {
-    const result = await resolve({
-      settings: settingsWith(),
-      profile: profile(),
-      readSecret: async () => unreadable,
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.problem).toBe(unreadable.reason);
-      expect(result.problem).not.toMatch(/add one in Settings/iu);
-    }
-  });
-
-  it('does not ask a local server for a key', async () => {
-    const result = await resolve({
-      settings: settingsWith('llamacpp'),
-      profile: profile(),
-      readSecret: async () => absent,
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.apiKey).toBe('');
-      expect(result.config.provider).toBe('llamacpp');
-    }
-  });
-
-  /*
-   * The built-in model: no key, but an engine that has to be running.
+   * The refusal that matters most, because the alternative is not a broken turn.
    *
-   * The refusal matters more than the success. A managed provider's stored
-   * `baseUrl` is a placeholder for a port the app has not chosen yet, so
-   * resolving without a live address would not produce a broken configuration —
-   * it would produce one that points at whatever happens to be listening on
-   * 8137, and the user's conversation would go there.
+   * The engine comes up on whatever port was free, so there is no stored address
+   * to fall back to — and inventing one would send the conversation to whatever
+   * else happens to be listening there. So a missing address is refused, and the
+   * sentence names the card that fixes it.
    */
-  it('refuses the built-in model until the app has started it', async () => {
+  it('refuses a turn until the app has started the engine', async () => {
     const result = await resolve({
-      settings: settingsWith('builtin'),
+      settings: defaultStoredSettings(),
       profile: profile(),
-      readSecret: async () => absent,
+      engineBaseUrl: undefined,
     });
 
     expect(result.ok).toBe(false);
@@ -235,50 +167,27 @@ describe('resolveAgentConfig', () => {
     }
   });
 
-  it('uses the live address of the engine, never the stored placeholder', async () => {
-    const settings = settingsWith('builtin');
+  it('uses the live address of the engine', async () => {
     const result = await resolve({
-      settings,
+      settings: defaultStoredSettings(),
       profile: profile(),
-      readSecret: async () => absent,
-      managedBaseUrl: 'http://127.0.0.1:49231/v1',
+      engineBaseUrl: 'http://127.0.0.1:52117/v1',
     });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.baseUrl).toBe('http://127.0.0.1:49231/v1');
-      expect(result.config.baseUrl).not.toBe(
-        settings.providers.configs['builtin'].baseUrl,
-      );
-      expect(result.config.provider).toBe('builtin');
-      expect(result.config.apiKey).toBe('');
-    }
-  });
-
-  /*
-   * The same field must not be able to redirect a provider the user *did*
-   * configure: their address is the one they typed.
-   */
-  it('ignores a live address for a provider that is not managed', async () => {
-    const result = await resolve({
-      settings: settingsWith('deepseek'),
-      profile: profile(),
-      readSecret: async () => present('sk-test'),
-      managedBaseUrl: 'http://127.0.0.1:49231/v1',
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.baseUrl).toBe('https://example.test');
+      expect(result.config.baseUrl).toBe('http://127.0.0.1:52117/v1');
     }
   });
 
   it('carries the sampling settings through', async () => {
-    const settings = settingsWith();
     const result = await resolve({
-      settings: {...settings, temperature: 1.25, maxOutputTokens: 4096},
+      settings: {
+        ...defaultStoredSettings(),
+        temperature: 1.25,
+        maxOutputTokens: 4096,
+      },
       profile: profile(),
-      readSecret: async () => present('sk-test'),
     });
 
     expect(result.ok).toBe(true);
@@ -289,12 +198,11 @@ describe('resolveAgentConfig', () => {
   });
 
   it('omits the output cap rather than sending zero', async () => {
-    // Zero would be a different instruction from "no cap", and some endpoints
-    // refuse it outright.
+    // Zero would be a different instruction from "no cap", and the engine
+    // refuses it outright.
     const result = await resolve({
-      settings: settingsWith(),
+      settings: defaultStoredSettings(),
       profile: profile(),
-      readSecret: async () => present('sk-test'),
     });
 
     expect(result.ok).toBe(true);
@@ -305,9 +213,8 @@ describe('resolveAgentConfig', () => {
 
   it('passes the profile skills in the shape the prompt builder wants', async () => {
     const result = await resolve({
-      settings: settingsWith(),
+      settings: defaultStoredSettings(),
       profile: profile({enabledSkills: ['house-style']}),
-      readSecret: async () => present('sk-test'),
       skills: [
         {
           name: 'house-style',
@@ -331,9 +238,8 @@ describe('resolveAgentConfig', () => {
 
   it('leaves userSkills absent when there are none', async () => {
     const result = await resolve({
-      settings: settingsWith(),
+      settings: defaultStoredSettings(),
       profile: profile(),
-      readSecret: async () => present('sk-test'),
       skills: [],
     });
 
@@ -347,9 +253,8 @@ describe('resolveAgentConfig', () => {
     // The folder is the conversation's, not the profile's: two chats on one
     // agent work in two different projects, and this is the seam that lets them.
     const result = await resolve({
-      settings: settingsWith(),
+      settings: defaultStoredSettings(),
       profile: profile(),
-      readSecret: async () => present('sk-test'),
       workspaceRoot: '/tmp/elsewhere',
     });
 

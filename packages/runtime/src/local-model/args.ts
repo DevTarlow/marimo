@@ -7,7 +7,7 @@
  * an array in a millisecond where starting a 1.1 GB model takes seconds and a
  * machine. The one caller that spawns is tested with a fake.
  */
-import {MODEL_ALIAS} from './files.js';
+import {LOCAL_MODEL_ID} from '@marimo/protocol';
 
 export interface EngineSpec {
   /** The `llama-server` binary. */
@@ -35,8 +35,8 @@ export interface EngineSpec {
  * which binary was unpacked: the macOS build is Metal, and the Linux and Windows
  * ones are the plain CPU builds. A number the user had to set would be a number
  * they had to know their own hardware to set, so the only place it is decided is
- * here, and somebody with a GPU who wants more can point the "Local" provider at
- * a server of their own — the path that already exists.
+ * here. A GPU build the app does not ship is the one thing this cannot express,
+ * and it is a gap in what is packaged rather than a setting to add.
  */
 export function defaultGpuLayers(
   platform: NodeJS.Platform = process.platform,
@@ -57,7 +57,7 @@ export function defaultGpuLayers(
  *   ever called, which is the failure that looks like a model that is merely
  *   unhelpful.
  * - `--alias` names the model so the id in a request is the app's own
- *   (`qwen3-1.7b`) rather than a path with a quantization in it.
+ *   (`LOCAL_MODEL_ID`) rather than a path with a quantization in it.
  * - `--host 127.0.0.1` keeps it off the network. This is a server, and the one
  *   thing it must never be is reachable from somewhere else on the LAN.
  * - `--no-webui` because there is no browser to serve: it is a chat page for a
@@ -69,7 +69,7 @@ export function engineArgs(spec: EngineSpec): string[] {
     '--model',
     spec.model,
     '--alias',
-    MODEL_ALIAS,
+    LOCAL_MODEL_ID,
     '--host',
     '127.0.0.1',
     '--port',

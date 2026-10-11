@@ -24,7 +24,7 @@ export type {AppPaths} from './paths.js';
 
 /* Secrets, with the cipher injected. */
 export {FileSecretStore} from './secrets.js';
-export type {SecretCipher, SecretRead, SecretWriterOptions} from './secrets.js';
+export type {SecretCipher, SecretRead} from './secrets.js';
 
 /* The agent's memory suggestions, waiting for an answer. */
 export {
@@ -87,10 +87,10 @@ export {
   defaultGpuLayers,
   engineArgs,
   freePort,
+  LOCAL_CONTEXT_SIZE,
   LocalModelService,
   localModelPidFile,
   localModelSpec,
-  MODEL_ALIAS,
   MODEL_DIR_ENV,
   MODEL_FILE_NAME,
   resolveLocalModelFiles,
@@ -201,10 +201,7 @@ export type {LegacyWorkspaces, WorkspaceStoreOptions} from './workspaces.js';
 
 /* Preferences. */
 export {
-  chooseModel,
-  defaultAvailableModels,
   defaultStoredSettings,
-  mergeProviders,
   readLegacyProfileSeed,
   SettingsStore,
 } from './settings.js';

@@ -21,15 +21,6 @@ describe('resolveAppPaths', () => {
     }
   });
 
-  it('gives every provider its own secret file', () => {
-    const files = Object.values(paths.providerSecrets);
-    expect(files.length).toBeGreaterThan(1);
-    expect(new Set(files).size).toBe(files.length);
-    for (const file of files) {
-      expect(relative(paths.secretsDir, file).startsWith('..')).toBe(false);
-    }
-  });
-
   it('resolves from the argument rather than from the environment', () => {
     // Two calls with different roots must not share anything: this is what lets
     // the app and the headless runner point at the same directory deliberately,

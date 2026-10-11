@@ -11,17 +11,17 @@
  *
  * A secret file says which it is in its own prefix:
  *
- * - `encrypted:<base64>` — written when a cipher was available.
- * - `plaintext:<base64>` — written only after the user accepted that it would
- *   be readable on disk, which is why the choice is recorded rather than
- *   implied.
+ * - `encrypted:<base64>` — written when a cipher was available. The only thing
+ *   this store writes now.
+ * - `plaintext:<base64>` — read, never written. A build that had a "store
+ *   secrets as plain text" opt-in wrote these so a process with no keychain could
+ *   read them, and an install that took that offer must go on working.
  *
- * Reads are three-valued on purpose. "No key yet" and "a key I cannot decrypt"
- * are different facts, and only the second one is a problem the user has to fix;
- * collapsing them into an empty string is what makes a misconfigured install look
- * like an unconfigured one. The runner leans on this: a scheduled job that cannot
- * read the key must say so in its recorded outcome rather than failing obscurely
- * at the provider.
+ * Reads are three-valued on purpose. "No secret yet" and "a secret I cannot
+ * decrypt" are different facts, and only the second one is a problem the user has
+ * to fix; collapsing them into an empty string is what makes a misconfigured
+ * install look like an unconfigured one. A caller that cannot read a connector
+ * token must say so rather than dialling the server without it.
  */
 import {mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {dirname} from 'node:path';
@@ -52,14 +52,6 @@ export type SecretRead =
    * no cipher, or one encrypted under a keychain that is no longer readable.
    */
   | {state: 'unreadable'; reason: string};
-
-export interface SecretWriterOptions {
-  /**
-   * Whether the user has accepted an unencrypted secret when no keychain is
-   * available. Required for the headless runner, which has no cipher at all.
-   */
-  allowPlaintext: boolean;
-}
 
 /**
  * One secret in one file.
@@ -115,9 +107,8 @@ export class FileSecretStore {
           state: 'unreadable',
           reason:
             `The ${this.label} is encrypted and this process cannot decrypt it: ` +
-            'no OS keychain is available to it. Enable "Store secrets as plain ' +
-            'text" in Settings if you want scheduled jobs to run while the app ' +
-            'is closed.',
+            'no OS keychain is available to it. Re-enter it from a session that ' +
+            'has one.',
         };
       }
       try {
@@ -151,7 +142,17 @@ export class FileSecretStore {
     return read.state === 'present' ? read.value : '';
   }
 
-  async set(value: string, options: SecretWriterOptions): Promise<void> {
+  /**
+   * Stores a secret, encrypted.
+   *
+   * There is no plain-text path any more, and no option to ask for one: the
+   * opt-in existed so a windowless process could read a key, and the app no
+   * longer has a key that one needs. A machine with no keychain therefore cannot
+   * store a connector token at all, which is said plainly rather than papered
+   * over — writing it readable would be deciding for the user that a token is
+   * not worth encrypting.
+   */
+  async set(value: string): Promise<void> {
     const trimmed = value.trim();
     if (trimmed.length === 0) {
       await this.clear();
@@ -160,36 +161,16 @@ export class FileSecretStore {
 
     await mkdir(dirname(this.file), {recursive: true});
 
-    /*
-     * Consent first, and it wins over the keychain.
-     *
-     * The only reason to accept a readable secret is that something without a
-     * keychain has to read it — the headless job runner. Encrypting anyway
-     * because a keychain happens to be available would take the consent and
-     * produce the opposite of what was consented to: a key the background
-     * service cannot use, while the settings screen says it can. That is the
-     * worst shape a security setting can take, so the ordering here is the
-     * point rather than an accident of the branches.
-     */
-    if (!options.allowPlaintext && this.isEncryptionAvailable()) {
-      const encrypted = this.cipher!.encrypt(trimmed).toString('base64');
-      await writeFile(this.file, `${ENCRYPTED_PREFIX}${encrypted}\n`, {
-        encoding: 'utf8',
-        mode: 0o600,
-      });
-      return;
-    }
-
-    if (!options.allowPlaintext) {
+    if (!this.isEncryptionAvailable()) {
       throw new Error(
         `This system has no available keychain, so the ${this.label} cannot be ` +
-          'encrypted. Enable "Store secrets as plain text" in Settings if you ' +
-          'accept that it will be readable on disk.',
+          'stored. It would have to be written to disk readable by anything, ' +
+          'which this app will not do unasked.',
       );
     }
 
-    const encoded = Buffer.from(trimmed, 'utf8').toString('base64');
-    await writeFile(this.file, `${PLAINTEXT_PREFIX}${encoded}\n`, {
+    const encrypted = this.cipher!.encrypt(trimmed).toString('base64');
+    await writeFile(this.file, `${ENCRYPTED_PREFIX}${encrypted}\n`, {
       encoding: 'utf8',
       mode: 0o600,
     });

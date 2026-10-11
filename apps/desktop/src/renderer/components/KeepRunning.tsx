@@ -86,19 +86,6 @@ export function KeepRunning(): React.JSX.Element | null {
         <span>Keep jobs running when the app is closed</span>
       </label>
 
-      {!status.keysReadable && (
-        /*
-         * Said before the switch, not after. The alternative is a user turning
-         * this on, seeing nothing wrong, and finding out from a job that quietly
-         * failed every hour overnight.
-         */
-        <p className="keep-note keep-warning">
-          Your API key is encrypted, and the background runner has no keychain to
-          read it with. Turn on &ldquo;Store secrets as plain text&rdquo; in
-          Settings first, or every background run will stop at the key.
-        </p>
-      )}
-
       {status.installed && status.definitionPath.length > 0 && (
         <p className="keep-note">
           Set up at <code>{status.definitionPath}</code>

@@ -1,29 +1,25 @@
 /**
- * Runtime configuration for the agent. The API key is supplied by the Electron
- * main process after decrypting it; it is never part of the settings object the
- * renderer can read.
+ * Runtime configuration for the agent.
  *
- * Everything else here comes from the active agent profile: its identity (the
- * system prompt), the preferences the user wrote for themselves, the folder it
- * works in, and the tools and skills it is allowed to use.
+ * Everything here comes from the active agent profile and the app's own
+ * preferences: the engine's address (which only the process that started it
+ * knows), the identity, the folder it works in, and the tools and skills it is
+ * allowed to use. There is no credential: the app holds no model key at all.
  */
-import type {ProviderId} from '@marimo/protocol';
-
 import type {Skill} from './skills/types.js';
 
 export interface AgentConfig {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
   /**
-   * Which backend `baseUrl` points at.
+   * Where the app's own engine is listening.
    *
-   * All three speak the same wire protocol, so this changes nothing about how a
-   * request is shaped — except for the two details the provider catalogue records
-   * (a `reasoning_content` channel, and whether `stream_options` may be sent).
-   * Absent means DeepSeek, which is what a caller with no settings file wants.
+   * The one address in this app that is not stored anywhere: the engine comes up
+   * on whatever port was free, so the live one is handed over by the process that
+   * started it. A caller that has none must refuse the turn rather than guess —
+   * a fixed port would send a conversation to whatever else is listening there.
    */
-  provider?: ProviderId;
+  baseUrl: string;
+  /** The request's model id, which is also the engine's `--alias`. */
+  model: string;
   temperature: number;
   maxOutputTokens?: number;
   /** The profile's identity: who this agent is. */

@@ -2,13 +2,13 @@
  * The runtime, from the outside.
  *
  * What is tested here is mostly what happens when the agent *cannot* start,
- * because that is the path a user actually meets: a fresh install with no key, a
- * key that cannot be read, a folder nobody has chosen yet. Each of those has to
- * arrive as a sentence in the conversation rather than as a spinner, an empty
- * screen, or an exception the window never sees.
+ * because that is the path a user actually meets: an engine that is not
+ * installed, one that refused to start, a folder nobody has chosen yet. Each of
+ * those has to arrive as a sentence in the conversation rather than as a
+ * spinner, an empty screen, or an exception the window never sees.
  *
- * The successful path needs a provider, so it lives with the agent package's
- * tests — this file is about the wiring around it.
+ * The successful path needs a model, and a model is a process — so the tests
+ * that need one inject the engine, and the ones about refusal simply do not.
  */
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
@@ -25,26 +25,35 @@ import {resolveAppPaths} from '../paths.js';
 import type {AppPaths} from '../paths.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
 import {ProfileStore} from '../profiles.js';
-import {SettingsStore} from '../settings.js';
 import {WorkspaceStore} from '../workspaces.js';
 import {AgentRuntime} from './runtime.js';
 import type {AgentRuntimeOptions, LocalModelRunner} from './runtime.js';
-import type {SecretRead} from '../secrets.js';
 
 /**
- * Points an install at a provider that needs a key.
+ * An engine that answers, and remembers whether it was asked.
  *
- * The build's default is now the model the app carries, which needs none — so a
- * test about keys, or about a turn that actually starts, has to say which
- * provider it means. Seeded through the store rather than passed into the
- * runtime, because which provider answers *is* a settings fact: a runtime that
- * took it as an argument would be one whose settings file disagreed with its
- * behaviour.
+ * The runtime never starts one itself — starting a process is the window's or
+ * the runner's job — so every test that needs a working turn injects this, and
+ * every test about refusal simply leaves it out.
  */
-async function seedKeyedProvider(paths: AppPaths): Promise<void> {
-  await new SettingsStore(paths.settings).patch({
-    providers: {active: 'deepseek'},
-  });
+function engine(options: {problem?: string} = {}): LocalModelRunner & {
+  starts: number;
+  stops: number;
+} {
+  const runner = {
+    starts: 0,
+    stops: 0,
+    async ensureRunning() {
+      runner.starts += 1;
+      return options.problem === undefined
+        ? {ok: true as const, baseUrl: 'http://127.0.0.1:49500/v1'}
+        : {ok: false as const, problem: options.problem};
+    },
+    async stop() {
+      runner.stops += 1;
+    },
+  };
+  return runner;
 }
 
 /**
@@ -81,8 +90,6 @@ describe('AgentRuntime', () => {
     });
     await profiles.load();
     profileId = (await profiles.activeProfile()).id;
-    // Most of this file is about keys, and a key belongs to a provider.
-    await seedKeyedProvider(paths);
   });
 
   afterEach(async () => {
@@ -90,12 +97,10 @@ describe('AgentRuntime', () => {
   });
 
   function runtime(
-    readSecret: AgentRuntimeOptions['readSecret'],
+    options: Partial<Omit<AgentRuntimeOptions, 'paths'>> = {},
   ): AgentRuntime {
-    return new AgentRuntime({paths, readSecret});
+    return new AgentRuntime({paths, ...options});
   }
-
-  const noKey = async (): Promise<SecretRead> => ({state: 'absent'});
 
   /*
    * The size control in Settings reads these three numbers. They come from the
@@ -104,7 +109,7 @@ describe('AgentRuntime', () => {
    */
   describe('memory usage', () => {
     it('reports the file size, the user limit and the hard cap', async () => {
-      const agent = runtime(noKey);
+      const agent = runtime();
       await agent.updateSettings({memorySoftLimitBytes: 16 * 1024});
 
       await mkdir(join(dir, '.marimo', profileId), {recursive: true});
@@ -119,7 +124,7 @@ describe('AgentRuntime', () => {
     });
 
     it('reports zero for an agent that has never been told anything', async () => {
-      const usage = await runtime(noKey).memoryUsage(profileId);
+      const usage = await runtime().memoryUsage(profileId);
       expect(usage.bytes).toBe(0);
       expect(usage.limitBytes).toBe(DEFAULT_MEMORY_SOFT_LIMIT_BYTES);
     });
@@ -130,7 +135,7 @@ describe('AgentRuntime', () => {
      * working on an install with no API key yet.
      */
     it('answers without building a host', async () => {
-      const agent = runtime(noKey);
+      const agent = runtime();
       await agent.updateSettings({memorySoftLimitBytes: 4 * 1024});
       expect(await agent.memoryUsage(profileId)).toMatchObject({
         limitBytes: 4 * 1024,
@@ -139,63 +144,12 @@ describe('AgentRuntime', () => {
     });
   });
 
-  /*
-   * The Fetch Models button writes through here. What matters from the outside
-   * is that the list lands on disk, that the provider's own model is moved when
-   * the endpoint no longer offers it — a retired name is a 404 at the start of
-   * the next turn — and that no other provider is touched.
-   */
-  describe('recording what a provider serves', () => {
-    it('stores the list and moves a model the endpoint no longer offers', async () => {
-      const agent = runtime(noKey);
-      await agent.updateSettings({
-        providers: {configs: {deepseek: {model: 'gone-model'}}},
-      });
-
-      const after = await agent.setAvailableModels('deepseek', [
-        'deepseek-a',
-        'deepseek-b',
-      ]);
-
-      expect(after.availableModels.deepseek).toEqual([
-        'deepseek-a',
-        'deepseek-b',
-      ]);
-      expect(after.providers.configs.deepseek.model).toBe('deepseek-a');
-      expect((await agent.settings()).availableModels.deepseek).toEqual([
-        'deepseek-a',
-        'deepseek-b',
-      ]);
-    });
-
-    it('keeps the model when the endpoint still offers it', async () => {
-      const agent = runtime(noKey);
-      await agent.updateSettings({
-        providers: {configs: {deepseek: {model: 'deepseek-b'}}},
-      });
-
-      const after = await agent.setAvailableModels('deepseek', [
-        'deepseek-a',
-        'deepseek-b',
-      ]);
-      expect(after.providers.configs.deepseek.model).toBe('deepseek-b');
-    });
-
-    it('leaves every other provider alone', async () => {
-      const agent = runtime(noKey);
-      await agent.setAvailableModels('gemini', ['gemini-a']);
-
-      const after = await agent.setAvailableModels('deepseek', ['deepseek-a']);
-      expect(after.availableModels.gemini).toEqual(['gemini-a']);
-    });
-  });
-
   describe('when the agent cannot start', () => {
     it('says so from `host` rather than throwing', async () => {
-      const result = await runtime(noKey).host(profileId);
+      const result = await runtime().host(profileId);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.problem).toMatch(/API key/u);
+        expect(result.problem).toMatch(/no engine/u);
       }
     });
 
@@ -205,7 +159,7 @@ describe('AgentRuntime', () => {
      * is looking — an exception would be a console line they never see.
      */
     it('reports a turn it cannot start as a failed turn', async () => {
-      const agent = runtime(noKey);
+      const agent = runtime();
       const events = [];
       for await (const event of agent.run(profileId, 'session-1', 'hello')) {
         events.push(event);
@@ -218,12 +172,12 @@ describe('AgentRuntime', () => {
         code: 'not-configured',
       });
       if (events[0]?.type === 'turn.failed') {
-        expect(events[0].message).toMatch(/API key/u);
+        expect(events[0].message).toMatch(/no engine/u);
       }
     });
 
     it('says which agent when the profile does not exist', async () => {
-      const result = await runtime(noKey).host('no-such-profile');
+      const result = await runtime().host('no-such-profile');
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.problem).toContain('no-such-profile');
@@ -238,13 +192,13 @@ describe('AgentRuntime', () => {
    */
   describe('conversations without a provider', () => {
     it('can be started anyway', async () => {
-      const session = await runtime(noKey).createSession(profileId);
+      const session = await runtime().createSession(profileId);
       expect(session).toBeDefined();
       expect(session?.id.length).toBeGreaterThan(0);
     });
 
     it('are filed under the agent that started them', async () => {
-      const agent = runtime(noKey);
+      const agent = runtime();
       await agent.createSession(profileId);
 
       expect(await agent.listSessions(profileId)).toHaveLength(1);
@@ -253,11 +207,11 @@ describe('AgentRuntime', () => {
     });
 
     it('reports no pending gates for an agent that does not exist', async () => {
-      expect(await runtime(noKey).pendingGates('nope', 'session')).toEqual([]);
+      expect(await runtime().pendingGates('nope', 'session')).toEqual([]);
     });
 
     it('has a place to record a gate even with no key', async () => {
-      const agent = runtime(noKey);
+      const agent = runtime();
       const session = await agent.createSession(profileId);
       expect(await agent.pendingGates(profileId, session?.id ?? '')).toEqual(
         [],
@@ -267,12 +221,12 @@ describe('AgentRuntime', () => {
 
   describe('state', () => {
     it('is not busy before anything has run', () => {
-      expect(runtime(noKey).isBusy()).toBe(false);
-      expect(runtime(noKey).busyProfile()).toBeUndefined();
+      expect(runtime().isBusy()).toBe(false);
+      expect(runtime().busyProfile()).toBeUndefined();
     });
 
     it('aborts a conversation it has never heard of without complaining', () => {
-      expect(runtime(noKey).abort(profileId, 'no-such-session')).toBe(false);
+      expect(runtime().abort(profileId, 'no-such-session')).toBe(false);
     });
 
     /*
@@ -281,7 +235,7 @@ describe('AgentRuntime', () => {
      * session index on every message.
      */
     it('reuses one host for a profile', async () => {
-      const agent = runtime(noKey);
+      const agent = runtime();
       await agent.createSession(profileId);
       await agent.createSession(profileId);
       // Both were created through the same host, so both are listed by it.
@@ -289,39 +243,10 @@ describe('AgentRuntime', () => {
     });
 
     it('disposes without error when nothing was ever started', async () => {
-      await expect(runtime(noKey).dispose()).resolves.toBeUndefined();
+      await expect(runtime().dispose()).resolves.toBeUndefined();
     });
   });
 
-  /*
-   * What the headless runner needs and the window does not: the same runtime
-   * with a different answer to "what is the key". Nothing else changes, which is
-   * the whole reason this class lives in the shared package rather than in the
-   * app.
-   */
-  it('takes its secret reader from the caller', async () => {
-    const asked: string[] = [];
-    const agent = runtime(async (providerId) => {
-      asked.push(providerId);
-      return {state: 'absent'};
-    });
-
-    await agent.host(profileId);
-    expect(asked).toEqual(['deepseek']);
-  });
-
-  it('reports an unreadable key rather than a missing one', async () => {
-    const agent = runtime(async () => ({
-      state: 'unreadable',
-      reason: 'The API key is encrypted and this process cannot decrypt it.',
-    }));
-
-    const result = await agent.host(profileId);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.problem).toMatch(/cannot decrypt/u);
-    }
-  });
 });
 
 /*
@@ -355,10 +280,7 @@ describe('the catalogue', () => {
   });
 
   function runtime(): AgentRuntime {
-    return new AgentRuntime({
-      paths,
-      readSecret: async () => ({state: 'absent'}),
-    });
+    return new AgentRuntime({paths});
   }
 
   it('lists the tools by the name and wording the model is given', async () => {
@@ -453,10 +375,7 @@ describe('changing an agent', () => {
   });
 
   function runtime(): AgentRuntime {
-    return new AgentRuntime({
-      paths,
-      readSecret: async () => ({state: 'absent'}),
-    });
+    return new AgentRuntime({paths});
   }
 
   it('records a new grant', async () => {
@@ -522,10 +441,7 @@ describe('the identity a new agent gets', () => {
   });
 
   function runtime(): AgentRuntime {
-    return new AgentRuntime({
-      paths,
-      readSecret: async () => ({state: 'absent'}),
-    });
+    return new AgentRuntime({paths});
   }
 
   it('starts the first agent on the shipped identity', async () => {
@@ -608,8 +524,6 @@ describe('reading a conversation without a working provider', () => {
     });
     await profiles.load();
     profileId = (await profiles.activeProfile()).id;
-    // The refusal under test is about a key, so the install has a keyed provider.
-    await seedKeyedProvider(paths);
 
     await mkdir(paths.sessions, {recursive: true});
     await writeFile(
@@ -643,13 +557,10 @@ describe('reading a conversation without a working provider', () => {
   });
 
   function runtime(): AgentRuntime {
-    return new AgentRuntime({
-      paths,
-      readSecret: async () => ({state: 'absent'}),
-    });
+    return new AgentRuntime({paths});
   }
 
-  it('refuses the turn, because there is no key', async () => {
+  it('refuses the turn, because there is no engine to start', async () => {
     // The premise: this install genuinely cannot answer.
     expect((await runtime().host(profileId)).ok).toBe(false);
   });
@@ -664,10 +575,7 @@ describe('reading a conversation without a working provider', () => {
   });
 
   it('answers with nothing for an agent that does not exist', async () => {
-    const runtime = new AgentRuntime({
-      paths,
-      readSecret: async () => ({state: 'absent'}),
-    });
+    const runtime = new AgentRuntime({paths});
     const {messages, pending} = await runtime.transcript(
       'no-such-agent',
       sessionId,
@@ -676,16 +584,16 @@ describe('reading a conversation without a working provider', () => {
     expect(pending).toEqual([]);
   });
 
-  it('refuses to compact with the sentence about the missing key', async () => {
+  it('refuses to compact with the sentence about the model', async () => {
     /*
      * Thrown rather than answered with `{compacted: false}`: the difference the
      * two carry is the difference between "there was nothing to do" and "this
      * install cannot do it at all", and only the second is worth a red banner.
-     * The sentence is the configuration's own, so it names the provider rather
-     * than a stack.
+     * The sentence is the configuration's own, so it names the card that fixes
+     * it rather than a stack.
      */
     await expect(runtime().compact(profileId, sessionId)).rejects.toThrow(
-      /API key/u,
+      /no engine/u,
     );
   });
 });
@@ -716,27 +624,20 @@ describe('folders and filing', () => {
     });
     await profiles.load();
     profileId = (await profiles.activeProfile()).id;
-    // These turns actually run, so the install needs a provider that answers.
-    await seedKeyedProvider(paths);
   });
 
   afterEach(async () => {
     await rm(dir, {recursive: true, force: true});
   });
 
-  function runtime(
-    readSecret: AgentRuntimeOptions['readSecret'] = async () => ({
-      state: 'absent',
-    }),
-  ): AgentRuntime {
-    return new AgentRuntime({paths, readSecret});
+  /*
+   * These turns actually run, so the install needs an engine. It is injected by
+   * default here — the refusal cases have their own describe, where there is
+   * none on purpose.
+   */
+  function runtime(model: LocalModelRunner = engine()): AgentRuntime {
+    return new AgentRuntime({paths, localModel: model});
   }
-
-  /** A key that works, so a host can be built and its memory read. */
-  const withKey = async (): Promise<SecretRead> => ({
-    state: 'present',
-    value: 'sk-test',
-  });
 
   /** Writes what an agent would have remembered in one folder. */
   async function remember(folder: string, line: string): Promise<void> {
@@ -826,7 +727,7 @@ describe('folders and filing', () => {
     await remember('alpha', '- the parser lives in alpha');
     await remember('beta', '- the renderer lives in beta');
 
-    const agent = runtime(withKey);
+    const agent = runtime();
     const alpha = folderId(
       await agent.addWorkspace(join(dir, 'alpha')),
       'alpha',
@@ -895,41 +796,13 @@ describe('folders and filing', () => {
     ).not.toContain(id);
   });
 
-  it("chooses a conversation's model, and gives the choice up again", async () => {
-    const agent = runtime();
-    const session = await agent.createSession(profileId);
-    const id = session?.id ?? '';
-
-    expect(
-      (await agent.setSessionModel(profileId, id, 'deepseek-v4-pro')).model,
-    ).toBe('deepseek-v4-pro');
-    // Read back from the index rather than echoed: this is what the rail draws.
-    expect(
-      (await agent.listSessions(profileId)).find((entry) => entry.id === id)
-        ?.model,
-    ).toBe('deepseek-v4-pro');
-
-    /*
-     * `null` is the way back to following the app default, and it has to be a
-     * real state in the entry — a conversation that kept showing a model after
-     * giving the choice up would never follow a changed default again.
-     */
-    expect(
-      (await agent.setSessionModel(profileId, id, null)).model,
-    ).toBeUndefined();
-
-    await expect(
-      agent.setSessionModel('someone-else', id, 'deepseek-flash'),
-    ).rejects.toThrow(/Unknown session/u);
-  });
-
   /*
    * An accepted fact has to land in the project it came from, not in whichever
    * folder happens to be current when the user presses Accept — which can be a
    * day later, after opening something else entirely.
    */
   it('writes an accepted fact into the folder it came from', async () => {
-    const agent = runtime(withKey);
+    const agent = runtime();
     await mkdir(join(dir, 'alpha'), {recursive: true});
     await agent.addWorkspace(join(dir, 'alpha'));
     const session = await agent.createSession(profileId);
@@ -997,31 +870,9 @@ describe('the built-in model', () => {
     await rm(dir, {recursive: true, force: true});
   });
 
-  /** An engine that answers, and remembers whether it was asked. */
-  function engine(options: {problem?: string} = {}): LocalModelRunner & {
-    starts: number;
-    stops: number;
-  } {
-    const runner = {
-      starts: 0,
-      stops: 0,
-      async ensureRunning() {
-        runner.starts += 1;
-        return options.problem === undefined
-          ? {ok: true as const, baseUrl: 'http://127.0.0.1:49500/v1'}
-          : {ok: false as const, problem: options.problem};
-      },
-      async stop() {
-        runner.stops += 1;
-      },
-    };
-    return runner;
-  }
-
   function runtime(localModel?: LocalModelRunner): AgentRuntime {
     return new AgentRuntime({
       paths,
-      readSecret: async () => ({state: 'absent'}),
       ...(localModel === undefined ? {} : {localModel}),
     });
   }
@@ -1040,22 +891,6 @@ describe('the built-in model', () => {
     expect(result.ok && result.profile.id).toBe(profileId);
   });
 
-  /*
-   * A provider that is somebody else's service must not be started. This is also
-   * what keeps the check cheap enough to sit in front of every turn: one lookup
-   * and no work at all.
-   */
-  it('leaves a provider the app does not run alone', async () => {
-    await seedKeyedProvider(paths);
-    const model = engine();
-    const result = await runtime(model).host(profileId);
-
-    expect(model.starts).toBe(0);
-    // No key is stored, so the refusal is the key's rather than the engine's.
-    expect(result.ok).toBe(false);
-    expect(result.ok ? '' : result.problem).toMatch(/API key/u);
-  });
-
   it('hands the engine’s own sentence to the user when it will not start', async () => {
     const result = await runtime(
       engine({
@@ -1070,10 +905,10 @@ describe('the built-in model', () => {
   });
 
   /*
-   * The caller with no engine — a test, a future headless command pointed
-   * elsewhere. The refusal names the situation rather than resolving against the
-   * placeholder, which is the difference between a sentence and a conversation
-   * sent to a stranger on port 8137.
+   * The caller with no engine — a test, a command that only reads stored
+   * conversations. The refusal names the situation rather than resolving against
+   * some assumed address, which is the difference between a sentence and a
+   * conversation sent to whatever is listening on that port.
    */
   it('refuses rather than guessing when no engine can be started', async () => {
     const result = await runtime().host(profileId);
@@ -1081,7 +916,6 @@ describe('the built-in model', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.problem).toContain('no engine');
-      expect(result.problem).toContain('Settings');
     }
   });
 

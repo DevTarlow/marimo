@@ -15,10 +15,11 @@
  * so it cannot be the thing a boot-time timer launches. Running as Node means
  * this works over SSH, in a container, and at login before any compositor is up.
  *
- * **No `safeStorage`.** There is no `app` object in Node mode, so an encrypted
- * secret cannot be decrypted. That is why running jobs while the app is closed
- * requires the plain-text opt-in, and why a run that cannot read the key records
- * that as its outcome instead of failing obscurely at the provider.
+ * **No `safeStorage`, and nothing that needs it.** There is no `app` object in
+ * Node mode, so an encrypted secret cannot be decrypted — which stopped
+ * mattering when the app stopped having a model key. A background run needs no
+ * secret at all: the model is a local engine, and this process dials no
+ * connectors.
  *
  * **No web search.** That runs in a browser engine, and there is none here.
  * `web_search` is simply not offered, and the operating rules have the model say
@@ -35,7 +36,6 @@ import {
   AgentRuntime,
   createJobRunner,
   defaultUserDataDir,
-  FileSecretStore,
   holdProcessLock,
   isProcessHeld,
   JobScheduler,
@@ -44,11 +44,8 @@ import {
   localModelPidFile,
   localModelSpec,
   resolveAppPaths,
-  SettingsStore,
 } from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
-
-import {PROVIDERS} from '@marimo/protocol';
 
 import {PRODUCT_NAME, USER_DATA_ENV} from '../shared/product.js';
 
@@ -87,27 +84,6 @@ export function resolveRunnerPaths(
       ? override
       : defaultUserDataDir({appName: PRODUCT_NAME, env});
   return resolveAppPaths(userData);
-}
-
-/**
- * Reads the key the way a process with no keychain can.
- *
- * No cipher, so a key the app encrypted is reported as unreadable rather than as
- * missing — and the difference matters, because "add a key" sent to somebody who
- * already has one is how a working install comes to look broken. The message
- * that comes back names the setting that fixes it.
- */
-function readSecretWithoutKeychain(paths: AppPaths) {
-  return async (providerId: keyof AppPaths['providerSecrets']) => {
-    const store = new FileSecretStore(
-      paths.providerSecrets[providerId],
-      `${PROVIDERS[providerId].label} API key`,
-      // No cipher, and that is the whole point: there is no keychain to reach
-      // from a process with no `app`. A key the app encrypted reads as
-      // unreadable, with the message that names the setting which fixes it.
-    );
-    return await store.read();
-  };
 }
 
 /**
@@ -152,21 +128,14 @@ export async function runDue(options: {
   /*
    * The model the app carries, started only if a job actually needs it.
    *
-   * `spec` reads the settings from a store of its own rather than from the
-   * runtime it is handed to — the runtime needs the engine in order to resolve a
-   * provider, so asking the runtime for the settings first would be a circle.
-   * Both read the same file with the same reader, which is what makes them
-   * agree.
-   *
    * The path is derived from this process's own executable because there is no
    * `app` here: the same function the window calls, with Electron's answer left
    * out. Getting that wrong is the silent kind of failure — the window answers
    * questions and a scheduled job reports the model as not installed.
    */
-  const settingsStore = new SettingsStore(paths.settings);
   const localModel = new LocalModelService({
     spec: async () =>
-      localModelSpec(await settingsStore.load(), {
+      localModelSpec({
         execPath: process.execPath,
       }),
     pidFile: localModelPidFile(paths.userData),
@@ -177,7 +146,6 @@ export async function runDue(options: {
 
   const runtime = new AgentRuntime({
     paths,
-    readSecret: readSecretWithoutKeychain(paths),
     appName: PRODUCT_NAME,
     localModel,
   });

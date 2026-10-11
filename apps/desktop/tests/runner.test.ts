@@ -19,7 +19,6 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {
   ProfileStore,
-  SettingsStore,
   WorkspaceStore,
   resolveAppPaths,
 } from '@marimo/runtime';
@@ -79,16 +78,6 @@ describe('runDue', () => {
     await profiles.load();
     const profile = await profiles.activeProfile();
 
-    /*
-     * Pointed at a provider that needs a key, so the outcome recorded below is
-     * the designed one for an install with a keyed provider and no key. A fresh
-     * install now defaults to the model the app carries, which refuses for a
-     * different reason — and that reason has a test of its own below.
-     */
-    await new SettingsStore(paths.settings).patch({
-      providers: {active: 'deepseek'},
-    });
-
     await writeFile(
       paths.jobs,
       JSON.stringify({
@@ -145,10 +134,12 @@ describe('runDue', () => {
 
     const after = JSON.parse(await readFile(paths.jobs, 'utf8'));
     const job = after.jobs.jobs[0];
-    // No key is stored, so the designed outcome is a recorded refusal rather
-    // than silence — and the marker has moved, so it will not fire again.
+    // This test directory has no weights in it, so the designed outcome is a
+    // recorded refusal rather than silence — the runner must not report a run it
+    // could not do as one it did. And the marker has moved, so it will not fire
+    // again the next minute.
     expect(job.lastStatus).toBe('error');
-    expect(job.lastError).toMatch(/API key/u);
+    expect(job.lastError).toMatch(/model/iu);
     expect(job.sessionId).toBeTruthy();
   });
 
@@ -167,11 +158,6 @@ describe('runDue', () => {
    */
   it('records that the built-in model is missing, and where it looked', async () => {
     await seedDueJob();
-    // A fresh install is pointed at the built-in model; this is the state a
-    // checkout with no weights in it is in.
-    await new SettingsStore(paths.settings).patch({
-      providers: {active: 'builtin'},
-    });
 
     const report = await runDue({paths});
 

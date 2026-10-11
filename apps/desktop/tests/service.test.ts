@@ -1,28 +1,27 @@
 /**
  * The parts of "keep jobs running" that can only be decided in the app.
  *
- * Which binary to name, and whether the stored key is one a windowless process
- * could read. The second is the whole reason this file exists: switching the
- * service on over an encrypted key does not fail loudly — it runs every minute,
- * refuses for want of a key, and records that, with nobody watching.
+ * Which binary to name, where the runner script is, and which directory the
+ * window is actually using. That last one is invariant 13: the app and the
+ * runner resolve the same user-data directory, and when they do not nothing
+ * errors — the window writes one `jobs.json`, the service reads another, finds
+ * nothing due, and exits 0.
+ *
+ * There used to be a third answer here, about whether a stored API key was one a
+ * windowless process could read. It went with the key: a background run needs no
+ * secret at all, because the model is a local engine and the runner dials no
+ * connectors.
  */
-import {mkdtemp, rm, writeFile, mkdir} from 'node:fs/promises';
+import {mkdtemp, rm} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {resolveAppPaths} from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
-import {defaultProviders} from '@marimo/protocol';
 
-import {keysAreReadable, serviceSpec} from '../src/main/service.js';
+import {serviceSpec} from '../src/main/service.js';
 import type {ServiceContext} from '../src/main/service.js';
-
-/** A key file, in the shape the app writes. */
-async function writeKey(path: string, contents: string): Promise<void> {
-  await mkdir(join(path, '..'), {recursive: true});
-  await writeFile(path, contents, 'utf8');
-}
 
 describe('the service definition', () => {
   let dir: string;
@@ -38,7 +37,6 @@ describe('the service definition', () => {
       appPath: '/opt/marimo/resources/app.asar',
       home: '/home/sam',
       configHome: '/home/sam/.config',
-      providers: async () => defaultProviders(),
     };
   });
 
@@ -70,107 +68,5 @@ describe('the service definition', () => {
 
   it('wakes once a minute, which is the finest a schedule can ask for', () => {
     expect(serviceSpec(context).everyMinutes).toBe(1);
-  });
-});
-
-describe('whether the runner could read the key', () => {
-  let dir: string;
-  let paths: AppPaths;
-  let context: ServiceContext;
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(process.cwd(), '.marimo-service-key-'));
-    paths = resolveAppPaths(dir);
-    context = {
-      paths,
-      execPath: '/opt/marimo/marimo-agent',
-      appPath: '/opt/marimo/app.asar',
-      home: '/home/sam',
-      configHome: '/home/sam/.config',
-      providers: async () => defaultProviders(),
-    };
-  });
-
-  afterEach(async () => {
-    await rm(dir, {recursive: true, force: true});
-  });
-
-  /** The file the active provider's key lives in. */
-  function keyFile(): string {
-    const provider = defaultProviders();
-    return paths.providerSecrets[provider.active];
-  }
-
-  it('is true when the key is stored as plain text', async () => {
-    await writeKey(
-      keyFile(),
-      `plaintext:${Buffer.from('sk-abc').toString('base64')}`,
-    );
-    expect(await keysAreReadable(context)).toBe(true);
-  });
-
-  /*
-   * The case the warning exists for. A process with no keychain — which is what
-   * the runner is — cannot decrypt this, so a service switched on over it would
-   * run every minute and stop at the key every time.
-   */
-  it('is false when the key is encrypted', async () => {
-    await writeKey(
-      keyFile(),
-      `encrypted:${Buffer.from('whatever').toString('base64')}`,
-    );
-    expect(await keysAreReadable(context)).toBe(false);
-  });
-
-  /*
-   * A key that has not been entered yet is a different problem, and blaming
-   * encryption for it would send the user to the wrong setting.
-   */
-  it('is true when there is no key at all', async () => {
-    expect(await keysAreReadable(context)).toBe(true);
-  });
-
-  it('is false on a file it cannot make sense of, rather than optimistic', async () => {
-    await writeKey(keyFile(), 'something else entirely');
-    expect(await keysAreReadable(context)).toBe(false);
-  });
-
-  it('is false when the settings themselves cannot be read', async () => {
-    const broken: ServiceContext = {
-      ...context,
-      providers: async () => {
-        throw new Error('the settings file is unreadable');
-      },
-    };
-    expect(await keysAreReadable(broken)).toBe(false);
-  });
-
-  /*
-   * The built-in model, and the reason this is worth its own case.
-   *
-   * `keysReadable` is what the "keep jobs running" switch warns on, and the
-   * warning is about a key the runner could not decrypt. A fresh install has no
-   * key at all — the model the app carries needs none — so there is nothing to
-   * warn about, and the switch works with no setup. That falls out of asking the
-   * *active* provider for its secret rather than asking about secrets in
-   * general, which is exactly why it is asserted: a change that read the
-   * DeepSeek file regardless would put a warning about encryption in front of
-   * every new user, about a key they do not have.
-   */
-  it('is true for the built-in model, which has no key to be unreadable', async () => {
-    const fresh: ServiceContext = {
-      ...context,
-      providers: async () => ({
-        ...defaultProviders(),
-        active: 'builtin' as const,
-      }),
-    };
-    // A key left over from a previous provider must not be consulted either.
-    await writeKey(
-      paths.providerSecrets.deepseek,
-      `encrypted:${Buffer.from('whatever').toString('base64')}`,
-    );
-
-    expect(await keysAreReadable(fresh)).toBe(true);
   });
 });

@@ -6,8 +6,7 @@ Marimo Agent is a chat window with a marimo moss ball living in it, a minimal
 harness that runs one turn at a time, and a small floating companion that sits on
 your desktop and answers in bubbles above itself. It comes with a model that runs
 on your machine, so there is no account to make and nothing to configure before
-it answers — and nothing you type leaves the computer unless you point it at a
-service yourself.
+it answers — and nothing you type leaves the computer.
 
 Two things make it different from a chat window with a plugin folder. **Nothing
 is on until you turn it on** — a fresh install can read your files and search the
@@ -18,8 +17,9 @@ whether or not the app is open.
 
 It is also built at two sizes. **Simple** is the everyday screen: a name, one
 choice about what the agent may do, and the model. **Power user mode** is
-everything — every provider, every address, every model id, every tool as its own
-switch. One switch in Settings, and neither screen is a different app.
+everything — the temperature, the folder widths, the engine's own command line,
+every tool as its own switch. One switch in Settings, and neither screen is a
+different app.
 
 ## What works today
 
@@ -28,16 +28,16 @@ switch. One switch in Settings, and neither screen is a different app.
 | ✅  | The built-in model: Qwen3-1.7B (Q4_K_M) run by a llama.cpp engine the app owns, on loopback, with no account, no key and your own hardware. It is what a fresh install answers with                                                    |
 | ✅  | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a workspace rail with the conversations filed under the folder they work in, light and dark following the OS or chosen                       |
 | ✅  | Two sizes of app: a simple screen and a power screen, with one switch between them                                                                                                                                                     |
-| ✅  | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming provider, 6 backends, ~30 tools, skills, `memory.md`, JSONL conversations                                                                                  |
+| ✅  | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming client over one backend, ~30 tools, skills, `memory.md`, JSONL conversations                                                                             |
 | ✅  | Approvals that survive a restart, because a pending call is derived from the stored conversation rather than held in memory                                                                                                            |
 | ✅  | MCP connectors: add one by pasting a command, test it before saving, and choose whether to trust it — untrusted servers ask before every call                                                                                          |
 | ✅  | Helper agents: `spawn_agent` hands a separable piece of work to a sub-agent that shares the conversation, so its approvals are visible and its words are labelled                                                                      |
 | ✅  | Per-agent capabilities: every tool is a switch, and a tool that is off is not offered to the model at all                                                                                                                              |
 | ✅  | The stores: jobs, profiles, settings, skills, memory proposals — with format versioning that refuses to overwrite a document it cannot read                                                                                            |
-| ✅  | Secrets in the OS keychain, with a plain-text opt-in for the machine with no keychain and for running jobs while the app is closed                                                                                                     |
+| ✅  | Secrets in the OS keychain: connector tokens, encrypted at rest, with a machine that has no keychain told so rather than written to in the clear                                                                                       |
 | ✅  | Scheduled jobs while the app is open, and a headless runner plus an OS service that keeps them going while it is closed                                                                                                                |
 | ✅  | The desktop companion: a frameless, transparent, click-through moss ball that answers in bubbles above itself, with its own chat bar underneath and its own settings for how long it answers, how much it shows, and whether it floats |
-| ✅  | A first run that asks for a key instead of showing a chat that refuses                                                                                                                                                                 |
+| ✅  | A first run that says what is ready instead of showing a chat that refuses                                                                                                                                                             |
 | ✅  | A memory review: after a conversation goes quiet the agent proposes what is worth remembering, and asks before writing it                                                                                                              |
 | 🚧  | Windows and macOS installers (the config is written and both package; the installers are unbuilt — see [Building a release](#building-a-release))                                                                                      |
 
@@ -107,25 +107,32 @@ runtime or a second copy of the logic — and it is what lets it run from a time
 boot, over SSH, or in a container, none of which a plain Electron process can do.
 
 The cost is real and worth stating: with no `app` object there is no
-`safeStorage`, so an encrypted API key cannot be read. **Running jobs while the
-app is closed needs the plain-text secret opt-in**, and the app says so rather
-than failing quietly.
+`safeStorage`, so an encrypted secret cannot be read. It stopped mattering when
+the app stopped having a model key — a background run needs no secret at all,
+because the model is a local engine and the runner dials no connectors. What the
+runner *does* need is the same user-data directory the window is using, which is
+why the service definition bakes that path in.
 
 ### The model the app carries
 
 A fresh install has a model: Qwen3-1.7B at Q4_K_M, run by a llama.cpp
 `llama-server` that the app starts and supervises on loopback. No account, no
-key, no address to type, and nothing typed into the chat leaves the machine. It
-is the sixth entry in the provider catalogue and the only one this app runs
-itself — the descriptor field that says so is `managed`.
+key, no address to type, and nothing typed into the chat leaves the machine.
 
-A managed provider is the one place a base URL is _not_ an answer. The engine
-comes up on whatever port was free, so the stored address is a placeholder that
-is never sent: the resolver substitutes the live one, and a turn asked for
-without a running engine is refused with a sentence rather than sent to whichever
-process happens to be listening. That matters more than it looks — the
-placeholder is a port on this machine, and a conversation is not something to
-hand to a stranger.
+It is the *only* model, and that is a decision rather than an omission. There is
+no provider catalogue, no address to edit, no key to paste and no model list to
+fetch — a menu of services was three ways of describing a choice this app no
+longer offers. The engine's argv is fixed too: an 8K context window, thinking off
+because most questions are the easy kind, and `--jinja` because without it the
+agent is offered no tools at all. `MARIMO_MODEL_DIR` is the one override, and it
+exists for a development checkout rather than for a user.
+
+The engine's address is the one thing here that is _not_ an answer. It comes up
+on whatever port was free, so no address is stored anywhere: the resolver takes
+the live one from the process that started it, and a turn asked for without a
+running engine is refused with a sentence rather than sent to whichever process
+happens to be listening. That matters more than it looks — a conversation is not
+something to hand to a stranger.
 
 Both processes start an engine, and they find its files through one function.
 The window hands it Electron's `process.resourcesPath`; the headless runner has
@@ -153,8 +160,9 @@ a power user can read in Settings.
 
 Everything the app can do is still a switch somebody turns on. What changed is
 that there are two screens to turn it on from: a simple one with three choices in
-plain words, and the power screen with every provider, address, model id and
-individual tool. They are the same app, the same stores and the same grants — the
+plain words, and the power screen with the temperature, the engine's command
+line and every individual tool. They are the same app, the same stores and the
+same grants — the
 preset a user picks writes `enabledTools`, exactly as ticking the switches would,
 and the card that is lit is _worked out_ by comparing that grant against the
 lists. There is one source of truth for what an agent may do, and it is still the
@@ -240,7 +248,8 @@ changing it never aborts a turn in flight.
 
 ```
 packages/protocol   The typed contract. No Node, no Electron, no React.
-packages/agent      The agent: ADK, the provider, tools, skills, memory, sessions.
+packages/agent      The agent: ADK, the OpenAI-compatible client, tools, skills,
+                    memory, sessions.
 packages/runtime    Where files live, secrets, the stores, document versions.
 apps/desktop
   src/main          Window, IPC, path and secret adapters, (next: tray, connectors)
@@ -263,7 +272,7 @@ sessions/               one JSONL file per conversation, plus an index
 profiles.json           the agents: identity and capabilities
 workspaces.json         the folders every agent can work in, and the current one
 jobs.json               scheduled jobs and how their last run went
-settings.json           preferences, providers, connectors
+settings.json           preferences and connectors
 skills.json             skills you wrote
 memory-proposals.json   what the agent would remember, waiting for an answer
 window-state.json       where the main window was left
@@ -285,8 +294,10 @@ parse bug is never the end of your data.
 
 **The settings file is the exception that proves it.** It has never carried a
 version, so every settings file in existence looks like an older format; treating
-that as "not mine" would reset everybody's providers and connectors on upgrade.
-It names its version explicitly, and stamps one from the next write on.
+that as "not mine" would reset everybody's connectors and preferences on upgrade.
+It names its version explicitly, and stamps one from the next write on. A file
+written by a build that had the provider catalogue still loads: the fields this
+build no longer knows are ignored, and every preference beside them survives.
 
 ## Status and next steps
 
@@ -305,9 +316,9 @@ Known gaps, stated plainly:
   scheduled for nothing — somebody should either wire them or remove them.
 - **The built-in engine is the CPU build**, and the macOS one, which is Metal.
   Vulkan and CUDA builds exist upstream and are not shipped: a per-GPU build
-  matrix is a lot of machinery for a 1.7B model, and somebody with a GPU can
-  point the "Local" provider at a server of their own — a path that already
-  exists and that this feature deliberately did not replace.
+  matrix is a lot of machinery for a 1.7B model. There used to be a "Local"
+  provider a user with a GPU could point at their own server; it went with the
+  catalogue, so a GPU build is now a packaging job rather than a setting.
 - **The `.deb` and the two installers** need a platform each; see the table
   above for what is verified and what is not.
 

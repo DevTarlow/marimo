@@ -39,11 +39,7 @@ import type {
   SkillService,
   WebSearchProvider,
 } from '@marimo/agent';
-import {
-  activeProvider,
-  DEFAULT_AGENT_IDENTITY,
-  PROVIDERS,
-} from '@marimo/protocol';
+import {DEFAULT_AGENT_IDENTITY, LOCAL_MODEL_ID} from '@marimo/protocol';
 import type {
   AgentProfile,
   AgentUiEvent,
@@ -54,7 +50,6 @@ import type {
   TranscriptMessage,
   ProfileCatalog,
   ProfilePatch,
-  ProviderId,
   SessionSummary,
   SettingsPatch,
   StoredSettings,
@@ -65,7 +60,6 @@ import type {
 
 import type {AppPaths} from '../paths.js';
 import {ProfileStore} from '../profiles.js';
-import type {SecretRead} from '../secrets.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
 import {SettingsStore} from '../settings.js';
 import {SkillStore} from '../skills.js';
@@ -82,15 +76,15 @@ export interface RuntimeServices {
 }
 
 /**
- * The engine behind a provider this app runs itself, as the runtime needs it.
+ * The engine the app carries, as the runtime needs it.
  *
  * Two methods, and deliberately not the supervisor's `status`: this package
  * starts an engine and stops one, and the card that *describes* it belongs to
- * the window that draws the card. An interface here rather than the class, for
- * the reason `readSecret` below is a function — the two processes answer it
- * differently (the window keeps an engine warm, the runner starts one for the
- * length of a job) and neither answer belongs in this file. It also means no
- * test of this package loads a gigabyte of weights.
+ * the window that draws the card. An interface here rather than the class,
+ * because the two processes answer it differently — the window keeps an engine
+ * warm, the runner starts one for the length of a job — and neither answer
+ * belongs in this file. It also means no test of this package loads a gigabyte
+ * of weights.
  */
 export interface LocalModelRunner {
   ensureRunning(): Promise<
@@ -101,15 +95,6 @@ export interface LocalModelRunner {
 
 export interface AgentRuntimeOptions {
   paths: AppPaths;
-  /**
-   * Reads a provider's key, and says why when it cannot.
-   *
-   * Injected because the two processes answer it differently and neither answer
-   * belongs here: the window decrypts through the OS keychain, and the runner —
-   * which has no `app` and therefore no `safeStorage` — reads the plain-text
-   * opt-in or reports that it cannot.
-   */
-  readSecret: (providerId: ProviderId) => Promise<SecretRead>;
   /** Present in the window, absent in the runner, which has no browser. */
   webSearch?: WebSearchProvider;
   /** The rest of the app's tools, resolved per profile. */
@@ -132,11 +117,11 @@ export interface AgentRuntimeOptions {
   onEvent?: (event: AgentUiEvent) => void;
   appName?: string;
   /**
-   * The engine for a provider this app runs itself.
+   * The engine the app carries.
    *
-   * Absent in a caller that cannot have one — a test, a future CLI pointed at an
-   * API — and in that case a managed provider is refused with a sentence rather
-   * than half-answered.
+   * Absent in a caller that cannot have one — a test, or a command that only
+   * reads stored conversations — and in that case a turn is refused with a
+   * sentence rather than half-answered.
    */
   localModel?: LocalModelRunner;
 }
@@ -250,14 +235,13 @@ export class AgentRuntime {
    * would grant nothing when ticked.
    */
   async catalog(): Promise<ProfileCatalog> {
-    const settings = await this.settingsStore.load();
     const workspaceRoot =
       workspaceRootFor(await this.workspaceStore.load()) ??
       this.options.paths.defaultWorkspace;
 
     const tools = describeTools({
       workspaceRoot,
-      model: activeProvider(settings.providers).model,
+      model: LOCAL_MODEL_ID,
       ...(this.options.webSearch ? {webSearch: this.options.webSearch} : {}),
       /*
        * The host always builds the helper tool; the profile decides whether
@@ -298,51 +282,24 @@ export class AgentRuntime {
   /**
    * Changes a preference.
    *
-   * Hosts are dropped when the change is one an agent was built around — its
-   * model, its tool reach, whether it may fetch from the private network — so
+   * Hosts are dropped when the change is one an agent was built around — how
+   * literal its wording is, whether it may fetch from the private network — so
    * the next turn is built from what the settings now say rather than from what
    * they said when the host was made.
+   *
+   * The model used to be in that list, and it cannot be any more: there is one
+   * model, so nothing a settings write can do changes what a host is built with.
    */
   async updateSettings(patch: SettingsPatch): Promise<StoredSettings> {
     const before = await this.settingsStore.load();
     const after = await this.settingsStore.patch(patch);
 
     const rebuild =
-      before.providers.active !== after.providers.active ||
       before.temperature !== after.temperature ||
       before.maxOutputTokens !== after.maxOutputTokens ||
-      before.allowPrivateNetworkFetch !== after.allowPrivateNetworkFetch ||
-      JSON.stringify(before.providers.configs) !==
-        JSON.stringify(after.providers.configs);
+      before.allowPrivateNetworkFetch !== after.allowPrivateNetworkFetch;
 
     if (rebuild) {
-      for (const profileId of [...this.hosts.keys()]) {
-        this.dropHost(profileId);
-      }
-    }
-    return after;
-  }
-
-  /**
-   * Records what one provider says it serves.
-   *
-   * Asking the endpoint is the caller's job: it needs an API key, and this class
-   * is deliberately never handed one. So this is the write, plus the same host
-   * invalidation `updateSettings` does — recording a list can move the selected
-   * model onto one the endpoint actually offers, and a host still holding the
-   * retired name would fail the next turn for a reason nobody could see.
-   */
-  async setAvailableModels(
-    provider: ProviderId,
-    models: string[],
-  ): Promise<StoredSettings> {
-    const before = await this.settingsStore.load();
-    const after = await this.settingsStore.setAvailableModels(provider, models);
-
-    if (
-      JSON.stringify(before.providers.configs) !==
-      JSON.stringify(after.providers.configs)
-    ) {
       for (const profileId of [...this.hosts.keys()]) {
         this.dropHost(profileId);
       }
@@ -654,10 +611,10 @@ export class AgentRuntime {
    *
    * Resolved through `host()` rather than `ensureHost()`, which is the opposite
    * of what the calls above do and deliberately so: those write metadata a
-   * conversation can be filed or named without a provider. This one *asks the
-   * model*, so it needs the real configuration, and a missing key has to come
-   * back as the sentence the window already knows how to draw rather than as a
-   * request to an empty endpoint.
+   * conversation can be filed or named without a model. This one *asks the
+   * model*, so it needs the real configuration, and an engine that is not up has
+   * to come back as the sentence the window already knows how to draw rather
+   * than as a request to an empty endpoint.
    */
   async compact(profileId: string, sessionId: string): Promise<CompactResult> {
     const resolved = await this.host(profileId, sessionId);
@@ -665,33 +622,6 @@ export class AgentRuntime {
       throw new Error(resolved.problem);
     }
     return await resolved.host.compact(sessionId, profileId);
-  }
-
-  /**
-   * Chooses the model for one conversation, or clears the choice with `null`.
-   *
-   * The index is read back afterwards rather than the write being echoed: the
-   * answer is the `SessionSummary` the rail replaces its copy with, and only the
-   * entry says whether the conversation has a model of its own or is following
-   * the app default again.
-   *
-   * The placeholder-config host, like `renameSession`: choosing a model has
-   * nothing to do with a *working* provider, and a missing key must not stop the
-   * picker from being used.
-   */
-  async setSessionModel(
-    profileId: string,
-    sessionId: string,
-    model: string | null,
-  ): Promise<SessionSummary> {
-    const host = await this.ensureHost(profileId);
-    await host.setSessionModel(sessionId, model ?? undefined, profileId);
-    const listed = await host.listSessions(profileId);
-    const entry = listed.find((session) => session.id === sessionId);
-    if (entry === undefined) {
-      throw new Error(`Unknown session: ${sessionId}`);
-    }
-    return entry;
   }
 
   /** Deletes a conversation, aborting a run in it if there is one. */
@@ -711,9 +641,9 @@ export class AgentRuntime {
    * Starts a conversation.
    *
    * Deliberately does *not* require a working configuration. A conversation is a
-   * file, and the window needs somewhere to put the refusal when the provider is
-   * not set up yet — gating this on a resolvable config would mean a fresh
-   * install could not open the chat it is supposed to explain itself in.
+   * file, and the window needs somewhere to put the refusal when the engine is
+   * not up — gating this on a resolvable config would mean a fresh install could
+   * not open the chat it is supposed to explain itself in.
    *
    * The profile and the *current* folder are stamped on at creation, which is
    * what files the conversation under the right agent and the right group in the
@@ -732,21 +662,20 @@ export class AgentRuntime {
     const host = await this.ensureHost(profileId);
     return await host.createSession(
       title,
-      undefined,
       profileId,
       (await this.workspaceStore.activeWorkspaceId()) ?? undefined,
     );
   }
 
   /**
-   * Reads a conversation, which needs no provider at all.
+   * Reads a conversation, which needs no model at all.
    *
    * Deliberately not `host()`. That resolves the model configuration and refuses
-   * without a key — correctly, for a turn — but reading a stored conversation
-   * has nothing to do with a model. Going through `host()` made every
-   * conversation in the app appear *empty* the moment a key expired, was
-   * cleared, or had not been entered yet: the messages were on disk and the
-   * window showed nothing, which is indistinguishable from having lost them.
+   * without a running engine — correctly, for a turn — but reading a stored
+   * conversation has nothing to do with a model. Going through `host()` made
+   * every conversation in the app appear *empty* whenever the engine could not be
+   * started: the messages were on disk and the window showed nothing, which is
+   * indistinguishable from having lost them.
    */
   async transcript(
     profileId: string,
@@ -795,10 +724,10 @@ export class AgentRuntime {
      * happened before it was up would produce a configuration with no address
      * and a refusal the user cannot act on. Starting it *here* rather than in a
      * caller is what makes the two processes the same code — the window and the
-     * headless runner both arrive at `host`, and neither has to know that a
-     * managed provider is a process.
+     * headless runner both arrive at `host`, and neither has to know that the
+     * model is a process.
      */
-    const engine = await this.managedEngine(settings);
+    const engine = await this.startEngine();
     if (!engine.ok) {
       return engine;
     }
@@ -822,10 +751,9 @@ export class AgentRuntime {
     const resolved = await resolveAgentConfig({
       settings,
       profile,
-      readSecret: this.options.readSecret,
       skills: await this.skillsFor(profile),
       ...(workspaceRoot === undefined ? {} : {workspaceRoot}),
-      ...(engine.baseUrl === undefined ? {} : {managedBaseUrl: engine.baseUrl}),
+      ...(engine.baseUrl === undefined ? {} : {engineBaseUrl: engine.baseUrl}),
     });
     if (!resolved.ok) {
       return resolved;
@@ -952,37 +880,28 @@ export class AgentRuntime {
   }
 
   /**
-   * Starts the app's own engine when the active provider needs one.
+   * Starts the app's own engine.
    *
-   * Answers with the live address, or with the sentence explaining why not — the
-   * same shape a missing key has, because from the window's side it is the same
-   * kind of news: a fact about the install, discovered before the turn starts
-   * rather than halfway through it.
-   *
-   * A provider that is not managed costs one lookup and no work at all, which is
-   * why this can sit in front of every turn.
+   * Answers with the live address, or with the sentence explaining why not —
+   * a fact about the install, discovered before the turn starts rather than
+   * halfway through it.
    */
-  private async managedEngine(
-    settings: StoredSettings,
-  ): Promise<{ok: true; baseUrl?: string} | {ok: false; problem: string}> {
-    const descriptor = PROVIDERS[settings.providers.active];
-    if (!descriptor.managed) {
-      return {ok: true};
-    }
-
+  private async startEngine(): Promise<
+    {ok: true; baseUrl?: string} | {ok: false; problem: string}
+  > {
     const runner = this.options.localModel;
     if (runner === undefined) {
       /*
-       * A caller with no engine — a test, or a future headless command pointed at
-       * an API — reaching a managed provider. Said plainly rather than resolved
-       * against the placeholder address, which would send a conversation to
-       * whatever happens to be listening on that port.
+       * A caller with no engine — a test, or a command that only reads stored
+       * conversations. Said plainly rather than resolved against some assumed
+       * address, which would send a conversation to whatever happens to be
+       * listening on that port.
        */
       return {
         ok: false,
         problem:
-          `${descriptor.label} runs inside the app, and this process has no ` +
-          'engine to start it with. Choose another service in Settings.',
+          'The built-in model runs inside the app, and this process has no ' +
+          'engine to start it with.',
       };
     }
 
@@ -1037,7 +956,6 @@ export class AgentRuntime {
       // shape here would mean reading them twice and risking the two reads
       // disagreeing.
       config: {
-        apiKey: '',
         baseUrl: '',
         model: '',
         temperature: 0,

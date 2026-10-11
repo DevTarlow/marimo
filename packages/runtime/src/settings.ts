@@ -5,9 +5,9 @@
  * read and edit. Reads are forgiving: an unknown or malformed field falls back
  * to its default instead of discarding every other setting.
  *
- * The file holds two kinds of state: what the user chose, and the model list the
- * provider reported. Only the first kind is patchable (`SettingsPatch`), so a
- * stale window cannot overwrite the provider's answer with a guess.
+ * Everything in it is something the user chose, so all of it is patchable. It
+ * used to hold a second kind — the model list an endpoint reported — and that
+ * went with the endpoint: there is one model and nothing to ask.
  */
 import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {dirname} from 'node:path';
@@ -21,46 +21,20 @@ import {
 import {
   appearanceSchema,
   companionSettingsSchema,
-  defaultLocalModelSettings,
-  localModelSettingsSchema,
   defaultAppearance,
   defaultCompanionSettings,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
   defaultWindowState,
   defaultDiscordSettings,
-  defaultProviders,
   discordSettingsSchema,
-  fallbackModelsFor,
-  providerIdSchema,
   settingsPatchSchema,
-  storedSettingsSchema,
+  settingsSchema,
   windowStateSchema,
 } from '@marimo/protocol';
-import type {
-  ProviderConfig,
-  ProviderId,
-  Providers,
-  ProvidersPatch,
-  SettingsPatch,
-  StoredSettings,
-} from '@marimo/protocol';
-
-/**
- * The placeholder model list for each provider, before each has been asked.
- *
- * Derived from the catalogue rather than spelled out, because a provider missing
- * from here is a provider whose picker opens on an empty select — the failure
- * that looks like "the app has no models" rather than like a missing line.
- */
-export function defaultAvailableModels(): Record<ProviderId, string[]> {
-  return Object.fromEntries(
-    providerIdSchema.options.map((id) => [id, fallbackModelsFor(id)]),
-  ) as Record<ProviderId, string[]>;
-}
+import type {SettingsPatch, StoredSettings} from '@marimo/protocol';
 
 export function defaultStoredSettings(): StoredSettings {
   return {
-    providers: defaultProviders(),
     /*
      * Power, which is the app in full — and deliberately not the friendly one.
      *
@@ -79,7 +53,6 @@ export function defaultStoredSettings(): StoredSettings {
     appearance: defaultAppearance(),
     temperature: 0.7,
     allowPrivateNetworkFetch: false,
-    allowPlaintextApiKey: false,
     mcpServers: [],
     // Discord is off until the user pastes a bot token, so a fresh install makes
     // no network calls it was not asked to make.
@@ -89,15 +62,6 @@ export function defaultStoredSettings(): StoredSettings {
     // told and a default the renderer owned would be a default the agent could
     // not see.
     companion: defaultCompanionSettings(),
-    /*
-     * The model the app runs itself: the copy that shipped, and a context window
-     * that fits on a laptop.
-     *
-     * A default here rather than in the engine, because these are the two things
-     * the status command has to answer before anything has been started — and
-     * "not started yet" should not read as "not configured".
-     */
-    localModel: defaultLocalModelSettings(),
     // Match the design tokens, so the first launch looks like the stylesheet says
     // it should, and a later drag starts from wherever the user left it.
     sidebarWidth: 272,
@@ -119,7 +83,6 @@ export function defaultStoredSettings(): StoredSettings {
     // Where the agent starts being told that memory.md is getting full. Well
     // under the hard cap, so the warning arrives while there is room to prune.
     memorySoftLimitBytes: DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
-    availableModels: defaultAvailableModels(),
   };
 }
 
@@ -179,11 +142,10 @@ export class SettingsStore {
     const read = await readVersionedDocument(this.file, {
       label: 'The settings file',
       /*
-       * This document has never carried a version — `storedSettingsSchema` has no
-       * such field — so every settings file in existence is version-less, and
-       * treating that as "not mine" would reset every user's providers,
-       * connectors and preferences the first time they upgraded. Naming the
-       * version they are is the migration.
+       * This document has never carried a version — `settingsSchema` has no such
+       * field — so every settings file in existence is version-less, and treating
+       * that as "not mine" would reset every user's connectors and preferences the
+       * first time they upgraded. Naming the version they are is the migration.
        *
        * A *newer* file is still refused, which is the half that matters: a future
        * build that adds a version number will have its settings left alone.
@@ -204,7 +166,7 @@ export class SettingsStore {
 
     if (read.state === 'migrated') {
       // Written back once, so the upgrade is not repeated on every launch.
-      const upgraded = storedSettingsSchema.safeParse({
+      const upgraded = settingsSchema.safeParse({
         ...defaultStoredSettings(),
         ...(raw as Record<string, unknown>),
       });
@@ -259,18 +221,6 @@ export class SettingsStore {
             defaults.companion,
             rawObject['companion'],
           ),
-          /*
-           * The local model block, filled the same way. It matters more here
-           * than for most blocks: a hand-edited context size would otherwise
-           * take the provider choice, the connectors and every layout width
-           * with it, and the user would have no idea which field did it.
-           */
-          localModel: fillBlock(
-            localModelSettingsSchema,
-            defaults.localModel,
-            rawObject['localModel'],
-          ),
-          providers: fillProviders(rawObject),
           appearance: fillBlock(
             appearanceSchema,
             defaults.appearance,
@@ -295,12 +245,7 @@ export class SettingsStore {
       ? {...defaults, ...definedOnly(partial.data)}
       : {...defaults};
 
-    // Derived, so an unknown value is discarded rather than trusted.
-    candidate['availableModels'] = readAvailableModels(
-      (raw as {availableModels?: unknown} | undefined)?.availableModels,
-    );
-
-    const result = storedSettingsSchema.safeParse(candidate);
+    const result = settingsSchema.safeParse(candidate);
     this.cache = result.success ? result.data : defaults;
     return this.cache;
   }
@@ -310,13 +255,12 @@ export class SettingsStore {
       const current = await this.load();
       const defined = definedOnly(patch);
       /*
-       * Both nested blocks are merged rather than replaced.
+       * The nested blocks are merged rather than replaced.
        *
        * Their patch schemas accept any subset — that is the point, so flipping one
-       * switch does not mean sending the channel name and the bot's name back, and
-       * setting one provider's base URL does not mean sending the other two — but a
-       * shallow spread would then store the partial block and throw away the fields
-       * the window did not mention.
+       * switch does not mean sending the channel name and the bot's name back —
+       * but a shallow spread would then store the partial block and throw away
+       * the fields the window did not mention.
        */
       const discord = defined.discord
         ? {...current.discord, ...definedOnly(defined.discord)}
@@ -324,22 +268,14 @@ export class SettingsStore {
       const companion = defined.companion
         ? {...current.companion, ...definedOnly(defined.companion)}
         : current.companion;
-      const localModel = defined.localModel
-        ? {...current.localModel, ...definedOnly(defined.localModel)}
-        : current.localModel;
-      const providers = defined.providers
-        ? mergeProviders(current.providers, defined.providers)
-        : current.providers;
       const appearance = defined.appearance
         ? {...current.appearance, ...definedOnly(defined.appearance)}
         : current.appearance;
-      const merged = storedSettingsSchema.parse({
+      const merged = settingsSchema.parse({
         ...current,
         ...defined,
         discord,
         companion,
-        localModel,
-        providers,
         appearance,
       });
       await this.write(merged);
@@ -372,47 +308,6 @@ export class SettingsStore {
     return queued;
   }
 
-  /**
-   * Records what one provider says it serves.
-   *
-   * A model the user had selected there may no longer exist, so that provider's
-   * default is moved to something the endpoint actually offers rather than left
-   * pointing at a retired name. Chats that picked a model explicitly keep their
-   * choice, and no other provider is touched — the lists are answers about one
-   * endpoint each.
-   */
-  async setAvailableModels(
-    provider: ProviderId,
-    models: string[],
-  ): Promise<StoredSettings> {
-    const unique = [...new Set(models.filter((id) => id.length > 0))];
-    if (unique.length === 0) {
-      return await this.load();
-    }
-
-    return await this.enqueue(async () => {
-      const current = await this.load();
-      const config = current.providers.configs[provider];
-      const merged = storedSettingsSchema.parse({
-        ...current,
-        providers: {
-          ...current.providers,
-          configs: {
-            ...current.providers.configs,
-            [provider]: {
-              baseUrl: config.baseUrl,
-              model: chooseModel(unique, config.model),
-            },
-          },
-        },
-        availableModels: {...current.availableModels, [provider]: unique},
-      });
-      await this.write(merged);
-      this.cache = merged;
-      return merged;
-    });
-  }
-
   private async write(settings: StoredSettings): Promise<void> {
     // Refused before anything is written: a lenient read plus a write is how a
     // user's settings disappear.
@@ -429,19 +324,6 @@ export class SettingsStore {
     );
     await rename(temporary, this.file);
   }
-}
-
-/** Keep the current model when it still exists; otherwise pick a fresh one. */
-export function chooseModel(available: string[], current: string): string {
-  if (available.includes(current)) {
-    return current;
-  }
-  // Prefer a fast tier when a previous default has been retired: the cheap
-  // model is the least surprising thing to land on.
-  return (
-    available.find((id) => /flash|mini|lite|small|fast/i.test(id)) ??
-    available[0]!
-  );
 }
 
 function definedOnly<T extends object>(value: T): Partial<T> {
@@ -476,150 +358,4 @@ function fillBlock<T extends object>(
 ): T {
   const parsed = schema.safeParse({...defaults, ...asRecord(raw)});
   return parsed.success && parsed.data ? parsed.data : defaults;
-}
-
-/**
- * The provider block, filled one provider at a time.
- *
- * Deeper than a single `fillBlock` because the block holds one sub-object per
- * provider: a typo in the Gemini address must not cost the user the provider they
- * were actually using, or the address they typed for their own server.
- *
- * The loop runs over the catalogue, so a provider added to `PROVIDER_IDS` is
- * filled here the moment it exists. The one per-provider difference the loop
- * cannot express is which provider a file written before the picker existed
- * belonged to: that file holds `model` and `baseUrl` at the top level, which the
- * schema now strips. They were DeepSeek's — it was the only provider then — so
- * they become DeepSeek's entry in the new block, and the user's model and
- * (possibly local) base URL survive the upgrade. Those same fields are what says
- * such a file is *pointed* at DeepSeek, which is the other half of the same
- * thought and is decided below.
- */
-function fillProviders(raw: Record<string, unknown>): Providers {
-  const defaults = defaultProviders();
-  const source = asRecord(raw['providers']);
-  const rawConfigs = asRecord(source['configs']);
-  const legacy: Partial<ProviderConfig> = {};
-  const legacyBaseUrl = raw['baseUrl'];
-  const legacyModel = raw['model'];
-  if (typeof legacyBaseUrl === 'string' && legacyBaseUrl.length > 0) {
-    legacy.baseUrl = legacyBaseUrl;
-  }
-  if (typeof legacyModel === 'string' && legacyModel.length > 0) {
-    legacy.model = legacyModel;
-  }
-
-  const active = providerIdSchema.safeParse(source['active']);
-  const configs = {} as Record<ProviderId, ProviderConfig>;
-  for (const id of providerIdSchema.options) {
-    configs[id] = fillProviderConfig(
-      defaults.configs[id],
-      rawConfigs[id],
-      id === 'deepseek' ? legacy : {},
-    );
-  }
-  return {
-    /*
-     * Which provider a file is pointed at, in the order the evidence is good.
-     *
-     * The file's own answer first, obviously. Then the legacy fields: a file
-     * holding a top-level `model` or `baseUrl` is a file from before the picker
-     * existed, it was DeepSeek's — the only provider then — and calling it
-     * active is how the user's model and address go on being used rather than
-     * sitting in a config nothing points at.
-     *
-     * Only a file with no evidence either way gets the build's default, which is
-     * the model the app carries. A file written by any build that had the picker
-     * always names its provider, because the whole document is written on every
-     * save.
-     */
-    active: active.success
-      ? active.data
-      : Object.keys(legacy).length > 0
-        ? 'deepseek'
-        : defaults.active,
-    configs,
-  };
-}
-
-function fillProviderConfig(
-  defaults: ProviderConfig,
-  raw: unknown,
-  legacy: Partial<ProviderConfig> = {},
-): ProviderConfig {
-  const source = asRecord(raw);
-  return {
-    // The block's own value wins; a legacy top-level field only fills a gap.
-    baseUrl: firstNonEmpty([
-      source['baseUrl'],
-      legacy.baseUrl,
-      defaults.baseUrl,
-    ]),
-    model: firstNonEmpty([source['model'], legacy.model, defaults.model]),
-  };
-}
-
-function firstNonEmpty(candidates: unknown[]): string {
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate.length > 0) {
-      return candidate;
-    }
-  }
-  return '';
-}
-
-/**
- * What each provider last reported.
- *
- * A provider with no stored list falls back to the placeholder, because the
- * picker has to show *something* before the first refresh and an empty select is
- * a worse answer than a name that may already be stale. A list stored before the
- * picker existed was a flat array, and it was DeepSeek's.
- *
- * Keyed off the catalogue like the two functions above it, so a new provider
- * cannot be the one whose models are stored and then thrown away on the next
- * read.
- */
-function readAvailableModels(raw: unknown): Record<ProviderId, string[]> {
-  const byProvider = asRecord(raw);
-  const legacyDeepSeek = Array.isArray(raw) ? raw : undefined;
-  return Object.fromEntries(
-    providerIdSchema.options.map((id) => [
-      id,
-      storedModelList(
-        byProvider[id] ?? (id === 'deepseek' ? legacyDeepSeek : undefined),
-        id,
-      ),
-    ]),
-  ) as Record<ProviderId, string[]>;
-}
-
-function storedModelList(value: unknown, provider: ProviderId): string[] {
-  const list = Array.isArray(value)
-    ? value.filter(
-        (entry): entry is string =>
-          typeof entry === 'string' && entry.length > 0,
-      )
-    : [];
-  return list.length > 0 ? list : fallbackModelsFor(provider);
-}
-
-/**
- * Applies a provider patch over what is stored.
- *
- * Each named provider is merged into its own config, so a patch that changes
- * only the active provider leaves the other two addresses exactly as they were.
- */
-export function mergeProviders(
-  current: Providers,
-  patch: ProvidersPatch,
-): Providers {
-  const configs = {...current.configs};
-  for (const id of providerIdSchema.options) {
-    const next = patch.configs?.[id];
-    if (next) {
-      configs[id] = {...configs[id], ...definedOnly(next)};
-    }
-  }
-  return {active: patch.active ?? current.active, configs};
 }

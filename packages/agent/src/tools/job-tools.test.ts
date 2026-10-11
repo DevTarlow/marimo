@@ -115,7 +115,6 @@ describe('scheduling tools', () => {
 
   function config(): AgentConfig {
     return {
-      apiKey: 'test-key',
       baseUrl: 'http://127.0.0.1:1',
       model: 'deepseek-chat',
       temperature: 0,

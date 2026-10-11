@@ -515,16 +515,14 @@ async function main() {
       fail(`the theme attribute is "${probe.theme}", not light or dark`);
     } else {
       /*
-       * A fresh data directory has no timer installed and no key to encrypt, so
-       * this is what the row should say on a first run.
+       * A fresh data directory has no timer installed, so this is what the row
+       * should say on a first run. It used to carry a second fact — whether a
+       * stored key was one the runner could read — and that went with the key: a
+       * background run needs no secret at all.
        */
-      if (
-        probe.serviceInstalled !== false ||
-        probe.serviceKeysReadable !== true
-      ) {
+      if (probe.serviceInstalled !== false) {
         fail(
-          `the background-service row is wrong: installed=${String(probe.serviceInstalled)} ` +
-            `keysReadable=${String(probe.serviceKeysReadable)}`,
+          `the background-service row is wrong: installed=${String(probe.serviceInstalled)}`,
         );
       } else {
         ok(
@@ -874,8 +872,8 @@ async function main() {
        * command that reported success, or said nothing at all, would be worse
        * than one that fails. That makes the assertion here the honest one for
        * this install — and it still proves the whole path, because the sentence
-       * comes from the provider configuration at the far end of it. A missing
-       * IPC handler would arrive as "unknown method" instead.
+       * comes from the model configuration at the far end of it. A missing IPC
+       * handler would arrive as "unknown method" instead.
        *
        * The check is that it names the *problem*, not the exact wording: one of
        * the two messages is right depending on whether this run has weights, and
@@ -909,105 +907,31 @@ async function main() {
       }
 
       /*
-       * The composer's model picker, driven the way a person drives it.
+       * There is no model picker in the composer any more.
        *
-       * Choosing a model travels schema → IPC → the conversation index → the rail
-       * and back, and the list has to open *upwards* because the box it belongs to
-       * sits at the bottom of the window. Neither is visible from a unit test, and
-       * both are silent when wrong: a list that opened downwards would simply be
-       * off screen, and a picker whose write never landed would keep showing the
-       * old name.
+       * A conversation used to be able to choose its own model, and the control
+       * for it lived beside the box you type in. There is one model now, so what
+       * this asserts is that the control is *gone* — a leftover picker would be a
+       * button that cannot change what answers, which is the kind of dead control
+       * that looks like a working feature from the outside.
        */
-      await evaluate(
-        `document.querySelector('.composer-model .model-picker-trigger')?.click()`,
+      const pickerGone = await evaluate(
+        `document.querySelector('.composer-model') === null &&
+         document.querySelector('.model-picker') === null`,
       );
-      const opened = await until('the model list to open', async () => {
-        const state = await evaluate(`(() => {
-        const trigger = document.querySelector('.composer-model .model-picker-trigger');
-        const popover = document.querySelector('.composer-model .model-picker-popover');
-        if (trigger === null || popover === null) return undefined;
-        return JSON.stringify({
-          above:
-            popover.getBoundingClientRect().bottom <=
-            trigger.getBoundingClientRect().top + 1,
-          search: !!popover.querySelector('.model-picker-search'),
-          options: popover.querySelectorAll('.model-picker-option').length,
-          choice: !popover.querySelector('.model-picker-default'),
-        });
-      })()`);
-        return state === undefined ? undefined : JSON.parse(state);
-      });
-      if (opened.above !== true) {
-        fail('the model list opens downwards, off the bottom of the window');
-      } else if (opened.search !== true || opened.options < 1) {
-        fail(
-          `the model list has nothing to choose from: ${JSON.stringify(opened)}`,
-        );
-      } else if (opened.choice !== true) {
-        /*
-         * A conversation that has never picked a model is following the default.
-         * Offering to "follow the app default" before there is a choice to give up
-         * is a row that does nothing.
-         */
-        fail('a conversation with no model of its own offers to give one up');
+      if (pickerGone !== true) {
+        fail('the composer still offers a model picker');
       } else {
-        ok(`the model list opens upwards with ${opened.options} models`);
-      }
-
-      await evaluate(
-        `document.querySelector('.composer-model .model-picker-option')?.click()`,
-      );
-      const chosen = await until('the chosen model to be shown', async () => {
-        const state = await evaluate(`(() => {
-        const trigger = document.querySelector('.composer-model .model-picker-trigger');
-        if (trigger === null) return undefined;
-        // The popover closing *and* the note going are the two halves of the
-        // write landing: the second is what says the choice is no longer the
-        // app default's.
-        return document.querySelector('.composer-model .model-picker-popover') === null &&
-          trigger.querySelector('.model-picker-note') === null
-          ? trigger.textContent.trim()
-          : undefined;
-      })()`);
-        return state === undefined ? undefined : state;
-      });
-      ok(`the conversation now answers with ${chosen}`);
-
-      await evaluate(
-        `document.querySelector('.composer-model .model-picker-trigger')?.click()`,
-      );
-      await until(
-        'the list to open again',
-        async () =>
-          await evaluate(
-            `document.querySelector('.composer-model .model-picker-default') !== null`,
-          ),
-      );
-      await evaluate(
-        `document.querySelector('.composer-model .model-picker-default')?.click()`,
-      );
-      const back = await until('the choice to be given up', async () => {
-        const note = await evaluate(
-          `document.querySelector('.composer-model .model-picker-note')?.textContent ?? null`,
-        );
-        return note === 'default' ? note : undefined;
-      });
-      if (back !== 'default') {
-        fail('giving up the model choice did not go back to the app default');
-      } else {
-        ok(
-          'the model choice can be given up, and the conversation follows the default',
-        );
+        ok('the composer has no model picker, because there is one model');
       }
 
       /*
-       * The provider picker, opened the way a person opens it.
+       * Settings, opened the way a person opens it.
        *
-       * Its list is drawn from the protocol catalogue and its value comes from the
-       * settings schema, so a provider on one side and not the other is a menu
-       * that quietly offers the wrong set — and a `<select>` whose value matches no
-       * option shows its first entry instead of what is stored. Neither is visible
-       * from a unit test, because each side is right on its own.
+       * Everything below reaches *into* this dialog: which sections each screen
+       * draws, which controls the Model card has, and whether the app identity and
+       * the preferences box are both there. A dialog that failed to open would
+       * take all of that coverage with it and look like a pass.
        */
       await send('Runtime.evaluate', {
         expression: `[...document.querySelectorAll('.head button')]
@@ -1107,8 +1031,10 @@ async function main() {
 
       if (powerScreen.checked !== true) {
         fail('the power-user switch would not stay on');
-      } else if (!powerScreen.titles.includes('Provider')) {
-        fail('turning the switch on did not reveal the Provider section');
+      } else if (powerScreen.titles.includes('Provider')) {
+        fail('the power screen still draws a Provider section');
+      } else if (!powerScreen.titles.includes('Model')) {
+        fail('the power screen does not draw the Model section');
       } else if (powerScreen.density !== 'compact') {
         fail(`the power screen is drawn at density "${powerScreen.density}"`);
       } else {
@@ -1145,144 +1071,58 @@ async function main() {
         }
       };
 
-      await openSection('Provider');
-
-      /**
-       * Reads the Provider card as it stands.
-       *
-       * One probe for both shapes of it, because the card has two: a service the
-       * user reaches has an address, a key and a model list to fetch, and the
-       * model the app carries has none of those — its address is a placeholder
-       * the app never sends and its one model is not something to ask an
-       * endpoint for. A control that does nothing is the failure this catches.
-       */
-      const readProviderCard = async () =>
-        await until('the provider picker to appear', async () => {
-          const {result} = await send('Runtime.evaluate', {
-            expression: `(() => {
-            const section = [...document.querySelectorAll('.settings-section')]
-              .find((entry) => entry.querySelector('h3')?.textContent === 'Provider');
-            if (section === undefined) return undefined;
-            const providers = section.querySelector('select');
-            if (providers === null) return undefined;
-            const models = section.querySelectorAll('select')[1];
-            const baseUrl = section.querySelector('input[type="text"]');
-            const keyInput = section.querySelector('input[type="password"]');
-            const fetchButton = [...section.querySelectorAll('button')]
-              .find((entry) => entry.textContent.trim() === 'Fetch Models');
-            /*
-             * The temperature slider is asserted in both shapes, and it is the
-             * older kind of check: the settings file has always held this number
-             * and no screen ever drew it, so a control that quietly stops being
-             * drawn takes a setting nothing can reach with it.
-             */
-            const temperature = section.querySelector('input[type="range"]');
-            return JSON.stringify({
-              labels: [...providers.options].map((option) => option.textContent),
-              active: providers.value,
-              models: models ? [...models.options].map((o) => o.textContent) : [],
-              baseUrl: baseUrl?.value ?? null,
-              hasKeyInput: keyInput !== null,
-              hasFetchButton: fetchButton !== undefined,
-              fetchDisabled: fetchButton?.disabled ?? null,
-              temperature: temperature?.value ?? null,
-            });
-          })()`,
-            returnByValue: true,
-          });
-          return typeof result?.value === 'string'
-            ? JSON.parse(result.value)
-            : undefined;
-        });
-
-      const builtin = await readProviderCard();
-      const providerLabels = builtin.labels ?? [];
-      const sortedLabels = [...providerLabels].sort((a, b) =>
-        a.localeCompare(b),
-      );
-
-      if (providerLabels.length < 2) {
-        fail(`the provider picker offers ${providerLabels.length} provider(s)`);
-      } else if (
-        providerLabels.join('\u0000') !== sortedLabels.join('\u0000')
-      ) {
-        fail(
-          `the provider picker is out of alphabetical order: ${providerLabels.join(', ')}`,
-        );
-      } else if (builtin.active !== 'builtin') {
-        fail(`a fresh install answers with "${builtin.active}"`);
-      } else if (
-        builtin.hasKeyInput ||
-        builtin.hasFetchButton ||
-        builtin.baseUrl !== null
-      ) {
-        /*
-         * The heart of it: the app's own model must not offer a key box, a Fetch
-         * button or an editable address. All three would be controls that write
-         * to a file the resolver never reads, which is a working-looking feature
-         * that is not one.
-         */
-        fail(
-          'the built-in model was offered a key, an address or a model list to ' +
-            `fetch: ${JSON.stringify(builtin)}`,
-        );
-      } else if (builtin.temperature !== '0.7') {
-        fail(
-          `the temperature slider opens at ${String(builtin.temperature)}, not ` +
-            'the 0.7 the settings file defaults to',
-        );
-      } else {
-        ok(
-          `the provider picker offers ${String(providerLabels.length)} providers, ` +
-            `alphabetically: ${providerLabels.join(', ')}`,
-        );
-        ok(
-          'the built-in model offers no key, address or fetch button, and the ' +
-            'temperature slider is drawn',
-        );
-      }
-
       /*
-       * And the other shape, reached the way a person reaches it: by choosing a
-       * service from the picker. This is a real write through IPC, and what it
-       * must produce is a card that now *has* the three controls — which is the
-       * only way to know the two shapes are a choice rather than a missing
-       * feature.
+       * No provider controls anywhere in the dialog.
+       *
+       * The Provider card — the picker, the address box, the key field, the Fetch
+       * Models button — is gone with the catalogue, and what matters is that none
+       * of it is left behind. A control that writes to a file nothing reads is the
+       * shape of failure this check exists for.
+       *
+       * The temperature slider used to live on that card and has moved to the
+       * Model card, which is the older kind of check: the settings file has always
+       * held this number, and a control that quietly stops being drawn takes a
+       * setting nothing can reach with it.
        */
-      await evaluate(`(() => {
-        const section = [...document.querySelectorAll('.settings-section')]
-          .find((entry) => entry.querySelector('h3')?.textContent === 'Provider');
-        const providers = section?.querySelector('select');
-        if (providers === null || providers === undefined) return;
-        const setter = Object.getOwnPropertyDescriptor(
-          window.HTMLSelectElement.prototype,
-          'value',
-        ).set;
-        setter.call(providers, 'deepseek');
-        providers.dispatchEvent(new Event('change', {bubbles: true}));
-      })()`);
-
-      const keyed = await until('the keyed provider card', async () => {
-        const card = await readProviderCard();
-        return card.active === 'deepseek' && card.hasKeyInput
-          ? card
-          : undefined;
+      await openSection('Model');
+      const modelControls = await until('the Model card to answer', async () => {
+        const state = await evaluate(`(() => {
+          const sections = [...document.querySelectorAll('.settings-section')];
+          const provider = sections.find(
+            (entry) => entry.querySelector('h3')?.textContent === 'Provider',
+          );
+          const model = sections.find(
+            (entry) => entry.querySelector('h3')?.textContent === 'Model',
+          );
+          if (model === undefined) return undefined;
+          return JSON.stringify({
+            provider: provider !== undefined,
+            temperature: model.querySelector('input[type="range"]')?.value ?? null,
+            selects: model.querySelectorAll('select').length,
+            keyInputs: model.querySelectorAll('input[type="password"]').length,
+          });
+        })()`);
+        return state === undefined ? undefined : JSON.parse(state);
       });
 
-      if (!/^https?:\/\//u.test(keyed.baseUrl ?? '')) {
-        fail(`the base URL box holds "${keyed.baseUrl}"`);
-      } else if (keyed.hasFetchButton !== true) {
-        fail('the provider section has no Fetch Models button');
-      } else if (keyed.fetchDisabled !== true) {
-        // No key is stored for this provider yet, so there is nothing to ask the
-        // endpoint — the button is present but refused.
-        fail('Fetch Models is offered before a key is stored');
-      } else if (keyed.temperature !== '0.7') {
-        fail(`the temperature slider moved: ${String(keyed.temperature)}`);
+      if (modelControls.provider === true) {
+        fail('the Settings dialog still draws a Provider section');
+      } else if (
+        modelControls.selects !== 0 ||
+        modelControls.keyInputs !== 0
+      ) {
+        fail(
+          `the Model card offers something to choose: ${JSON.stringify(modelControls)}`,
+        );
+      } else if (modelControls.temperature !== '0.7') {
+        fail(
+          `the temperature slider opens at ${String(modelControls.temperature)}, ` +
+            'not the 0.7 the settings file defaults to',
+        );
       } else {
         ok(
-          'choosing a service gives the card its address, key box and key-gated ' +
-            'Fetch Models button',
+          'the dialog has no provider controls, and the temperature slider lives ' +
+            'on the Model card',
         );
       }
 
@@ -1709,7 +1549,7 @@ async function attach(socket) {
  * says nothing about whether the agent behind it came up. Asking for the agents
  * and starting a conversation is what proves the whole spine — the runtime, the
  * stores, and the IPC handlers — is connected, and it does it without needing a
- * provider, because a conversation is a file and does not require one.
+ * model, because a conversation is a file and does not require one.
  */
 const PROBE = `(async () => {
   const result = {
@@ -1751,7 +1591,6 @@ const PROBE = `(async () => {
      */
     const service = await window.marimo.call('service.status', {});
     result.serviceInstalled = service.installed;
-    result.serviceKeysReadable = service.keysReadable;
 
     /*
      * The catalogue the settings screen draws. Asserted because a tool the host

@@ -1,28 +1,25 @@
 /**
  * What answers the questions.
  *
- * The card that makes the app work before anybody configures anything: a fresh
- * install has this model, it needs no account, no key and no address, and
- * nothing the user types leaves the machine. Every other provider is a choice
- * somebody makes deliberately — usually because they have an account and want
- * better answers than 1.7B can give — and that choice lives in the power screen
- * with the address and the key it needs.
+ * There is one model and the app carries it, so this card is not a choice — it is
+ * *what is answering* and whether it is up. That is the whole of "it works when
+ * you install it": no account, no key, no address, and nothing the user types
+ * leaving the machine.
  *
  * The card is drawn at both sizes, and the difference is the point. Simple gets
- * *what is answering* and one way out. Power gets the file, the context window,
- * the thinking switch, the engine's own command line and the last thing it said,
- * because every one of those is a number to tune or a failure to diagnose — and
- * hiding a diagnosis from the person who can act on it is worse than the noise
- * of showing it.
+ * what is answering and whether it is running. Power gets the temperature, the
+ * Start and Stop buttons, and the engine's own paths, command line and last words
+ * — every one of those is a number to tune or a failure to diagnose, and hiding a
+ * diagnosis from the person who can act on it is worse than the noise of showing
+ * it.
  *
  * Nothing here starts the engine. A read of the status is a read; starting is a
- * button, or a question, or the app warming it after launch. A card that loaded
- * a gigabyte of weights because somebody opened Settings would be a card nobody
+ * button, a question, or the app warming it after launch. A card that loaded a
+ * gigabyte of weights because somebody opened Settings would be a card nobody
  * opens twice.
  */
 import {useEffect, useState} from 'react';
 
-import {PROVIDERS} from '@marimo/protocol';
 import type {LocalModelStatus, PublicSettings} from '@marimo/protocol';
 
 import {describe} from '../describe.js';
@@ -35,15 +32,12 @@ export function Model({
   opened,
   onToggle,
   power,
-  onChooseService,
   onChange,
 }: {
   opened: ReadonlySet<string>;
   onToggle: (title: string, expanded: boolean) => void;
   /** Whether the power screen is showing. */
   power: boolean;
-  /** Turns on the power screen and opens the Provider card, from simple mode. */
-  onChooseService: () => void;
   /** Told after a write, so the rest of the dialog re-reads what changed. */
   onChange?: () => void;
 }): React.JSX.Element {
@@ -51,6 +45,14 @@ export function Model({
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * The temperature while the slider is being dragged.
+   *
+   * Held apart from the stored value because the write happens when the gesture
+   * ends, and a slider whose handle snapped back to the stored number between
+   * steps would be unusable.
+   */
+  const [temperatureDraft, setTemperatureDraft] = useState<number | null>(null);
 
   const load = async (): Promise<void> => {
     try {
@@ -101,12 +103,15 @@ export function Model({
     }
   };
 
-  /** Writes the dragged context window, and only when it moved. */
-  const commitContextSize = (): void => {
+  /** Saves the dragged temperature, and only when it moved. */
+  const commitTemperature = (): void => {
+    const next = temperatureDraft;
+    setTemperatureDraft(null);
+    if (next === null || settings === null || next === settings.temperature) {
+      return;
+    }
     void run(async () => {
-      await window.marimo.call('settings.set', {
-        patch: {localModel: {contextSize: settings?.localModel.contextSize}},
-      });
+      await window.marimo.call('settings.set', {patch: {temperature: next}});
     });
   };
 
@@ -118,124 +123,46 @@ export function Model({
     );
   }
 
-  const active = settings.providers.active;
-  const descriptor = PROVIDERS[active];
-  const managed = active === 'builtin';
-  const config = settings.providers.configs[active];
-
   return (
     <SettingsSection title="Model" opened={opened} onToggle={onToggle}>
       <p className="settings-muted">
-        {managed
-          ? 'The model this app comes with. It runs on this computer, so ' +
-            'nothing you type leaves it — and there is no account and no key to ' +
-            'set up.'
-          : `${descriptor?.label ?? active} answers your questions, over the ` +
-            'internet and with the key you gave it.'}
+        The model this app comes with. It runs on this computer, so nothing you
+        type leaves it — and there is no account, no key and no address to set
+        up.
       </p>
 
-      {managed ? (
-        <ModelStatusLine status={status} />
-      ) : (
-        <p className="settings-muted">
-          Model <code className="settings-tool">{config.model}</code> at{' '}
-          <code className="settings-tool">{config.baseUrl}</code>.
-        </p>
-      )}
+      <ModelStatusLine status={status} />
 
-      {power && managed && (
+      {power && (
         <>
-          <h4 className="settings-group">How it runs</h4>
+          <h4 className="settings-group">How it answers</h4>
           <label className="settings-field">
             <span>
-              Model file
-              <em className="settings-why">
-                Leave this empty to use the copy that came with the app. Point
-                it at a <code>.gguf</code> of your own to run something else — a
-                bigger model, a different quantization, or one you already had.
-              </em>
-            </span>
-            <input
-              className="settings-input"
-              type="text"
-              spellCheck={false}
-              aria-label="Model file"
-              value={settings.localModel.ggufPath}
-              disabled={busy}
-              onChange={(event) => {
-                const ggufPath = event.target.value;
-                setSettings({
-                  ...settings,
-                  localModel: {...settings.localModel, ggufPath},
-                });
-              }}
-              onBlur={() => {
-                void run(async () => {
-                  await window.marimo.call('settings.set', {
-                    patch: {
-                      localModel: {ggufPath: settings.localModel.ggufPath},
-                    },
-                  });
-                });
-              }}
-            />
-          </label>
-
-          <label className="settings-field">
-            <span>
-              Context window{' '}
+              Temperature{' '}
               <strong className="settings-value">
-                {settings.localModel.contextSize.toLocaleString()} tokens
+                {(temperatureDraft ?? settings.temperature).toFixed(1)}
               </strong>
-              <em className="settings-why">
-                How much of the conversation the model can hold at once. Larger
-                answers more of a long chat and costs memory that grows with
-                every message; the model itself was trained for far more than
-                this.
-              </em>
             </span>
+            <em className="settings-why">
+              How much it varies its wording. Low is literal and repeatable, high
+              is more inventive and more likely to wander. 0.7 is the default;
+              below 0.3 a small model starts repeating itself.
+            </em>
             <input
               className="settings-input"
               type="range"
-              min={2048}
-              max={32768}
-              step={2048}
+              min={0}
+              max={2}
+              step={0.1}
+              value={temperatureDraft ?? settings.temperature}
               disabled={busy}
-              aria-label="Context window"
-              value={settings.localModel.contextSize}
+              aria-label="Temperature"
               onChange={(event) => {
-                const contextSize = Number(event.target.value);
-                setSettings({
-                  ...settings,
-                  localModel: {...settings.localModel, contextSize},
-                });
+                setTemperatureDraft(Number(event.target.value));
               }}
-              onPointerUp={commitContextSize}
-              onKeyUp={commitContextSize}
+              onPointerUp={commitTemperature}
+              onKeyUp={commitTemperature}
             />
-          </label>
-
-          <label className="settings-check">
-            <input
-              type="checkbox"
-              checked={settings.localModel.thinking}
-              disabled={busy}
-              onChange={(event) => {
-                const thinking = event.target.checked;
-                void run(async () => {
-                  await window.marimo.call('settings.set', {
-                    patch: {localModel: {thinking}},
-                  });
-                });
-              }}
-            />
-            <span>
-              Let it think before answering
-              <em className="settings-why">
-                Slower and sometimes better on a hard question; it makes every
-                easy one take seconds longer. Off is what most questions want.
-              </em>
-            </span>
           </label>
 
           <div className="settings-row">
@@ -308,19 +235,6 @@ export function Model({
         </>
       )}
 
-      {!power && (
-        <div className="settings-row">
-          <button
-            type="button"
-            className="button button-quiet"
-            disabled={busy}
-            onClick={onChooseService}
-          >
-            Use a service I have an account with
-          </button>
-        </div>
-      )}
-
       {problem !== null && <p className="settings-problem">{problem}</p>}
     </SettingsSection>
   );
@@ -360,8 +274,7 @@ function ModelStatusLine({
     return (
       <p className="settings-muted">
         {dot('error')} The model file is not installed. It should be at{' '}
-        <code className="settings-tool">{status.modelPath}</code> — or point the
-        field below at a <code>.gguf</code> you already have.
+        <code className="settings-tool">{status.modelPath}</code>.
       </p>
     );
   }

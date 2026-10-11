@@ -24,13 +24,12 @@ import type {
   AgentUiEvent,
   CompactResult,
   PendingGate,
-  ProviderId,
   SessionSource,
   SessionSummary,
   TokenUsage,
   TranscriptMessage,
 } from '@marimo/protocol';
-import {MAIN_AGENT_NAME, PROVIDERS} from '@marimo/protocol';
+import {MAIN_AGENT_NAME} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
@@ -195,9 +194,11 @@ export class AgentHost {
   private readonly subagentLimits: Partial<SubagentLimits> | undefined;
   private config: AgentConfig;
   /**
-   * One runner per model. ADK binds the model into the agent, so a per-session
-   * model choice means one runner per model rather than one runner rebuilt on
-   * every switch — and switching never disturbs a run already in flight.
+   * The cached runner, keyed by model.
+   *
+   * There is one model now, so this holds one entry — kept as a map because ADK
+   * binds the model into the agent and `runnerFor` is still the one place a
+   * runner is built, not because a second model is coming.
    */
   private readonly runners = new Map<string, Runner>();
   private active: {sessionId: string; controller: AbortController} | undefined;
@@ -255,9 +256,7 @@ export class AgentHost {
   updateConfig(config: AgentConfig): void {
     const affectsRuns =
       config.model !== this.config.model ||
-      config.apiKey !== this.config.apiKey ||
       config.baseUrl !== this.config.baseUrl ||
-      config.provider !== this.config.provider ||
       config.temperature !== this.config.temperature ||
       config.maxOutputTokens !== this.config.maxOutputTokens ||
       config.systemPrompt !== this.config.systemPrompt ||
@@ -288,7 +287,7 @@ export class AgentHost {
     this.memory.setSoftLimitBytes(
       config.memorySoftLimitBytes ?? MEMORY_SOFT_LIMIT_BYTES,
     );
-    // Agents hold the model, key and tool closures, so a settings change
+    // Agents hold the model, address and tool closures, so a settings change
     // invalidates every cached runner.
     this.runners.clear();
     if (affectsRuns) {
@@ -370,7 +369,6 @@ export class AgentHost {
 
   async createSession(
     title?: string,
-    model?: string,
     profileId?: string,
     workspaceId?: string,
     source?: SessionSource,
@@ -378,9 +376,6 @@ export class AgentHost {
     const state: Record<string, unknown> = {};
     if (title) {
       state['title'] = title;
-    }
-    if (model) {
-      state['model'] = model;
     }
     if (profileId) {
       state['profileId'] = profileId;
@@ -407,34 +402,9 @@ export class AgentHost {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           messageCount: 0,
-          ...(model ? {model} : {}),
           ...(workspaceId ? {workspaceId} : {}),
           ...(source ? {source} : {}),
         };
-  }
-
-  /**
-   * Sets the model for one conversation, or clears it back to the app default.
-   *
-   * So the composer can switch models without touching the default used by every
-   * other chat. The next turn picks it up; a run in flight keeps the model it
-   * started with, because this touches nothing `updateConfig` watches.
-   *
-   * `undefined` is `null` on the wire — "no choice of its own" — and it is the
-   * only way back: a picker with no undo would pin every conversation it was
-   * ever opened on, and a changed default in Settings would stop moving them.
-   */
-  async setSessionModel(
-    sessionId: string,
-    model: string | undefined,
-    profileId?: string,
-  ): Promise<string | undefined> {
-    await this.assertOwned(sessionId, profileId);
-    const entry = await this.sessionService.setSessionModel(sessionId, model);
-    if (!entry) {
-      throw new Error(`Unknown session: ${sessionId}`);
-    }
-    return entry.model;
   }
 
   /**
@@ -477,15 +447,6 @@ export class AgentHost {
       throw new Error(`Unknown session: ${sessionId}`);
     }
     return toSummary(entry);
-  }
-
-  /** The model a conversation will use: its own choice, else the default. */
-  async resolveModel(sessionId: string): Promise<string> {
-    const entry = await this.sessionService.getIndexEntry(sessionId);
-    const sessionModel = entry?.model;
-    return sessionModel && sessionModel.length > 0
-      ? sessionModel
-      : this.config.model;
   }
 
   /**
@@ -737,10 +698,9 @@ export class AgentHost {
   /**
    * One question to one model, with the model named by the caller.
    *
-   * Split out of `ask` because the silent-turn recovery has to ask the model the
-   * *conversation* is on — a session that picked its own model would otherwise
-   * be rescued by a different one, which is a strange thing for a conversation
-   * to do to itself.
+   * The parameter survives from when a conversation could pick its own model and
+   * the silent-turn recovery had to ask the same one back; it is the configured
+   * model at every call site now.
    */
   private async oneShot(
     prompt: string,
@@ -773,13 +733,7 @@ export class AgentHost {
   private llmFor(model: string = this.config.model): OpenAiCompatLlm {
     return new OpenAiCompatLlm({
       model,
-      apiKey: this.config.apiKey,
-      ...(this.config.baseUrl !== undefined
-        ? {baseUrl: this.config.baseUrl}
-        : {}),
-      ...(this.config.provider !== undefined
-        ? {provider: this.config.provider}
-        : {}),
+      baseUrl: this.config.baseUrl,
       temperature: this.config.temperature,
       ...(this.config.maxOutputTokens !== undefined
         ? {maxOutputTokens: this.config.maxOutputTokens}
@@ -901,20 +855,6 @@ export class AgentHost {
     this.active = undefined;
   }
 
-  /** The provider in use, defaulting the way the transport does. */
-  private provider(): ProviderId {
-    return this.config.provider ?? 'deepseek';
-  }
-
-  private providerLabel(): string {
-    return PROVIDERS[this.provider()].label;
-  }
-
-  /** Whether an empty key really is a setup step the user has not done. */
-  private requiresApiKey(): boolean {
-    return PROVIDERS[this.provider()].requiresApiKey;
-  }
-
   /** The runner for a model, built on first use and reused afterwards. */
   private runnerFor(model: string): Runner {
     const cached = this.runners.get(model);
@@ -927,11 +867,7 @@ export class AgentHost {
       description: 'Marimo, a local desktop assistant.',
       model: new OpenAiCompatLlm({
         model,
-        apiKey: this.config.apiKey,
         baseUrl: this.config.baseUrl,
-        ...(this.config.provider !== undefined
-          ? {provider: this.config.provider}
-          : {}),
         temperature: this.config.temperature,
         maxOutputTokens: this.config.maxOutputTokens,
       }),
@@ -1025,13 +961,7 @@ export class AgentHost {
           description: `A helper agent doing: ${task}`,
           model: new OpenAiCompatLlm({
             model: this.config.model,
-            apiKey: this.config.apiKey,
-            ...(this.config.baseUrl !== undefined
-              ? {baseUrl: this.config.baseUrl}
-              : {}),
-            ...(this.config.provider !== undefined
-              ? {provider: this.config.provider}
-              : {}),
+            baseUrl: this.config.baseUrl,
             temperature: this.config.temperature,
             ...(this.config.maxOutputTokens !== undefined
               ? {maxOutputTokens: this.config.maxOutputTokens}
@@ -1077,23 +1007,7 @@ export class AgentHost {
       };
       return;
     }
-    /*
-     * Only the providers that need a key can be missing one: a local server on
-     * the LAN normally runs without any credential, so an empty key there is a
-     * working configuration rather than a setup step the user skipped.
-     */
-    if (!this.config.apiKey && this.requiresApiKey()) {
-      yield {
-        type: 'turn.failed',
-        sessionId,
-        messageId,
-        message:
-          `No ${this.providerLabel()} API key is configured. Open Settings ` +
-          'and add one to start chatting.',
-      };
-      return;
-    }
-    const model = await this.resolveModel(sessionId);
+    const model = this.config.model;
     const runner = this.runnerFor(model);
 
     const controller = new AbortController();
@@ -1277,7 +1191,6 @@ export class AgentHost {
         silent = true;
         recovered = await this.recoverSilentTurn({
           sessionId,
-          model,
           invocationId,
           userText: userTextOf(newMessage),
           reasoning: streamedReasoning,
@@ -1351,7 +1264,6 @@ export class AgentHost {
    */
   private async recoverSilentTurn(params: {
     sessionId: string;
-    model: string;
     invocationId: string;
     userText: string;
     reasoning: string;
@@ -1362,7 +1274,7 @@ export class AgentHost {
       answer = (
         await this.oneShot(
           silentTurnPrompt(params.userText, params.reasoning),
-          params.model,
+          this.config.model,
           params.abortSignal,
         )
       ).trim();
@@ -1402,7 +1314,6 @@ function toSummary(entry: {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
-  model?: string;
   workspaceId?: string;
   source?: SessionSource;
 }): SessionSummary {
@@ -1412,7 +1323,6 @@ function toSummary(entry: {
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
     messageCount: entry.messageCount,
-    ...(entry.model ? {model: entry.model} : {}),
     ...(entry.workspaceId ? {workspaceId: entry.workspaceId} : {}),
     ...(entry.source ? {source: entry.source} : {}),
   };

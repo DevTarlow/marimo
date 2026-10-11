@@ -24,18 +24,12 @@ import {
 } from 'electron';
 import type {OpenDialogOptions} from 'electron';
 
-import {
-  agentCallSchemas,
-  IPC_CALL_CHANNEL,
-  PROVIDERS,
-  providerIdSchema,
-} from '@marimo/protocol';
+import {agentCallSchemas, IPC_CALL_CHANNEL} from '@marimo/protocol';
 import type {
   AgentCallMethod,
   AgentCallParams,
   AgentCallResults,
   AppInfo,
-  ProviderId,
   PublicSettings,
   ThemeMode,
 } from '@marimo/protocol';
@@ -43,7 +37,7 @@ import type {AppPaths} from '@marimo/runtime';
 
 import {attachableFiles} from './attach.js';
 import type {AgentService} from './agent.js';
-import {providerSecretStore, safeStorageCipher} from './secrets.js';
+import {safeStorageCipher} from './secrets.js';
 import type {Companion} from './companion.js';
 import {disable, enable, statusOf} from './service.js';
 import type {ServiceContext} from './service.js';
@@ -112,9 +106,8 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
   /**
    * The settings a window may see.
    *
-   * The key itself never crosses this boundary — only whether there is one, per
-   * provider, and whether this machine could encrypt it. A renderer that could
-   * read the key would make every XSS in the chat a key disclosure.
+   * No credential is here and none can be: the app holds no model key, and the
+   * only secrets it keeps are connector tokens, which never cross this boundary.
    */
   async function publicSettings(): Promise<PublicSettings> {
     const service = dependencies.agent();
@@ -122,77 +115,35 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       throw new Error('The agent is not running.');
     }
     const settings = await service.settings();
-
-    const providerKeys = {} as Record<ProviderId, boolean>;
-    for (const id of providerIdSchema.options) {
-      providerKeys[id] = await providerSecretStore(
-        dependencies.paths,
-        id,
-        `${PROVIDERS[id].label} API key`,
-      ).has();
-    }
-
     const profiles = await service.profiles();
-    const descriptor = PROVIDERS[settings.providers.active];
-    const hasApiKey =
-      !descriptor.requiresApiKey || providerKeys[settings.providers.active];
-    /*
-     * Whether this install can answer at all, which is a different question from
-     * whether it has a key.
-     *
-     * The built-in model needs no credential and no address — what it needs is a
-     * file on disk and an engine that started, and that is a fact only this
-     * process has. So the answer is assembled here rather than derived in the
-     * window from the key it can see, which for a managed provider is always
-     * "yes" and would open the chat on a machine that cannot reply.
-     */
-    const readiness = await providerReadiness(service, descriptor, hasApiKey);
+    const readiness = await modelReadiness(service);
 
     return {
       ...settings,
-      hasApiKey,
-      providerReady: readiness.ok,
+      modelReady: readiness.ok,
       ...(readiness.problem === undefined
         ? {}
-        : {providerProblem: readiness.problem}),
-      providerKeys,
-      encryptionAvailable: safeStorageCipher.available(),
-      /*
-       * The stored list rather than the catalogue's placeholder, which is the
-       * same thing until something has actually asked the provider what it
-       * serves. Reading the placeholder here would mean a refreshed list was
-       * written to disk and then never shown.
-       */
-      availableModels: settings.availableModels[settings.providers.active],
+        : {modelProblem: readiness.problem}),
       profiles: profiles.profiles,
       activeProfileId: profiles.activeProfileId,
     };
   }
 
   /**
-   * Whether the active provider could answer a question right now.
+   * Whether this install could answer a question right now.
    *
-   * Two shapes of answer, because the two failures are fixed in different
-   * places: a key that is missing is added in the Provider card, and a model
-   * that is not installed is fixed in the Model card or by pointing at a file.
-   * A single "not ready" for both would be a dead end for one of them.
+   * A fact only this process has: the model needs no key and no address, so what
+   * decides it is whether the weights and the engine are where the app looks and
+   * whether an engine started. A window that guessed would open a chat on a
+   * machine that cannot reply.
    *
-   * A managed provider is *not* started to answer this: the question is asked
-   * every time the settings are read, and loading a gigabyte of weights to
-   * report on them would be a spinner on every turn.
+   * The engine is *not* started to answer this: the question is asked every time
+   * the settings are read, and loading a gigabyte of weights to report on them
+   * would be a spinner on every turn.
    */
-  async function providerReadiness(
+  async function modelReadiness(
     service: AgentService,
-    descriptor: (typeof PROVIDERS)[ProviderId],
-    hasApiKey: boolean,
   ): Promise<{ok: boolean; problem?: string}> {
-    if (descriptor.requiresApiKey && !hasApiKey) {
-      return {ok: false, problem: `${descriptor.label} needs an API key.`};
-    }
-    if (!descriptor.managed) {
-      return {ok: true};
-    }
-
     const status = await service.model.status();
     if (status.state === 'failed') {
       return {ok: false, problem: status.detail ?? 'The model did not start.'};
@@ -332,39 +283,6 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       return {settings: await publicSettings()};
     },
 
-    'settings.setApiKey': async (params) => {
-      const settings = await agent().settings();
-      const providerId = params.provider ?? settings.providers.active;
-      const store = providerSecretStore(
-        dependencies.paths,
-        providerId,
-        `${PROVIDERS[providerId].label} API key`,
-      );
-      /*
-       * The consent flag reaches the write here, and this is the only place it
-       * can: it decides whether a process with no keychain — the headless job
-       * runner — will be able to read what was just stored.
-       */
-      await store.set(params.apiKey, {
-        allowPlaintext: settings.allowPlaintextApiKey,
-      });
-      return {settings: await publicSettings()};
-    },
-
-    /*
-     * The one settings-shaped call that reaches the network. The key is read
-     * inside `AgentService` and never crosses back to the window, which gets the
-     * same payload every settings call answers with — now carrying the model
-     * list the endpoint actually reported.
-     */
-    'models.fetch': async (params) => {
-      const settings = await agent().settings();
-      const providerId = params.provider ?? settings.providers.active;
-      await agent().fetchModels(providerId);
-      dependencies.onSettingsChanged?.();
-      return {settings: await publicSettings()};
-    },
-
     'mcp.set': async (params) => {
       const servers = await agent().setMcpServer(params.server);
       return {servers, statuses: agent().mcpStatuses()};
@@ -440,7 +358,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'service.status': async () =>
       dependencies.service === undefined
-        ? {installed: false, keysReadable: false, definitionPath: ''}
+        ? {installed: false, definitionPath: ''}
         : await statusOf(dependencies.service),
 
     'service.enable': async () =>
@@ -458,9 +376,8 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
      *
      * A read and two buttons, rather than a settings patch that starts
      * something: a write that quietly spawned an engine would report success for
-     * work it had not done, which is the same reason `models.fetch` is a call of
-     * its own. The status is asked for every time the card is drawn, so a
-     * failure that has since been fixed stops being reported.
+     * work it had not done. The status is asked for every time the card is
+     * drawn, so a failure that has since been fixed stops being reported.
      */
     'localModel.status': async () => await agent().model.status(),
 
@@ -570,14 +487,6 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
         params.profileId,
         params.sessionId,
         params.title,
-      ),
-    }),
-
-    'sessions.setModel': async (params) => ({
-      session: await agent().setSessionModel(
-        params.profileId,
-        params.sessionId,
-        params.model,
       ),
     }),
 

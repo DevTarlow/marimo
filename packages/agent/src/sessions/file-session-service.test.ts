@@ -223,82 +223,45 @@ describe('FileSessionService', () => {
     expect(await readFile(join(rootDir, 'index.json'), 'utf8')).toBe(future);
   });
 
-  it('records a per-conversation model at creation and on change', async () => {
-    await service.createSession({
-      appName: APP,
-      userId: USER,
-      sessionId: 'with-model',
-      state: {model: 'deepseek-v4-pro'},
-    });
-    expect((await service.getIndexEntry('with-model'))?.model).toBe(
-      'deepseek-v4-pro',
-    );
-
-    const updated = await service.setSessionModel(
-      'with-model',
-      'deepseek-flash',
-    );
-    expect(updated?.model).toBe('deepseek-flash');
-    // Persisted, not just returned: a restart must keep the choice.
-    expect((await service.getIndexEntry('with-model'))?.model).toBe(
-      'deepseek-flash',
-    );
-  });
-
-  it('leaves the model unset when the create request has none', async () => {
-    await service.createSession({
-      appName: APP,
-      userId: USER,
-      sessionId: 'no-model',
-      state: {model: '   '},
-    });
-    const entry = await service.getIndexEntry('no-model');
-    expect(entry?.model).toBeUndefined();
-    expect(entry).not.toHaveProperty('model');
-  });
-
-  it('reports an unknown session when setting a model', async () => {
-    expect(
-      await service.setSessionModel('missing', 'deepseek-flash'),
-    ).toBeUndefined();
-  });
-
-  it('gives up a conversation\'s model, so it follows the default again', async () => {
-    await service.createSession({
-      appName: APP,
-      userId: USER,
-      sessionId: 'picky',
-      state: {model: 'deepseek-v4-pro'},
-    });
-
-    const cleared = await service.setSessionModel('picky', undefined);
+  it('reads a conversation an older build gave a model of its own', async () => {
     /*
-     * Absent rather than empty. "No model of its own" is what a conversation
-     * that has never used the picker holds, and it is the state the app default
-     * follows — an empty string would be a second spelling of it that only
-     * `resolveModel`'s emptiness check turns into the first.
+     * Every conversation used to be able to name its model, and the index kept
+     * it. There is one model now, so the key is not read — but the entry around
+     * it must survive, because a reader that dropped a conversation over a field
+     * it no longer understands is how a chat disappears from the rail.
+     *
+     * Written straight to the file rather than through `createSession`: what is
+     * being tested is a document this build did not write.
      */
-    expect(cleared?.model).toBeUndefined();
-    expect(cleared).not.toHaveProperty('model');
-    expect(await service.getIndexEntry('picky')).not.toHaveProperty('model');
-  });
+    await writeFile(
+      join(rootDir, 'index.json'),
+      `${JSON.stringify(
+        {
+          version: 1,
+          sessions: {
+            'from-the-provider-era': {
+              id: 'from-the-provider-era',
+              title: 'An older chat',
+              createdAt: '2025-01-01T00:00:00.000Z',
+              updatedAt: '2025-01-01T00:00:00.000Z',
+              messageCount: 2,
+              appName: APP,
+              userId: USER,
+              model: 'deepseek-v4-pro',
+              workspaceId: 'workspace-a',
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
 
-  it('moves no conversation to the top of the rail for a model change', async () => {
-    await service.createSession({
-      appName: APP,
-      userId: USER,
-      sessionId: 'quiet',
-    });
-    const before = await service.getIndexEntry('quiet');
-
-    const after = await service.setSessionModel('quiet', 'deepseek-v4-pro');
-    /*
-     * `updatedAt` is what the rail sorts on and reads as "3h ago", and both mean
-     * when the conversation last had something happen *in* it. Choosing a model
-     * is not a turn: stamping it here reordered the list under the cursor of
-     * whoever had just used the picker.
-     */
-    expect(after?.updatedAt).toBe(before?.updatedAt);
+    const entry = await service.getIndexEntry('from-the-provider-era');
+    expect(entry?.title).toBe('An older chat');
+    expect(entry?.workspaceId).toBe('workspace-a');
+    expect(await service.getIndex()).toHaveLength(1);
   });
 
   it('never resurrects a deleted session from a late event', async () => {
@@ -370,7 +333,7 @@ describe('FileSessionService', () => {
       state: {workspaceId: 'workspace-a'},
     });
     await service.adoptUnownedSessions('profile-a');
-    await service.setSessionModel('filed', 'deepseek-chat');
+    await service.renameSession('filed', 'Renamed after adoption');
 
     const entry = await service.getIndexEntry('filed');
     expect(entry?.workspaceId).toBe('workspace-a');

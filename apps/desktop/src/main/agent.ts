@@ -28,7 +28,6 @@ import {
 import type {ProcessLock} from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
 
-import {PROVIDERS} from '@marimo/protocol';
 import type {
   AgentProfile,
   CompactResult,
@@ -38,13 +37,11 @@ import type {
   McpStatus,
   PendingGate,
   ProfileCatalog,
-  ProviderId,
   SessionSummary,
   TranscriptMessage,
   Workspace,
   WorkspaceState,
 } from '@marimo/protocol';
-import {fetchProviderModels} from '@marimo/agent';
 import type {JobService} from '@marimo/agent';
 
 import {safeStorageCipher, secretStore} from './secrets.js';
@@ -128,10 +125,7 @@ export class AgentService {
   constructor(private readonly options: AgentServiceOptions) {
     const {paths} = options;
 
-    this.localModel = new LocalModelHost({
-      paths,
-      readSettings: async () => await this.runtime.settings(),
-    });
+    this.localModel = new LocalModelHost({paths});
 
     this.mcp = new McpManager({
       readSecrets: secretReaderFor(paths, (file, label) =>
@@ -152,22 +146,10 @@ export class AgentService {
 
     this.runtime = new AgentRuntime({
       paths,
-      readSecret: async (providerId) => {
-        // Asked every time rather than cached: on Linux a keyring that was
-        // locked at launch can become usable later in the session, and the
-        // difference between "no key" and "cannot read the key" is the
-        // difference between two different things the user has to do.
-        const store = secretStore(
-          paths.providerSecrets[providerId],
-          `${PROVIDERS[providerId].label} API key`,
-        );
-        return await store.read();
-      },
       webSearch: this.search,
       /*
-       * The engine, so a managed provider can be started before its address is
-       * asked for. The runtime does the asking; this is the only process that
-       * knows how to answer it.
+       * The engine, so a turn can be given an address before it starts. The
+       * runtime asks for one; this is the only process that knows how to answer.
        */
       localModel: this.localModel,
       mcpServers: () => this.mcp.toolsets(),
@@ -264,56 +246,6 @@ export class AgentService {
   /** The settings as they are on disk, for the callers that need to read them. */
   async settings() {
     return await this.runtime.settings();
-  }
-
-  /** The settings as they are on disk, for the callers that need to ask. */
-  async providers(): Promise<
-    Awaited<ReturnType<AgentRuntime['settings']>>['providers']
-  > {
-    return (await this.runtime.settings()).providers;
-  }
-
-  /**
-   * Asks a provider what it serves, and records the answer.
-   *
-   * The key is read and decrypted here and handed straight to the request; it
-   * never reaches the renderer, which learns the result only as a longer model
-   * list in the settings payload it gets back. The provider is named explicitly
-   * because the picker's selection and the settings on disk can be a moment
-   * apart — the button belongs to the provider the panel is showing.
-   *
-   * A provider that needs a key and has none is refused before the request, so
-   * the message says what to do instead of being a 401 the user has to decode.
-   */
-  async fetchModels(providerId: ProviderId): Promise<void> {
-    const settings = await this.runtime.settings();
-    const descriptor = PROVIDERS[providerId];
-    const config = settings.providers.configs[providerId];
-    const store = secretStore(
-      this.options.paths.providerSecrets[providerId],
-      `${descriptor.label} API key`,
-    );
-    const stored = await store.read();
-    if (stored.state === 'unreadable') {
-      throw new Error(
-        `The stored ${descriptor.label} key could not be read: ` +
-          `${stored.reason} Re-save it, then fetch its models.`,
-      );
-    }
-    const apiKey = stored.state === 'present' ? stored.value : '';
-
-    if (descriptor.requiresApiKey && apiKey.length === 0) {
-      throw new Error(
-        `Save a ${descriptor.label} key before fetching its models.`,
-      );
-    }
-
-    const models = await fetchProviderModels({
-      provider: providerId,
-      apiKey,
-      baseUrl: config.baseUrl,
-    });
-    await this.runtime.setAvailableModels(providerId, models);
   }
 
   async start(): Promise<void> {
@@ -546,10 +478,10 @@ export class AgentService {
   /**
    * Stores one of a connector's secrets.
    *
-   * Through the same store the provider keys use, which means the same consent
-   * rule: on a machine with no keychain this needs the plain-text opt-in, and it
-   * refuses rather than silently writing a readable key. A connector secret is
-   * exactly as sensitive as an API key, because most of them *are* one.
+   * Through the same store every secret uses, which means the same rule: it is
+   * encrypted, and a machine with no keychain is refused rather than written to
+   * in the clear. A connector token is exactly as sensitive as any other, because
+   * most of them *are* one.
    */
   async setMcpSecret(
     serverId: string,
@@ -557,19 +489,18 @@ export class AgentService {
     name: string,
     value: string,
   ): Promise<void> {
-    const settings = await this.runtime.settings();
     const store = secretStore(
       mcpSecretFile(this.options.paths, serverId, target, name),
       `the ${name} for this connector`,
     );
-    await store.set(value, {allowPlaintext: settings.allowPlaintextApiKey});
+    await store.set(value);
   }
 
   /**
    * Which of a connector's secrets have a value.
    *
-   * Names only. The value never crosses to the window — the same rule provider
-   * keys follow — so the panel can say "set" without being able to say what.
+   * Names only. The value never crosses to the window, so the panel can say
+   * "set" without being able to say what.
    */
   async mcpSecretState(server: McpServer): Promise<string[]> {
     const set: string[] = [];
@@ -704,15 +635,6 @@ export class AgentService {
     return await this.runtime.renameSession(profileId, sessionId, title);
   }
 
-  /** Chooses the model for one conversation, or clears the choice with `null`. */
-  async setSessionModel(
-    profileId: string,
-    sessionId: string,
-    model: string | null,
-  ): Promise<SessionSummary> {
-    return await this.runtime.setSessionModel(profileId, sessionId, model);
-  }
-
   /** The folder a conversation works in, for judging an attached file. */
   async conversationFolder(
     profileId: string,
@@ -754,29 +676,6 @@ export class AgentService {
     patch: Parameters<AgentRuntime['updateSettings']>[0],
   ): Promise<void> {
     await this.runtime.updateSettings(patch);
-    /*
-     * A settings change the running engine cannot honour puts it down.
-     *
-     * Two cases, and both are about the engine being honest rather than about
-     * saving memory. Switching to a provider the app does not run leaves a
-     * gigabyte of memory and a spinning fan attached to nothing, with nothing on
-     * screen to connect the two. And changing the model's own settings — the
-     * file, the context window, whether it thinks — cannot reach a process that
-     * has already loaded the old ones: the card would report the new file while
-     * the engine answered from the old one, and the next question would use
-     * settings the user had already changed.
-     *
-     * Switching *to* the model is not started here. The next turn asks for an
-     * address, which is what starts it, and pre-warming from a settings write
-     * would load a model for somebody who was only passing through the picker.
-     */
-    const tunedEngine = patch.localModel !== undefined;
-    const leftTheModel =
-      patch.providers?.active !== undefined &&
-      !PROVIDERS[(await this.runtime.settings()).providers.active].managed;
-    if (tunedEngine || leftTheModel) {
-      await this.localModel.stop();
-    }
   }
 
   async listSessions(profileId?: string): Promise<SessionSummary[]> {
@@ -794,10 +693,10 @@ export class AgentService {
   /**
    * Reads a conversation.
    *
-   * Goes to the runtime's own reader rather than resolving the provider first.
-   * The version that resolved it returned an empty conversation whenever the key
-   * was missing — so an expired key emptied every chat in the window, and the
-   * history was on disk the whole time.
+   * Goes to the runtime's own reader rather than resolving the configuration
+   * first. The version that resolved it returned an empty conversation whenever
+   * the engine was not up — so a model that would not start emptied every chat in
+   * the window, and the history was on disk the whole time.
    */
   async transcript(
     profileId: string,

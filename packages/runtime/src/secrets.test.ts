@@ -44,51 +44,13 @@ describe('FileSecretStore', () => {
     expect(await store.get()).toBe('');
   });
 
-  it('round-trips a plaintext secret', async () => {
-    const store = new FileSecretStore(file, 'API key', noKeychain);
-    await store.set('sk-secret', {allowPlaintext: true});
-
-    expect(await store.get()).toBe('sk-secret');
-    expect((await store.read()).state).toBe('present');
-  });
-
-  it('writes a plaintext secret readable only by its owner', async () => {
-    const store = new FileSecretStore(file, 'API key', noKeychain);
-    await store.set('sk-secret', {allowPlaintext: true});
-
-    const mode = (await stat(file)).mode & 0o777;
-    expect(mode).toBe(0o600);
-  });
-
-  /*
-   * The case the background service depends on, and the one the flag used to get
-   * wrong. On a normal desktop a keychain *is* available, so encrypting whenever
-   * possible meant the key was always encrypted — and a headless runner has no
-   * keychain, so "run jobs while the app is closed" could never work while the
-   * settings screen said it could.
-   *
-   * A security setting that produces the opposite of what it promises is the
-   * worst shape one can take.
-   */
-  it('writes a readable secret even when a keychain is available, if asked', async () => {
+  it('always encrypts, and writes it readable only by its owner', async () => {
     const store = new FileSecretStore(file, 'API key', cipher);
-    await store.set('sk-secret', {allowPlaintext: true});
+    await store.set('sk-secret');
 
-    const raw = await readFile(file, 'utf8');
-    expect(raw).toContain('plaintext:');
-    expect(raw).not.toContain('encrypted:');
-    // ...and the keychain-less reader is the one that has to be able to read it.
-    const headless = new FileSecretStore(file, 'API key');
-    expect(await headless.get()).toBe('sk-secret');
-  });
-
-  it('encrypts by default even when plaintext would be permitted elsewhere', async () => {
-    const store = new FileSecretStore(file, 'API key', cipher);
-    await store.set('sk-secret', {allowPlaintext: false});
-
-    const raw = await readFile(file, 'utf8');
-    expect(raw).toContain('encrypted:');
-    // And a process with no keychain — the runner — cannot read it.
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(await readFile(file, 'utf8')).toContain('encrypted:');
+    // And a process with no keychain — the headless runner — cannot read it.
     expect(await new FileSecretStore(file, 'API key').read()).toMatchObject({
       state: 'unreadable',
     });
@@ -96,7 +58,7 @@ describe('FileSecretStore', () => {
 
   it('round-trips an encrypted secret through the cipher', async () => {
     const store = new FileSecretStore(file, 'API key', cipher);
-    await store.set('sk-secret', {allowPlaintext: false});
+    await store.set('sk-secret');
 
     // The point of the encrypted path is that the value is not on disk.
     const raw = await readFile(file, 'utf8');
@@ -143,31 +105,34 @@ describe('FileSecretStore', () => {
     }
   });
 
-  it('reads a plaintext secret even when a cipher is available', async () => {
-    // What the app must do for a user who enabled the plain-text opt-in on a
-    // machine whose keychain later became available: their key still works.
+  it('reads a plaintext secret a previous build wrote', async () => {
+    /*
+     * The app used to offer "store secrets as plain text" so a process with no
+     * keychain could read a connector token. That offer is gone, but a file
+     * somebody accepted it for must go on working: refusing to read it would
+     * silently disconnect a connector that has been fine for months.
+     */
     await writeFile(file, `plaintext:${Buffer.from('sk-legacy').toString('base64')}\n`);
     const store = new FileSecretStore(file, 'API key', cipher);
     expect(await store.get()).toBe('sk-legacy');
   });
 
-  it('refuses to write a readable secret without permission', async () => {
+  it('refuses to store a secret on a machine with no keychain', async () => {
     const store = new FileSecretStore(file, 'Discord bot token', noKeychain);
 
-    await expect(
-      store.set('token', {allowPlaintext: false}),
-    ).rejects.toThrow(/Discord bot token/u);
+    await expect(store.set('token')).rejects.toThrow(/Discord bot token/u);
 
-    // And it must not have written anything on the way to refusing.
+    // And it must not have written anything on the way to refusing: a readable
+    // token is a decision this app no longer makes on the user's behalf.
     expect(await store.read()).toEqual({state: 'absent'});
   });
 
   it('clears the file when the value is empty, rather than storing nothing', async () => {
     const store = new FileSecretStore(file, 'API key', cipher);
-    await store.set('sk-secret', {allowPlaintext: false});
+    await store.set('sk-secret');
     expect((await store.read()).state).toBe('present');
 
-    await store.set('   ', {allowPlaintext: false});
+    await store.set('   ');
     expect((await store.read()).state).toBe('absent');
   });
 
@@ -180,7 +145,7 @@ describe('FileSecretStore', () => {
   it('creates the secrets directory when it is missing', async () => {
     const nested = join(dir, 'a', 'b', 'key.bin');
     const store = new FileSecretStore(nested, 'API key', cipher);
-    await store.set('sk-secret', {allowPlaintext: false});
+    await store.set('sk-secret');
     expect(await store.get()).toBe('sk-secret');
   });
 

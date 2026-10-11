@@ -317,6 +317,48 @@ describe('LocalModelService', () => {
   });
 
   /*
+   * The window between asking and spawning.
+   *
+   * A quit that lands while the app is still resolving files, reaping a previous
+   * engine or asking for a port finds no child to kill — a start in flight is a
+   * promise, not a process. It has to notice that it was stopped, because an
+   * engine spawned after the quit is the one thing the pid file cannot be
+   * relied on to fix: the file is written by that very spawn, and the run that
+   * would reap it may be days away, leaving a loaded model and a spinning fan
+   * with no window anywhere to explain them.
+   */
+  it('spawns nothing when it is stopped before the spawn', async () => {
+    const spawnCount = {count: 0};
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const engine = new LocalModelService({
+      spec: async () => {
+        await gate;
+        return {files: files(), contextSize: 8192, thinking: false};
+      },
+      pidFile: localModelPidFile(dir),
+      spawnImpl: (() => {
+        spawnCount.count += 1;
+        return new FakeChild();
+      }) as unknown as typeof import('node:child_process').spawn,
+      fetchImpl: (async () =>
+        ({ok: true, status: 200}) as Response) as unknown as typeof fetch,
+    });
+
+    const started = engine.ensureRunning();
+    await engine.stop();
+    release();
+
+    await expect(started).resolves.toMatchObject({ok: false});
+    expect(spawnCount.count).toBe(0);
+    // A stop is still an answer, not a failure, even when it lands mid-start.
+    expect((await engine.status()).state).toBe('off');
+  });
+
+  /*
    * The pid file, which is the answer to "the app was killed and its engine is
    * still here". Written on the way up, removed on the way down — and the way
    * down includes a stop that never started anything.

@@ -91,6 +91,16 @@ export class LocalModelService {
   private failure:
     | {problem: string; enginePresent: boolean; modelPresent: boolean}
     | undefined;
+  /**
+   * Bumped by `stop`, so a start already in flight can see that it was stopped.
+   *
+   * `stop` is what a quit calls, and a start in flight is a promise rather than a
+   * process: it has asked for the files, reaped a previous engine and asked for a
+   * port without spawning anything yet, so there is no child for `stop` to kill.
+   * Counted rather than held as a flag, because a stop is not the end of the
+   * supervisor — a caller that asks again afterwards gets a fresh start.
+   */
+  private generation = 0;
   private readonly log: string[] = [];
 
   constructor(private readonly options: LocalModelOptions) {}
@@ -124,6 +134,12 @@ export class LocalModelService {
     this.child = undefined;
     this.url = undefined;
     this.port = undefined;
+    /*
+     * Any start that is still resolving is told to abandon, here and not later:
+     * it is about to spawn, and a child born after the quit is one nothing will
+     * outlive to stop. The pid file is not a substitute — the spawn writes it.
+     */
+    this.generation += 1;
     /*
      * A stop is an answer, so it clears a failure. The user pressed the button,
      * and a card that went on saying "it stopped immediately" about a run that
@@ -206,6 +222,7 @@ export class LocalModelService {
   private async start(): Promise<Started> {
     this.failure = undefined;
     this.log.length = 0;
+    const generation = this.generation;
 
     const {files, ...tuning} = await this.options.spec();
     if (!files.enginePresent) {
@@ -229,6 +246,20 @@ export class LocalModelService {
     await this.reapPrevious();
 
     const port = await freePort();
+
+    /*
+     * The last place a stop can be noticed, and the only one needed: everything
+     * from here to the spawn is synchronous, so nothing can interleave between
+     * this check and the child existing. Asked again after the waits above
+     * because a quit during any of them finds no child to kill.
+     *
+     * Answered without recording a failure, because a stop is not one — and the
+     * `stop` that got here has just cleared the last failure for this reason.
+     */
+    if (this.generation !== generation) {
+      return {ok: false, problem: 'The model was stopped.'};
+    }
+
     const args = engineArgs({
       engine: files.engine,
       model: files.model,

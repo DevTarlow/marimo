@@ -39,8 +39,12 @@ export type {ReviewEvent, ReviewRequest} from './review.js';
 export {
   CANONICAL_SECTIONS,
   CANONICAL_SECTION_NAMES,
+  isAlwaysInjected,
   renderSectionGuide,
 } from './sections.js';
 export type {CanonicalSection} from './sections.js';
+
+export {selectMemory} from './select.js';
+export type {MemorySelection, RecalledBullet} from './select.js';
 
 export {MEMORY_SOFT_LIMIT_BYTES, memorySizeWarning} from './size.js';

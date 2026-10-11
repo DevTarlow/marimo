@@ -107,13 +107,21 @@ export {
   // is one reader of memory.md rather than a second parser in another package.
   // The index has to agree with the store bullet for bullet, and two parsers of
   // one document is exactly the disagreement this package is arranged to avoid.
+  // The selector that decides what of memory reaches a prompt, beside the store
+  // that owns the file: the two have to agree about what a bullet is, and the
+  // only way to be sure of that is for one package to hold both.
+  isAlwaysInjected,
+  renderSectionGuide,
+  selectMemory,
   splitMemory,
   toBullets,
 } from './memory/index.js';
 export type {
   MemoryPruneRequest,
+  MemorySelection,
   MemoryStoreOptions,
   MemoryUpdate,
+  RecalledBullet,
   ReviewEvent,
   ReviewRequest,
 } from './memory/index.js';

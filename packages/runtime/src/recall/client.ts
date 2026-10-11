@@ -26,6 +26,19 @@
  * input — a file name, then a picture, in one request — a single point in the
  * space rather than several.
  *
+ * **Media goes in with no task prefix.** The model's guide is explicit about it:
+ * the instruction prefixes steer text, and an image, a WAV or an MP4 is passed
+ * without one. So a media request built here carries either nothing or plain
+ * words — a file name, say — and never the `title: … | text: …` document wrapper
+ * that a chunk of text gets. That wrapper is a *retrieval document* instruction,
+ * and putting it in front of a picture would be asking the model to read a
+ * training shape it was never given beside one.
+ *
+ * What the guide expects of that media, for whoever builds the rest of it: audio
+ * at 16 kHz mono, and video sampled at one frame per second. Both are what this
+ * app already does — the decode window resamples to 16 kHz mono, and frames are
+ * taken evenly rather than at the source's rate.
+ *
  * Three more things this file is responsible for:
  *
  * - **Order.** The engine answers with an `index` per vector, and the vectors

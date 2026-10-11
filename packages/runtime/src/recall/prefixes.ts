@@ -22,6 +22,20 @@
  * which is close enough to be plausible and far enough to matter. `title: none`
  * is what the card specifies for a document with no title, and it is used for a
  * file whose path is the only name it has.
+ *
+ * These are the expansions of the two prompt names the model's libraries expose,
+ * `SearchQuery` for the question and `Document` for the passage, checked against
+ * Google's developer guide for this model. That guide also names a `CodeRetrieval`
+ * query prompt, `task: code retrieval | query: {query}`, which scores better on
+ * code-only corpora and is deliberately not used here: the folder this app indexes
+ * holds prose and code together, the prompt is chosen per *question* rather than
+ * per document, and picking between two prompts by guessing at the question would
+ * be a silent coin toss that nobody could see in a result list. The document side
+ * is identical either way, so adding it later is a change to `queryText` alone and
+ * touches no index.
+ *
+ * Media is the other half of that rule, and it lives in `client.ts` rather than
+ * here: images, audio and video go in with no prefix at all.
  */
 export const QUERY_PREFIX = 'task: search result | query:';
 

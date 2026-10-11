@@ -23,6 +23,7 @@ import type {
 
 import {Composer} from './components/Composer.js';
 import {Onboarding} from './components/Onboarding.js';
+import {Search} from './components/Search.js';
 import {Settings} from './components/Settings.js';
 import {Transcript} from './components/Transcript.js';
 import {WorkspaceRail} from './components/WorkspaceRail.js';
@@ -33,6 +34,7 @@ import './styles/chat.css';
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [searching, setSearching] = useState(false);
   /**
    * The settings as the window needs them for the first-run question.
    *
@@ -92,6 +94,26 @@ export function App(): React.JSX.Element {
       setShowSettings(true);
     }
   }, [agent.openSettings]);
+
+  /*
+   * `Ctrl/Cmd+K`, on the window rather than globally.
+   *
+   * An OS-wide hotkey works from any application, which is a decision about
+   * somebody's whole desktop rather than about this app — and it is the kind of
+   * thing that is far easier to add later than to explain away.
+   */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setSearching((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
 
   /*
    * What the colours actually are.
@@ -187,6 +209,12 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="app">
+      <Search
+        open={searching}
+        onClose={() => {
+          setSearching(false);
+        }}
+      />
       <WorkspaceRail
         workspaces={agent.workspaces}
         sessions={agent.sessions}
@@ -249,6 +277,16 @@ export function App(): React.JSX.Element {
               </p>
             )}
           </div>
+          <button
+            type="button"
+            className="button button-quiet button-small"
+            title="Search your folder and memory (Ctrl+K)"
+            onClick={() => {
+              setSearching(true);
+            }}
+          >
+            Search
+          </button>
           <button
             type="button"
             className="button button-quiet button-small"

@@ -30,15 +30,17 @@ import type {AppPaths} from '@marimo/runtime';
 
 import type {
   AgentProfile,
+  AgentUiEvent,
   CompactResult,
   Job,
   McpServer,
-  AgentUiEvent,
-  RecallModelStatus,
-  RecallPiece,
   McpStatus,
   PendingGate,
   ProfileCatalog,
+  RecallModelStatus,
+  RecallPiece,
+  RecallQueryResult,
+  RecallScopeName,
   SessionSummary,
   TranscriptMessage,
   Workspace,
@@ -440,6 +442,60 @@ export class AgentService {
   async recallForget(): Promise<{forgotten: boolean}> {
     const scope = await this.recallScope();
     return await this.recall.forget(scope.profileId, scope.workspaceRoot);
+  }
+
+  /**
+   * The window's own search.
+   *
+   * The same `RecallService` the agent's tool is given, so what a person sees and
+   * what the model finds cannot disagree — and deliberately not routed through a
+   * turn: searching your own files should not need a conversation, a model, or an
+   * answer to be streaming.
+   */
+  async recallQuery(
+    query: string,
+    scopes?: readonly RecallScopeName[],
+    limit?: number,
+  ): Promise<RecallQueryResult> {
+    const empty = {records: 0, chunks: 0, memory: 0, changed: 0};
+    const settings = await this.runtime.settings();
+    if (!settings.recall.enabled) {
+      return {hits: [], searched: [], notes: ['Recall is off.'], index: empty};
+    }
+    const scope = await this.recallScope();
+    const service = await this.recall.serviceFor(
+      scope.profileId,
+      scope.workspaceRoot,
+    );
+    if (service === undefined) {
+      return {
+        hits: [],
+        searched: [],
+        notes: ['Nothing is indexed yet.'],
+        index: empty,
+      };
+    }
+    const answer = await service.search({
+      query,
+      ...(scopes === undefined ? {} : {scopes}),
+      ...(limit === undefined ? {} : {limit}),
+    });
+    return {
+      hits: answer.hits.map((hit) => ({
+        kind: hit.kind,
+        path: hit.path,
+        ...(hit.startLine === undefined ? {} : {startLine: hit.startLine}),
+        ...(hit.endLine === undefined ? {} : {endLine: hit.endLine}),
+        ...(hit.section === undefined ? {} : {section: hit.section}),
+        preview: hit.preview,
+        score: hit.score,
+        text: hit.text,
+        stale: hit.stale,
+      })),
+      searched: [...answer.searched],
+      notes: answer.notes,
+      index: answer.index,
+    };
   }
 
   private async recallScope(): Promise<{

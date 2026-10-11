@@ -494,6 +494,36 @@ export type RecallScopeName = z.infer<typeof recallScopeSchema>;
  * count of what it has indexed — which is the number that tells a user whether
  * the thing they turned on has done anything yet.
  */
+/**
+ * One thing a search found, with its text already verified.
+ *
+ * `text` is what the source says *now* — the service re-reads each hit and checks
+ * it against the digest stored with its vector — and `stale` is the other answer:
+ * the file changed since it was indexed, so the text is empty and the result says
+ * so rather than quoting a copy that no longer exists.
+ */
+export interface RecallQueryHit {
+  kind: 'text' | 'memory';
+  path: string;
+  startLine?: number;
+  endLine?: number;
+  section?: string;
+  preview: string;
+  /** Cosine similarity. Not comparable between modalities — see the card. */
+  score: number;
+  text: string;
+  stale: boolean;
+}
+
+export interface RecallQueryResult {
+  hits: RecallQueryHit[];
+  /** The corpora that were actually searched, which may be less than asked. */
+  searched: string[];
+  /** Sentences to show beside the results: a cap reached, a file unreadable. */
+  notes: string[];
+  index: RecallModelStatus['index'];
+}
+
 export interface RecallModelStatus {
   /** Whether the user has switched recall on. Nothing downloads until they do. */
   enabled: boolean;
@@ -2181,6 +2211,16 @@ export const agentCallSchemas = {
   'recall.cancel': z.object({}),
   'recall.reindex': z.object({}),
   'recall.forget': z.object({}),
+  /*
+   * The window's own search. The same service the agent's tool uses, so a person
+   * and the model see the same scores, the same caps and the same staleness — two
+   * implementations would be two answers to one question.
+   */
+  'recall.query': z.object({
+    query: z.string().min(1),
+    scopes: z.array(recallScopeSchema).optional(),
+    limit: z.number().int().min(1).max(50).optional(),
+  }),
 
   /* What this agent is allowed to do, and what it is. */
   'profiles.catalog': z.object({}),
@@ -2256,6 +2296,7 @@ export interface AgentCallResults {
   'recall.cancel': {cancelled: boolean};
   'recall.reindex': {started: boolean};
   'recall.forget': {forgotten: boolean};
+  'recall.query': RecallQueryResult;
   'profiles.catalog': ProfileCatalog;
   'profiles.update': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.create': {profiles: AgentProfile[]; activeProfileId: string};

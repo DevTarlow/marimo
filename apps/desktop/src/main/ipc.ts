@@ -425,6 +425,8 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     'recall.cancel': () => agent().recallCancel(),
     'recall.reindex': async () => await agent().recallReindex(),
     'recall.forget': async () => await agent().recallForget(),
+    'recall.query': async (params) =>
+      await agent().recallQuery(params.query, params.scopes, params.limit),
 
     'profiles.list': async () => await agent().profiles(),
 

@@ -42,7 +42,9 @@ import {
   JobStore,
   LocalModelService,
   localModelPidFile,
-  localModelSpec,
+  localModelSpecFor,
+  MODEL_PINS,
+  modelDir,
   resolveAppPaths,
 } from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
@@ -126,18 +128,24 @@ export async function runDue(options: {
   }
 
   /*
-   * The model the app carries, started only if a job actually needs it.
+   * The model, started only if a job actually needs it.
    *
-   * The path is derived from this process's own executable because there is no
-   * `app` here: the same function the window calls, with Electron's answer left
-   * out. Getting that wrong is the silent kind of failure — the window answers
-   * questions and a scheduled job reports the model as not installed.
+   * The same resolver the window calls, over the same pins and the same user-data
+   * directory — so a scheduled job runs the tier the window would, at the same
+   * context. Getting that wrong is the silent kind of failure: the window answers
+   * questions while a job reports the model as not installed, or runs a different
+   * model from the one the user chose.
    */
+  const modelDirectory = modelDir({userData: paths.userData});
   const localModel = new LocalModelService({
     spec: async () =>
-      localModelSpec({
-        execPath: process.execPath,
-      }),
+      (
+        await localModelSpecFor({
+          dir: modelDirectory,
+          manifest: MODEL_PINS,
+          choice: 'auto',
+        })
+      ).spec,
     pidFile: localModelPidFile(paths.userData),
     log: (line) => {
       process.stdout.write(`${line}\n`);

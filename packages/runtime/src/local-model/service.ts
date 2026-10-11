@@ -65,7 +65,6 @@ export interface LocalModelOptions {
   log?: (line: string) => void;
   spawnImpl?: typeof spawn;
   fetchImpl?: typeof fetch;
-  platform?: NodeJS.Platform;
 }
 
 type Child = Pick<
@@ -188,9 +187,6 @@ export class LocalModelService {
         model: files.model,
         port: this.port ?? '<port>',
         ...tuning,
-        ...(this.options.platform === undefined
-          ? {}
-          : {platform: this.options.platform}),
       }),
     ];
   }
@@ -224,9 +220,6 @@ export class LocalModelService {
       model: files.model,
       port,
       ...tuning,
-      ...(this.options.platform === undefined
-        ? {}
-        : {platform: this.options.platform}),
     });
 
     const spawnImpl = this.options.spawnImpl ?? spawn;

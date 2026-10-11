@@ -75,12 +75,13 @@ Each of these is silent when it breaks. That is the whole reason they are listed
 12. **A newer document is never overwritten.** See "Documents" below.
 13. **The app and the runner resolve the same user-data directory.** When they do
     not, nothing errors: the window writes one `jobs.json`, the service reads
-    another, finds nothing due, and exits 0. **The same rule covers the model the
-    app carries**, which is why `resolveLocalModelFiles` exists and both call it:
-    the window passes Electron's `process.resourcesPath` and the runner derives
-    the path from its own executable, so a disagreement is again silent — the
-    window answers questions while a scheduled job reports the model as not
-    installed.
+    another, finds nothing due, and exits 0. **The model used to be a second case
+    of this and no longer is**: it was bundled, so the window found it through
+    Electron's `process.resourcesPath` while the runner derived the path from its
+    own executable. It is downloaded into the user-data directory now and the pins
+    are *imported* rather than located, so there is one derivation instead of two —
+    and `resolveTier`/`localModelSpecFor` are what both processes call to get the
+    same tier at the same context.
 14. **An MCP server's tools cannot take a built-in name.** The reserved set is
     every built-in name _before_ the profile filter — a tool the profile has
     switched off still owns its name, because the profile can change between
@@ -342,42 +343,56 @@ Either way the symptom is misleading and worth recognising: the dev launcher
 prints Vite's URL _first_ and Electron dies immediately after, so a host policy
 that refused a syscall reads as a renderer that failed to paint.
 
-## The model the app carries
+## The model the app downloads
 
-`scripts/local-model.mjs` fetches the engine and the weights at **package** time
-— pinned by tag, revision and sha256 in `local-model.json` — into
-`apps/desktop/.model-cache/`, and `electron-builder` copies them into the app's
-resources. A checkout has none of it, which is why `MARIMO_MODEL_DIR` exists:
-without it the app opens saying the model engine is not installed, and that is
-the state the smoke check runs in.
+**Nothing is bundled.** The app carries no weights and no engine, and downloads
+them on a user's first run into `<user-data>/model/`. That is a deliberate
+inversion of what this file used to say: an installer with 1.1 GB inside it worked
+offline out of the box, and the cost was a build that needed a gigabyte of network
+and a release that could only be rebuilt by downloading it again. The trade now is
+one download on first run, and the pins — tag, revision, per-asset sha256 — live in
+`packages/runtime/src/local-model/pins.ts`, which both processes *import* rather
+than find on disk.
 
-Four things about this are easy to get wrong and expensive to find:
+**There are two tiers of one model, and no CPU path.** `low` is Qwen3.5-4B at
+Q4_K_M (2.7 GB, 16K) and `high` is the same model at Q8_0 (4.5 GB, 32K). Every
+engine asset is a GPU build — Vulkan on Linux and Windows, Metal on macOS — and a
+machine with no usable device is refused with a sentence rather than quietly run on
+a processor. `local-model/plan.ts` decides the tier from what the engine reports as
+free, and the decision is an *estimate*: weights, a quantized cache and a compute
+buffer, plus a margin. It probes and then downloads; it never tries and falls back.
+
+Five things here are easy to get wrong and expensive to find:
 
 - **`--jinja` is load-bearing.** Without it llama.cpp does not apply the model's
-  own chat template, and Qwen3's template is what turns a `<tool_call>` block into
-  a call this app can see. The engine runs perfectly, every request succeeds, and
-  the agent is offered no tools at all.
-- **The argv is fixed, and there is nothing to configure.** The context window,
-  thinking off and `--parallel 1` are constants in `local-model/files.ts` and
-  `local-model/args.ts`; `MARIMO_MODEL_DIR` is the only override. The app carries
-  one model and runs it, so a setting here would be a second way to describe the
-  same process — and the engine cannot honour a change anyway without being
-  restarted.
+  own chat template, and Qwen3.5's template is what turns its `<tool_call>` block
+  into a call this app can see. The engine runs perfectly, every request succeeds,
+  and the agent is offered no tools at all. Verified against the pinned build: with
+  it, a tool call arrives as a structured `tool_calls` delta with its arguments.
+- **`enable_thinking:false` is honoured, and that is not universal.** One shipped
+  template ignores the flag entirely and forces thinking on, which reads as "off"
+  while every turn pays for it. Qwen3.5's honours it, so the thought stream is
+  absent when it should be and arrives as `reasoning_content` when it is not.
+- **`--flash-attn on` is not optional.** The KV cache is `q8_0`, and a quantized V
+  cache needs flash attention; an engine that resolved `auto` to `off` would store
+  the cache at f16 and use the memory the quantization exists to save.
 - **`fs.cp` rewrites relative symlinks to absolute ones** unless
   `verbatimSymlinks: true`. The released engine archives link their libraries
   relatively, so a copy points into a scratch directory that is deleted a line
   later — and the engine then fails with `error while loading shared libraries`
   while every file it names is visibly present.
-- **Never leave an engine behind.** It is 1.3 GB of memory and a spinning fan
+- **Never leave an engine behind.** It is gigabytes of memory and a spinning fan
   with no window to explain it. `LocalModelService` stops it on the way out and
-  writes a pid file so the next run can reap one that outlived a crash; the
-  command to check by hand is `pgrep -x llama-server`.
+  writes a pid file so the next run can reap one that outlived a crash; the command
+  to check by hand is `pgrep -x llama-server`.
 
-Tests for all of this inject `spawn` and `fetch`, so nothing in the suite loads a
-weight. Start a real one by hand only when you mean to:
+Tests for all of this inject `spawn`, `fetch` and `tar`, so nothing in the suite
+touches the network, spawns an archive tool, or loads a weight. Start a real one by
+hand only when you mean it:
 
 ```bash
-pnpm --filter @marimo/desktop model:fetch
+pnpm --filter @marimo/desktop model:fetch          # low tier, into .model-cache/
+pnpm --filter @marimo/desktop model:fetch high     # or the big one
 MARIMO_MODEL_DIR=$PWD/apps/desktop/.model-cache/local-model \
   pnpm --filter @marimo/desktop dev
 ```
@@ -388,13 +403,13 @@ MARIMO_MODEL_DIR=$PWD/apps/desktop/.model-cache/local-model \
 pnpm --filter @marimo/desktop package   # AppImage into apps/desktop/release/
 ```
 
-**The model is inside the installer, and that is the difference between a release
-and a build.** `package`, `package:win` and `package:mac` fetch it first;
-`package:dir` does not, and `MARIMO_SKIP_MODEL=1` skips it anywhere — which is
-what CI sets, because what its packaging step proves is that the app packages and
-the packaged runner starts, not that 1.1 GB of weights were downloaded. A release
-built with that variable set ships an app whose welcome screen says the model is
-not installed.
+**Packaging no longer fetches anything.** It used to be a build plus 1.1 GB of
+weights copied into the app's resources, with `MARIMO_SKIP_MODEL=1` as the escape
+hatch CI used. The model is downloaded on first run now, so `package`,
+`package:win` and `package:mac` are plain builds and there is no variable to
+remember. What a packaged app ships is an app that says it needs to download a
+model — which is the state a checkout is in too, and the state the smoke check
+runs in.
 
 **`asar` stays off.** The runner is this binary started with
 `ELECTRON_RUN_AS_NODE=1`, and Node mode has no asar support: reading a file

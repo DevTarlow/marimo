@@ -117,7 +117,6 @@ describe('LocalModelService', () => {
       pidFile: localModelPidFile(dir),
       spawnImpl,
       fetchImpl,
-      platform: 'linux',
       ...(options.log ? {log: (line: string) => options.log?.push(line)} : {}),
     });
   }
@@ -311,7 +310,6 @@ describe('LocalModelService', () => {
         new FakeChild()) as unknown as typeof import('node:child_process').spawn,
       fetchImpl: (async () =>
         ({ok: true, status: 200}) as Response) as unknown as typeof fetch,
-      platform: 'linux',
     });
 
     await expect(engine.ensureRunning()).resolves.toMatchObject({ok: true});

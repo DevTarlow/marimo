@@ -25,7 +25,7 @@ different app.
 
 |     |                                                                                                                                                                                                                                        |
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ✅  | The built-in model: Qwen3-1.7B (Q4_K_M) run by a llama.cpp engine the app owns, on loopback, with no account, no key and your own hardware. It is what a fresh install answers with                                                    |
+| ✅  | The model: Qwen3.5-4B run by a llama.cpp engine the app owns, on loopback, with no account and no key. Two sizes — Q4_K_M on a 4 GB card, Q8_0 on a 6 GB one — chosen from what the GPU reports, and downloaded on first run |
 | ✅  | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a workspace rail with the conversations filed under the folder they work in, light and dark following the OS or chosen                       |
 | ✅  | Two sizes of app: a simple screen and a power screen, with one switch between them                                                                                                                                                     |
 | ✅  | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming client over one backend, ~30 tools, skills, `memory.md`, JSONL conversations                                                                             |
@@ -37,7 +37,7 @@ different app.
 | ✅  | Secrets in the OS keychain: connector tokens, encrypted at rest, with a machine that has no keychain told so rather than written to in the clear                                                                                       |
 | ✅  | Scheduled jobs while the app is open, and a headless runner plus an OS service that keeps them going while it is closed                                                                                                                |
 | ✅  | The desktop companion: a frameless, transparent, click-through moss ball that answers in bubbles above itself, with its own chat bar underneath and its own settings for how long it answers, how much it shows, and whether it floats |
-| ✅  | A first run that says what is ready instead of showing a chat that refuses                                                                                                                                                             |
+| ✅  | A first run that downloads the model it needs, with progress and a resumed download, instead of showing a chat that refuses                                                                                                            |
 | ✅  | A memory review: after a conversation goes quiet the agent proposes what is worth remembering, and asks before writing it                                                                                                              |
 | 🚧  | Windows and macOS installers (the config is written and both package; the installers are unbuilt — see [Building a release](#building-a-release))                                                                                      |
 
@@ -53,8 +53,8 @@ pnpm test
 # immediately, so it is safe to paste blindly.
 ./scripts/fix-linux-sandbox.sh
 
-# The model the app ships, for a checkout. A packaged build fetches this itself;
-# this is what a development run needs, and it is 1.1 GB.
+# A model, for a checkout. A packaged app downloads its own on first run, so
+# this is only what a development run needs — 2.7 GB for the low tier.
 pnpm --filter @marimo/desktop model:fetch
 export MARIMO_MODEL_DIR="$PWD/apps/desktop/.model-cache/local-model"
 
@@ -66,11 +66,11 @@ pnpm --filter @marimo/desktop smoke
 ```
 
 **A checkout has no weights in it, and `MARIMO_MODEL_DIR` is how it finds them.**
-Without it the app opens on its welcome screen saying the model engine is not
-installed — which is a state the app has to handle anyway, and exactly what the
-smoke check exercises, since a check that needed a 1.1 GB download would not run
-in CI. `model:fetch` prints the line above when it finishes; `model:where` prints
-the directory on its own.
+Without it the app looks in its own user-data directory, finds nothing, and opens
+on the screen that offers to download a model — which is a state it has to handle
+anyway, and exactly what the smoke check exercises, since a check that needed a
+gigabyte of download would not run in CI. `model:fetch` prints the line above when
+it finishes; `model:fetch high` fetches the larger tier instead.
 
 Two environment quirks are worth knowing about up front, both covered in
 [AGENTS.md](./AGENTS.md):
@@ -113,48 +113,55 @@ because the model is a local engine and the runner dials no connectors. What the
 runner *does* need is the same user-data directory the window is using, which is
 why the service definition bakes that path in.
 
-### The model the app carries
+### The model the app downloads
 
-A fresh install has a model: Qwen3-1.7B at Q4_K_M, run by a llama.cpp
-`llama-server` that the app starts and supervises on loopback. No account, no
-key, no address to type, and nothing typed into the chat leaves the machine.
+There is one model, Qwen3.5-4B, run by a llama.cpp `llama-server` the app starts
+and supervises on loopback. No account, no key, no address to type, and nothing
+typed into the chat leaves the machine. There is no provider catalogue, no
+address to edit and no model list to fetch — a menu of services was three ways of
+describing a choice this app does not offer.
 
-It is the *only* model, and that is a decision rather than an omission. There is
-no provider catalogue, no address to edit, no key to paste and no model list to
-fetch — a menu of services was three ways of describing a choice this app no
-longer offers. The engine's argv is fixed too: an 8K context window, thinking off
-because most questions are the easy kind, and `--jinja` because without it the
-agent is offered no tools at all. `MARIMO_MODEL_DIR` is the one override, and it
-exists for a development checkout rather than for a user.
+**It comes in two sizes and the app picks one.** `low` is the model at Q4_K_M
+(2.7 GB, a 16K window) and `high` is the same weights at Q8_0 (4.5 GB, 32K). Both
+are the same model, the same chat template and the same tool calls; the only
+difference is how much of the weights survived quantization. Which one runs is
+decided from what the graphics card reports as free, and can be overridden.
 
-The engine's address is the one thing here that is _not_ an answer. It comes up
-on whatever port was free, so no address is stored anywhere: the resolver takes
-the live one from the process that started it, and a turn asked for without a
-running engine is refused with a sentence rather than sent to whichever process
-happens to be listening. That matters more than it looks — a conversation is not
-something to hand to a stranger.
+**Nothing is bundled, and the first run downloads.** A packaged app carries no
+weights and no engine, because an installer with a gigabyte inside it is a
+gigabyte in every release and every rebuild. The first run downloads a 32 MB
+engine and then the tier the machine can use, verifying each against a pinned
+sha256 and resuming an interrupted download rather than starting it again. That is
+the one moment this app needs the network, and the screen says so.
 
-Both processes start an engine, and they find its files through one function.
-The window hands it Electron's `process.resourcesPath`; the headless runner has
-no `app` at all and lets the path be derived from its own executable. That is
-[invariant 13's](./AGENTS.md) sibling, and it fails the same way: when the two
-disagree nothing errors, and a scheduled job quietly reports the model as not
-installed while the window answers questions.
+**There is no CPU path.** Every engine asset is a GPU build — Vulkan on Linux and
+Windows, Metal on macOS — and a machine with no usable device is refused with a
+sentence rather than quietly run on a processor. A 4.7B model on a CPU is a wait
+rather than an answer, and shipping the option would mean shipping a configuration
+nobody should be in.
 
-The weights are fetched at **package** time, not on a user's first launch. An
-installer with the model inside works offline, behind a proxy, and for somebody
-who would rather not wait two minutes after opening the app they just installed;
-the cost is one 1.1 GB download in a build, which is what
-`apps/desktop/scripts/local-model.mjs` does. It pins the llama.cpp release, the
-Hugging Face revision and both digests, because a downloaded binary that is not
-the one that was tested is a bug that reaches users and not this machine.
+The engine's address is the one thing here that is _not_ an answer. It comes up on
+whatever port was free, so no address is stored anywhere: the resolver takes the
+live one from the process that started it, and a turn asked for without a running
+engine is refused with a sentence rather than sent to whichever process happens to
+be listening. That matters more than it looks — a conversation is not something to
+hand to a stranger.
 
-`--jinja` is the flag the whole feature rests on. Without it llama.cpp does not
-apply the model's own chat template, and Qwen3's template is the only thing that
-turns a `<tool_call>` block in the output into a call this app can see — so the
-agent would be offered no tools, every request would succeed, and nothing would
-ever be called. It is asserted in three places, one of which is the command line
-a power user can read in Settings.
+Both processes get the same answer from the same place. The pins are a module both
+of them *import* rather than a file either of them has to find, and the model
+directory is the user-data directory [invariant 13](./AGENTS.md) is about — so a
+scheduled job runs the tier the window would, at the same context. When the two
+disagreed, nothing errored: a job quietly reported the model as not installed
+while the window answered questions.
+
+`--jinja` is the flag the whole feature rests on, and it is verified rather than
+assumed. Without it llama.cpp does not apply the model's own chat template, and
+Qwen3.5's template is the only thing that turns its `<tool_call>` block into a
+call this app can see — so the agent would be offered no tools, every request
+would succeed, and nothing would ever be called. The pinned build was checked
+end to end: a tool call arrives as a structured `tool_calls` delta with its
+arguments, the token counts arrive with it, and `enable_thinking:false` is
+honoured so thinking costs nothing on the questions that do not need it.
 
 ### Two sizes, and one switch between them
 
@@ -280,12 +287,12 @@ companion-state.json    where the moss was left
 local-model.pid         the engine this process started, so a crash cannot orphan it
 ```
 
-The model is not in there. It is part of the install: the engine and the weights
-live in the app's own resources (`Contents/Resources/local-model` on macOS,
-`resources/local-model` beside the executable elsewhere), read-only, replaced by
-installing a newer build — and `MARIMO_MODEL_DIR` points one process at a
-different copy, which is what a checkout does. Nothing in the user-data directory
-is 1.1 GB, and nothing there has to be re-downloaded to repair the app.
+The model is in there too, under `model/`: the engine, whichever tier was
+downloaded, and a marker naming the engine asset it was unpacked from so a build
+that moves to a new llama.cpp re-fetches it. It is downloaded rather than bundled,
+which is why it lives beside the rest of the user's data instead of inside the
+app — and why `MARIMO_MODEL_DIR` points one process at a different copy, which is
+what a checkout does.
 
 Each carries a `version`, and a file written by a _newer_ build is refused rather
 than overwritten — including the one holding your agents, which is the reason the
@@ -314,11 +321,20 @@ Known gaps, stated plainly:
   the schemas are there and the settings schema still carries the fields, but
   nothing in the window configures them, so they are unreachable. They are
   scheduled for nothing — somebody should either wire them or remove them.
-- **The built-in engine is the CPU build**, and the macOS one, which is Metal.
-  Vulkan and CUDA builds exist upstream and are not shipped: a per-GPU build
-  matrix is a lot of machinery for a 1.7B model. There used to be a "Local"
-  provider a user with a GPU could point at their own server; it went with the
-  catalogue, so a GPU build is now a packaging job rather than a setting.
+- **Vulkan is the only GPU backend shipped**, and macOS's Metal, which needs no
+  choice. CUDA and ROCm exist upstream and are not pinned: Vulkan is 32 MB and
+  covers NVIDIA, AMD and Intel from one asset per platform, while the Windows CUDA
+  build is 264 MB and needs a further 391 MB of cudart DLLs. Adding one later is an
+  asset in `pins.ts` and nothing else, because the probe asks the engine rather
+  than a vendor tool.
+- **The tier boundary is an estimate rather than a measurement.** Whether a 6 GB
+  card runs the large tier is computed from the weights, a quantized cache and a
+  compute buffer with a margin — not from starting it. The override exists because
+  an estimate can be wrong, and the numbers want checking against real cards.
+- **The download is verified but not signed.** Each file is checked against a
+  sha256 pinned in the app, which catches a corrupted or substituted download over
+  a hostile network only as far as the pin itself is trusted — there is no
+  signature chain behind it.
 - **The `.deb` and the two installers** need a platform each; see the table
   above for what is verified and what is not.
 
@@ -331,19 +347,12 @@ pnpm --filter @marimo/desktop package:mac   # macOS DMG
 pnpm --filter @marimo/desktop package:dir   # unpacked, no installer
 ```
 
-The first three fetch the model first — engine and weights, ~1.1 GB, cached in
-`apps/desktop/.model-cache/` and verified against `local-model.json` on every
-build. `package:dir` does not, and `MARIMO_SKIP_MODEL=1` skips it anywhere:
-
-```bash
-MARIMO_SKIP_MODEL=1 pnpm --filter @marimo/desktop package   # no model inside
-```
-
-CI uses that, because what its packaging step proves is that the app packages and
-the packaged runner still starts — not that 1.1 GB of weights were downloaded.
-**A release build must not set it**, and it is the one difference between an
-installer that answers the first question and one that says the model is not
-installed.
+All four are plain builds. They used to fetch the model first and copy ~1.1 GB of
+weights into the app's resources, with `MARIMO_SKIP_MODEL=1` as the escape hatch
+CI needed; the model is downloaded on a user's first run now, so there is nothing
+to fetch and no variable to remember. A packaged app ships an app that offers to
+download a model, which is also the state a checkout is in and the state the smoke
+check runs in.
 
 Each is built on its own platform in the normal way. What has actually been
 verified, and where:

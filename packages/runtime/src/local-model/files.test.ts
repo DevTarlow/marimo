@@ -1,89 +1,97 @@
 /**
  * Where the engine and the weights are found.
  *
- * The failure this pins is the quiet one: the window has Electron and asks it
- * for `process.resourcesPath`, while the headless runner — the same binary
- * started as plain Node — has to derive the same directory from the executable's
- * path. When the two disagree, nothing errors. The window answers questions and
- * a scheduled job, running with the app closed, reports the model as not
- * installed, which looks like a feature that was never built rather than a path
- * that is wrong.
+ * The failure this file has always pinned is the quiet one, and it has changed
+ * shape: the model used to be bundled, so the window asked Electron for
+ * `process.resourcesPath` while the headless runner derived the directory from its
+ * own executable, and when the two disagreed nothing errored — the window answered
+ * questions while a scheduled job reported the model as not installed.
+ *
+ * The model is downloaded now, so it lives in the user-data directory both
+ * processes already resolve the same way. What is left to get wrong is smaller and
+ * still worth pinning: the override has to win, the file name has to follow the
+ * tier, and "installed" has to mean the right bytes are there rather than that a
+ * file with the right name exists.
  */
-import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, rm, truncate, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
+import {parseManifest} from './manifest.js';
+import type {LocalModelManifest} from './manifest.js';
 import {
-  bundledModelDir,
-  LOCAL_CONTEXT_SIZE,
+  engineBinaryName,
+  engineDir,
+  installedTiers,
   localModelSpec,
-  MODEL_FILE_NAME,
+  MODEL_DIR_ENV,
+  MODEL_DIR_NAME,
+  modelDir,
   resolveLocalModelFiles,
 } from './files.js';
 
-describe('bundledModelDir', () => {
-  it('uses the resources directory when Electron hands one over', () => {
-    expect(
-      bundledModelDir({
-        resourcesPath: '/opt/Marimo/resources',
-        execPath: '/opt/Marimo/marimo-agent',
-      }),
-    ).toBe(join('/opt/Marimo/resources', 'local-model'));
+function manifest(): LocalModelManifest {
+  return parseManifest({
+    engine: {
+      tag: 'b1',
+      baseUrl: 'https://example.test/dl',
+      assets: {'linux-x64': {file: 'e.tar.gz', sha256: 'a'.repeat(64)}},
+      backends: {'linux-x64': 'Vulkan'},
+    },
+    weights: {
+      repo: 'someone/model-GGUF',
+      revision: 'deadbeef',
+      license: 'Apache-2.0',
+      kvBytesPerToken: 32768,
+      tiers: {
+        low: {
+          label: 'Low',
+          file: 'low.gguf',
+          sha256: 'b'.repeat(64),
+          bytes: 2_740_937_888,
+          contextSize: 16384,
+        },
+        high: {
+          label: 'High',
+          file: 'high.gguf',
+          sha256: 'c'.repeat(64),
+          bytes: 4_482_403_488,
+          contextSize: 32768,
+        },
+      },
+    },
   });
+}
 
-  /*
-   * The runner: no `app`, no `process.resourcesPath`, one executable to reason
-   * from. On Linux and Windows the resources sit beside it.
-   */
-  it('derives the same directory from the executable when there is no app', () => {
-    expect(
-      bundledModelDir({
-        resourcesPath: undefined,
-        execPath: join('/opt', 'Marimo Agent', 'marimo-agent'),
-        platform: 'linux',
-      }),
-    ).toBe(join('/opt', 'Marimo Agent', 'resources', 'local-model'));
-
-    expect(
-      bundledModelDir({
-        resourcesPath: undefined,
-        execPath: join('C:', 'Apps', 'marimo-agent.exe'),
-        platform: 'win32',
-      }),
-    ).toBe(join('C:', 'Apps', 'resources', 'local-model'));
-  });
-
-  /* macOS is the one that differs: the binary is in Contents/MacOS. */
-  it('walks up one more level on macOS', () => {
-    expect(
-      bundledModelDir({
-        resourcesPath: undefined,
-        execPath: join(
-          '/Applications',
-          'Marimo Agent.app',
-          'Contents',
-          'MacOS',
-          'marimo-agent',
-        ),
-        platform: 'darwin',
-      }),
-    ).toBe(
-      join(
-        '/Applications',
-        'Marimo Agent.app',
-        'Contents',
-        'Resources',
-        'local-model',
-      ),
+describe('modelDir', () => {
+  it('lives under the user-data directory both processes already agree on', () => {
+    expect(modelDir({userData: '/home/sam/.config/Marimo', env: {}})).toBe(
+      join('/home/sam/.config/Marimo', MODEL_DIR_NAME),
     );
   });
 
-  /* A process whose executable is not where a bundle is simply has no model. */
-  it('reports no directory when there is nothing to derive from', () => {
+  /*
+   * The override wins rather than the other way round: a development checkout and
+   * the smoke check both point at a directory of their own, and a default a
+   * checkout cannot outrank is one that does not work.
+   */
+  it('lets the environment point somewhere else', () => {
     expect(
-      bundledModelDir({resourcesPath: '', execPath: '', platform: 'linux'}),
-    ).toBe(join('', 'resources', 'local-model'));
+      modelDir({
+        userData: '/home/sam/.config/Marimo',
+        env: {[MODEL_DIR_ENV]: '/opt/weights'},
+      }),
+    ).toBe('/opt/weights');
+  });
+
+  it('ignores an empty override rather than resolving to nothing', () => {
+    expect(
+      modelDir({
+        userData: '/data',
+        env: {[MODEL_DIR_ENV]: ''},
+      }),
+    ).toBe(join('/data', MODEL_DIR_NAME));
   });
 });
 
@@ -98,92 +106,85 @@ describe('resolveLocalModelFiles', () => {
     await rm(dir, {recursive: true, force: true});
   });
 
-  /** A directory shaped like a packaged app's resources. */
-  async function shipped(options: {engine?: boolean; model?: boolean} = {}) {
-    const resources = join(dir, 'resources');
-    const root = join(resources, 'local-model');
+  /** A directory shaped like an install that has been downloaded. */
+  async function downloaded(
+    options: {engine?: boolean; tier?: 'low' | 'high'} = {},
+  ) {
+    const root = join(dir, 'model');
     await mkdir(join(root, 'engine'), {recursive: true});
     if (options.engine !== false) {
-      await writeFile(join(root, 'engine', 'llama-server'), 'binary', 'utf8');
+      await writeFile(
+        join(root, 'engine', engineBinaryName('linux')),
+        'binary',
+        'utf8',
+      );
     }
-    if (options.model !== false) {
-      await writeFile(join(root, MODEL_FILE_NAME), 'weights', 'utf8');
-    }
-    return resources;
+    const tier = options.tier ?? 'low';
+    await writeFile(join(root, manifest().weights.tiers[tier].file), 'w', 'utf8');
+    return root;
   }
 
-  it('finds both halves of a packaged install', async () => {
-    const resources = await shipped();
+  it('finds the engine and the tier’s weights', async () => {
+    const root = await downloaded();
     const files = resolveLocalModelFiles({
-      env: {},
-      resourcesPath: resources,
-      execPath: '/opt/marimo-agent',
+      dir: root,
+      manifest: manifest(),
+      tier: 'low',
       platform: 'linux',
     });
 
-    expect(files.modelPresent).toBe(true);
     expect(files.enginePresent).toBe(true);
-    expect(files.model).toBe(join(resources, 'local-model', MODEL_FILE_NAME));
-    expect(files.engine).toBe(
-      join(resources, 'local-model', 'engine', 'llama-server'),
-    );
+    expect(files.modelPresent).toBe(true);
+    expect(files.engine).toBe(join(root, 'engine', 'llama-server'));
+    expect(files.model).toBe(join(root, 'low.gguf'));
     // The libraries sit beside the binary, which is also where it is run from.
-    expect(files.libraryDir).toBe(join(resources, 'local-model', 'engine'));
+    expect(files.libraryDir).toBe(join(root, 'engine'));
   });
 
-  it('names the engine with the extension Windows needs', async () => {
-    const resources = await shipped();
-    await mkdir(join(resources, 'local-model', 'engine'), {recursive: true});
+  /*
+   * The tier decides the file name, and that is the whole reason two tiers exist.
+   * A default here would be a second place the decision could be made differently
+   * from the plan that made it.
+   */
+  it('names the file after the tier, not a constant', () => {
+    const root = join(dir, 'model');
+    const low = resolveLocalModelFiles({
+      dir: root,
+      manifest: manifest(),
+      tier: 'low',
+      platform: 'linux',
+    });
+    const high = resolveLocalModelFiles({
+      dir: root,
+      manifest: manifest(),
+      tier: 'high',
+      platform: 'linux',
+    });
+    expect(low.model).not.toBe(high.model);
+    expect(high.model.endsWith('high.gguf')).toBe(true);
+  });
+
+  it('names the engine with the extension Windows needs', () => {
     const files = resolveLocalModelFiles({
-      env: {},
-      resourcesPath: resources,
-      execPath: 'C:\\marimo-agent.exe',
+      dir: join(dir, 'model'),
+      manifest: manifest(),
+      tier: 'low',
       platform: 'win32',
     });
     expect(files.engine.endsWith('llama-server.exe')).toBe(true);
   });
 
   /*
-   * The override is for the cases the shipped copy cannot cover: a checkout with
-   * no weights in it, and the smoke check, which must run without a 1.1 GB
-   * download. It wins over the shipped copy rather than the other way round — a
-   * directory a file on disk can silently outrank is one that does not work.
-   */
-  it('prefers the directory the environment names', async () => {
-    const resources = await shipped();
-    const elsewhere = join(dir, 'elsewhere');
-    await mkdir(join(elsewhere, 'engine'), {recursive: true});
-    await writeFile(
-      join(elsewhere, 'engine', 'llama-server'),
-      'binary',
-      'utf8',
-    );
-    await writeFile(join(elsewhere, MODEL_FILE_NAME), 'weights', 'utf8');
-
-    const files = resolveLocalModelFiles({
-      env: {MARIMO_MODEL_DIR: elsewhere},
-      resourcesPath: resources,
-      execPath: '/opt/marimo-agent',
-      platform: 'linux',
-    });
-
-    expect(files.dir).toBe(elsewhere);
-    expect(files.modelPresent).toBe(true);
-    expect(files.enginePresent).toBe(true);
-  });
-
-  /*
-   * What an install that has not fetched the weights looks like — a development
-   * checkout, or a build made without the model. It has to be reportable rather
-   * than assumed, because the sentence the user gets depends on which half is
-   * missing.
+   * What an install that has been started and not finished looks like: the engine
+   * is there and the weights are not. It has to be reportable rather than assumed,
+   * because the sentence the user gets depends on which half is missing.
    */
   it('says which half is missing rather than failing later', async () => {
-    const resources = await shipped({model: false});
+    const root = await downloaded({tier: 'low'});
     const files = resolveLocalModelFiles({
-      env: {},
-      resourcesPath: resources,
-      execPath: '/opt/marimo-agent',
+      dir: root,
+      manifest: manifest(),
+      tier: 'high',
       platform: 'linux',
     });
 
@@ -192,45 +193,94 @@ describe('resolveLocalModelFiles', () => {
   });
 
   /*
-   * A directory named like the weights would pass an existence check and then
-   * fail inside the engine, with a complaint about a file it cannot open.
+   * A directory named like the weights would pass an existence check and then fail
+   * inside the engine, with a complaint about a file it cannot open.
    */
   it('does not count a directory as the model file', async () => {
-    const resources = await shipped({model: false});
-    await mkdir(join(resources, 'local-model', MODEL_FILE_NAME), {
-      recursive: true,
-    });
+    const root = join(dir, 'model');
+    await mkdir(join(root, 'low.gguf'), {recursive: true});
     const files = resolveLocalModelFiles({
-      env: {},
-      resourcesPath: resources,
-      execPath: '/opt/marimo-agent',
+      dir: root,
+      manifest: manifest(),
+      tier: 'low',
       platform: 'linux',
     });
-
     expect(files.modelPresent).toBe(false);
   });
 
-  it('reports nothing present when the directory is empty', () => {
+  it('reports nothing present for a directory that does not exist', () => {
     const files = resolveLocalModelFiles({
-      env: {},
-      resourcesPath: join(dir, 'nowhere'),
-      execPath: '/opt/marimo-agent',
+      dir: join(dir, 'nowhere'),
+      manifest: manifest(),
+      tier: 'low',
       platform: 'linux',
     });
-
     expect(files.enginePresent).toBe(false);
     expect(files.modelPresent).toBe(false);
   });
+
+  it('answers nothing at all when there is no directory to look in', () => {
+    const files = resolveLocalModelFiles({
+      dir: '',
+      manifest: manifest(),
+      tier: 'low',
+      platform: 'linux',
+    });
+    expect(files.engine).toBe('');
+    expect(files.model).toBe('');
+    expect(files.enginePresent).toBe(false);
+  });
 });
 
-/*
- * The one answer both processes build.
- *
- * The window has Electron and hands over `process.resourcesPath`; the runner has
- * no `app` and lets the path be derived from its own executable. Everything else
- * is fixed by the build, and it has to come out the same in both or a scheduled
- * job answers questions with an engine the window is not using.
- */
+describe('installedTiers', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-installed-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  /*
+   * Size, not presence. Hashing 4.5 GB on every launch is not an option, and a
+   * name check would count the interrupted download that matters — a file that
+   * looks finished and is not.
+   */
+  it('counts a tier only when the pinned number of bytes is there', async () => {
+    const tier = manifest().weights.tiers.low;
+    await writeFile(join(dir, tier.file), 'short', 'utf8');
+    expect(installedTiers({dir, manifest: manifest()})).toEqual([]);
+  });
+
+  it('finds a tier whose weights are the pinned size', async () => {
+    await sized(manifest().weights.tiers.low.file, manifest().weights.tiers.low.bytes);
+    expect(installedTiers({dir, manifest: manifest()})).toEqual(['low']);
+  });
+
+  it('finds both when both are there', async () => {
+    const tiers = manifest().weights.tiers;
+    await sized(tiers.low.file, tiers.low.bytes);
+    await sized(tiers.high.file, tiers.high.bytes);
+    expect(installedTiers({dir, manifest: manifest()})).toEqual(['low', 'high']);
+  });
+
+  /*
+   * A sparse file, because the sizes under test are 2.7 GB and 4.5 GB and writing
+   * them out would be a test that fills a disk to prove a comparison.
+   */
+  async function sized(name: string, bytes: number): Promise<void> {
+    const path = join(dir, name);
+    await writeFile(path, '', 'utf8');
+    await truncate(path, bytes);
+  }
+
+  it('answers nothing when there is no directory', () => {
+    expect(installedTiers({dir: '', manifest: manifest()})).toEqual([]);
+  });
+});
+
 describe('localModelSpec', () => {
   let dir: string;
 
@@ -242,39 +292,58 @@ describe('localModelSpec', () => {
     await rm(dir, {recursive: true, force: true});
   });
 
-  it('runs the model with a context window that fits on a laptop', () => {
+  /*
+   * The context arrives from the caller rather than from the tier, because the
+   * plan is allowed to reduce it: a card that cannot hold 32K still runs the tier
+   * at 16K, and a spec that read the tier's target would start it at the size that
+   * did not fit.
+   */
+  it('carries the window the plan chose rather than the tier’s target', () => {
     const spec = localModelSpec({
-      resourcesPath: '/opt/resources',
-      execPath: '/opt/marimo-agent',
-    });
-
-    // Comfortably under the 40960 the model was trained for. It was a setting
-    // once, and the value worth having was always this one.
-    expect(spec.contextSize).toBe(LOCAL_CONTEXT_SIZE);
-    // Qwen3's template thinks by default and thinking makes every easy question
-    // take seconds longer, so the engine is told not to.
-    expect(spec.thinking).toBe(false);
-  });
-
-  it('finds the shipped model', () => {
-    const spec = localModelSpec({
-      resourcesPath: join(dir, 'resources'),
-      execPath: '/opt/marimo-agent',
-    });
-
-    expect(spec.files.model).toBe(
-      join(dir, 'resources', 'local-model', MODEL_FILE_NAME),
-    );
-  });
-
-  /* The runner's case: no `resourcesPath` at all. */
-  it('derives the same directory when there is no app to ask', () => {
-    const spec = localModelSpec({
-      resourcesPath: undefined,
-      execPath: join(dir, 'marimo-agent'),
+      dir: join(dir, 'model'),
+      manifest: manifest(),
+      tier: 'high',
+      contextSize: 16384,
       platform: 'linux',
     });
 
-    expect(spec.files.dir).toBe(join(dir, 'resources', 'local-model'));
+    expect(spec.contextSize).toBe(16384);
+    expect(manifest().weights.tiers.high.contextSize).toBe(32768);
+  });
+
+  /*
+   * Thinking off is a constant, and it is a verified one: Qwen3.5's template
+   * honours the flag, which is not true of every model — one shipped template
+   * ignores it entirely and forces thinking on, which reads as "off" while every
+   * turn pays for it.
+   */
+  it('turns thinking off, which the pinned template honours', () => {
+    const spec = localModelSpec({
+      dir: join(dir, 'model'),
+      manifest: manifest(),
+      tier: 'low',
+      contextSize: 16384,
+      platform: 'linux',
+    });
+    expect(spec.thinking).toBe(false);
+  });
+
+  it('finds the engine and the tier’s weights', async () => {
+    const root = join(dir, 'model');
+    await mkdir(engineDir(root), {recursive: true});
+    await writeFile(join(engineDir(root), 'llama-server'), 'binary', 'utf8');
+    await writeFile(join(root, 'low.gguf'), 'weights', 'utf8');
+
+    const spec = localModelSpec({
+      dir: root,
+      manifest: manifest(),
+      tier: 'low',
+      contextSize: 16384,
+      platform: 'linux',
+    });
+
+    expect(spec.files.model).toBe(join(root, 'low.gguf'));
+    expect(spec.files.enginePresent).toBe(true);
+    expect(spec.files.modelPresent).toBe(true);
   });
 });

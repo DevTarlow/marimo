@@ -1,22 +1,28 @@
 /**
- * Where everything the built-in model needs actually lives.
+ * Where the engine and the weights are, for one tier.
  *
- * Two answers, and both are the kind this project has already been bitten by
- * once: *which* engine binary and weights to use, and *where* the app finds them.
- * The second is invariant 13's sibling. The window has Electron and can ask it
- * for `process.resourcesPath`; the headless runner is the same binary started as
- * plain Node with no `app` at all, so it has to derive the same directory from
- * the platform's rules. If the two ever disagree, nothing errors: the window
- * answers questions with the shipped model while a scheduled job, running with
- * the app closed, finds no model file and records "not installed" — a background
- * service that looks like it is working.
+ * This file used to be the app's *other* invariant-13 problem. The model was
+ * bundled inside the installer, so the window had to ask Electron for
+ * `process.resourcesPath` while the headless runner — the same binary as plain
+ * Node, with no `app` at all — derived the same directory from its own executable.
+ * When the two disagreed nothing errored: the window answered questions while a
+ * scheduled job reported the model as not installed.
  *
- * So there is one function here, both processes call it, a test pins the
- * derivation, and the Settings card shows the result. That is the same remedy as
- * the user-data directory's, for the same failure.
+ * That whole class of failure is gone, because the model is no longer shipped. It
+ * is downloaded into the user-data directory, which both processes already resolve
+ * through `resolveAppPaths` and which invariant 13 is about. There is one
+ * derivation now instead of two, and it is the one that already had a test.
+ *
+ * What survives is `MARIMO_MODEL_DIR`: a development checkout and the smoke check
+ * both point at a directory of their own, and it wins over the default rather than
+ * the other way round — a directory a shipped path can silently outrank is one
+ * that does not work.
  */
 import {statSync} from 'node:fs';
 import {dirname, join} from 'node:path';
+
+import type {LocalModelManifest, ModelTierName} from './manifest.js';
+import {MODEL_TIERS} from './manifest.js';
 
 /**
  * Points both processes at a directory of their own.
@@ -28,27 +34,15 @@ import {dirname, join} from 'node:path';
  */
 export const MODEL_DIR_ENV = 'MARIMO_MODEL_DIR';
 
-/** The name the weights are shipped under, inside the model directory. */
-export const MODEL_FILE_NAME = 'Qwen3-1.7B-Q4_K_M.gguf';
-
-/**
- * How much of a conversation the engine may hold at once.
- *
- * The model is trained for far more — 40960 tokens — and this sits well under it
- * on purpose: a window costs memory that grows with every message, and an app
- * that has to be restarted because the machine ran out is a worse failure than
- * one that forgets how a long chat began. It was a setting, and it is a constant
- * because the value worth having was always this one; `MARIMO_MODEL_DIR` is the
- * only override this feature has.
- */
-export const LOCAL_CONTEXT_SIZE = 8192;
+/** The directory the app owns, under the user-data directory it already has. */
+export const MODEL_DIR_NAME = 'model';
 
 /**
  * Everything a start needs, in one answer.
  *
  * One shape rather than three callbacks because all three are decided together,
- * and asking for them separately is how two callers come to disagree about what
- * is being started.
+ * and asking for them separately is how two callers come to disagree about what is
+ * being started.
  */
 export interface LocalModelSpec {
   files: LocalModelFiles;
@@ -65,84 +59,69 @@ export interface LocalModelFiles {
    * The directory holding the engine's shared libraries.
    *
    * The released archives unpack `libllama.so`, `libggml*.so` and friends beside
-   * the binary and expect to be run from there, so the child is spawned with
-   * this as its working directory *and* on `LD_LIBRARY_PATH` — the rpath in the
-   * shipped build is not something this app should assume.
+   * the binary and expect to be run from there, so the child is spawned with this
+   * as its working directory *and* on `LD_LIBRARY_PATH` — the rpath in the shipped
+   * build is not something this app should assume.
    */
   libraryDir: string;
-  /** The weights, whichever of the two named them. */
+  /** The weights for this tier. */
   model: string;
   /** Whether the engine binary is there. */
   enginePresent: boolean;
-  /** Whether the weights are there. */
+  /** Whether this tier's weights are there. */
   modelPresent: boolean;
 }
 
 /**
- * Where the shipped copy lives, or `undefined` when this build has none.
+ * The directory the model lives in.
  *
- * `<resources>` is the directory `electron-builder` puts `extraResources` into:
- * `Contents/Resources` on macOS, `resources/` beside the executable on Linux and
- * Windows. Electron hands the main process `process.resourcesPath`; the runner
- * walks up from `process.execPath`, which is the same executable.
+ * `MARIMO_MODEL_DIR` first, because it is what a checkout and the smoke check set,
+ * then the app's own directory under user data. No `resourcesPath` argument any
+ * more: there is nothing to find inside the app.
  */
-export function bundledModelDir(options: {
-  resourcesPath?: string | undefined;
-  execPath: string;
-  platform?: NodeJS.Platform;
-}): string | undefined {
-  const platform = options.platform ?? process.platform;
-  if (options.resourcesPath !== undefined && options.resourcesPath.length > 0) {
-    return join(options.resourcesPath, 'local-model');
-  }
+export function modelDir(options: {
+  userData: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const env = options.env ?? process.env;
+  const override = env[MODEL_DIR_ENV];
+  return override !== undefined && override.length > 0
+    ? override
+    : join(options.userData, MODEL_DIR_NAME);
+}
 
-  /*
-   * No `process.resourcesPath`: this is the runner, or a plain Node process.
-   *
-   * The layout is Electron's own and is the same on all three platforms —
-   * `.../resources/<app>` — except on macOS, where the executable sits in
-   * `Contents/MacOS` and the resources are its sibling. There is no way to ask,
-   * so it is derived, and a wrong answer here is the silent kind: the engine is
-   * simply not found and the model reports itself as not installed.
-   */
-  if (platform === 'darwin') {
-    return join(dirname(dirname(options.execPath)), 'Resources', 'local-model');
-  }
-  return join(dirname(options.execPath), 'resources', 'local-model');
+/** The engine binary's name, which is the one thing Windows spells differently. */
+export function engineBinaryName(
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === 'win32' ? 'llama-server.exe' : 'llama-server';
+}
+
+/** Where the engine is unpacked inside the model directory. */
+export function engineDir(dir: string): string {
+  return join(dir, 'engine');
 }
 
 /**
- * The files this install would use, in the order the answers are decided.
+ * The files this install would use for one tier.
  *
- * `MARIMO_MODEL_DIR` wins over the shipped copy rather than the other way round:
- * it is what a development checkout and the smoke check set, and a directory a
- * shipped file could silently outrank is one that does not work.
+ * `tier` is required rather than defaulted: the whole point of two tiers is that
+ * the file name depends on the decision, and a default here would be a second
+ * place the decision could be made differently.
  */
 export function resolveLocalModelFiles(options: {
-  env?: NodeJS.ProcessEnv;
-  resourcesPath?: string | undefined;
-  execPath: string;
+  dir: string;
+  manifest: LocalModelManifest;
+  tier: ModelTierName;
   platform?: NodeJS.Platform;
 }): LocalModelFiles {
-  const env = options.env ?? process.env;
-  const override = env[MODEL_DIR_ENV];
-  const dir =
-    override !== undefined && override.length > 0
-      ? override
-      : (bundledModelDir({
-          resourcesPath: options.resourcesPath,
-          execPath: options.execPath,
-          ...(options.platform === undefined
-            ? {}
-            : {platform: options.platform}),
-        }) ?? '');
-
-  const engineName =
-    (options.platform ?? process.platform) === 'win32'
-      ? 'llama-server.exe'
-      : 'llama-server';
-  const engine = dir.length > 0 ? join(dir, 'engine', engineName) : '';
-  const model = dir.length > 0 ? join(dir, MODEL_FILE_NAME) : '';
+  const {dir} = options;
+  const engine =
+    dir.length > 0
+      ? join(engineDir(dir), engineBinaryName(options.platform))
+      : '';
+  const model =
+    dir.length > 0 ? join(dir, options.manifest.weights.tiers[options.tier].file) : '';
 
   return {
     dir,
@@ -155,46 +134,91 @@ export function resolveLocalModelFiles(options: {
 }
 
 /**
- * The spec for this build's model.
+ * The spec for one tier, with the window the plan chose.
  *
  * Shared by the two processes that start an engine — the window and the headless
- * runner — because the only thing that differs between them is how they find
- * `resourcesPath`, and everything else about the answer has to be identical. One
- * definition means a change made for one process cannot leave the other running
- * a different engine, which is the failure invariant 13 is about.
+ * runner — because everything about the answer has to be identical between them.
+ * One definition means a change made for one process cannot leave the other
+ * running a different engine, which is the failure this file's history is about.
  *
- * `thinking` is off, and it is a constant rather than a setting for the same
- * reason the context size is: Qwen3's template thinks by default, thinking makes
- * every easy question take seconds longer, and most questions are the easy kind.
+ * `contextSize` arrives from the caller rather than from the tier, because the
+ * plan is allowed to reduce it: a card that cannot hold 32K still runs the tier at
+ * 16K, and a spec that read the tier's target would start it at the size that did
+ * not fit.
+ *
+ * `thinking` is off, and it is a constant rather than a setting: Qwen3.5's template
+ * thinks by default, thinking makes every easy question take seconds longer, and
+ * most questions are the easy kind. Verified against the pinned build rather than
+ * assumed — the template honours the flag, which is not true of every model.
  */
-export function localModelSpec(where: {
-  resourcesPath?: string | undefined;
-  execPath: string;
+export function localModelSpec(options: {
+  dir: string;
+  manifest: LocalModelManifest;
+  tier: ModelTierName;
+  contextSize: number;
   platform?: NodeJS.Platform;
 }): LocalModelSpec {
   return {
-    files: resolveLocalModelFiles({env: process.env, ...where}),
-    contextSize: LOCAL_CONTEXT_SIZE,
+    files: resolveLocalModelFiles(options),
+    contextSize: options.contextSize,
     thinking: false,
   };
+}
+
+/**
+ * Whether an engine binary is unpacked at all.
+ *
+ * Asked on its own, without a tier, because the probe needs it before any tier has
+ * been decided: a caller that has no engine has nothing to ask about the hardware,
+ * and caching that answer would outlive the install that changed it.
+ */
+export function engineInstalled(
+  dir: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return (
+    dir.length > 0 && sizeOf(join(engineDir(dir), engineBinaryName(platform))) >= 0
+  );
+}
+
+/**
+ * Which tiers' weights are on disk.
+ *
+ * Presence plus the *exact* byte count from the manifest, which is the same test
+ * `verify` has always used. Hashing 4.5 GB on every launch is not an option, and
+ * a size check still catches the failure that matters — a download that was
+ * interrupted and left a file that looks present.
+ */
+export function installedTiers(options: {
+  dir: string;
+  manifest: LocalModelManifest;
+}): ModelTierName[] {
+  const {dir, manifest} = options;
+  if (dir.length === 0) {
+    return [];
+  }
+  return MODEL_TIERS.filter((name) => {
+    const tier = manifest.weights.tiers[name];
+    return sizeOf(join(dir, tier.file)) === tier.bytes;
+  });
+}
+
+function sizeOf(path: string): number {
+  try {
+    const stats = statSync(path);
+    return stats.isFile() ? stats.size : -1;
+  } catch {
+    return -1;
+  }
 }
 
 /**
  * Whether a path is a file rather than nothing, a directory, or a broken link.
  *
  * `statSync` rather than `existsSync` alone: a *directory* named like the model
- * file would pass an existence check and then fail somewhere far less clear,
- * with the engine complaining about a file it cannot open.
+ * file would pass an existence check and then fail somewhere far less clear, with
+ * the engine complaining about a file it cannot open.
  */
 function isFile(path: string): boolean {
-  if (path.length === 0) {
-    return false;
-  }
-  try {
-    return statSync(path).isFile();
-  } catch {
-    // Absent, unreadable, or a link to nowhere. All three mean "not usable",
-    // which is the only question the caller is asking.
-    return false;
-  }
+  return sizeOf(path) >= 0;
 }

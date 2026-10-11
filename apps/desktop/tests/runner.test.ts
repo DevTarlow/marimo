@@ -144,19 +144,19 @@ describe('runDue', () => {
   });
 
   /*
-   * The built-in model, from the runner's side.
+   * The model, from the runner's side.
    *
    * This is the part that cannot be shared with the window and so has to be
-   * checked here: the runner has no `app`, derives the model directory from its
-   * own executable, and is the only process that has to work while the window is
-   * closed. What it must never do is *pretend* — an install whose weights are not
-   * where the runner looks has to record that against the job, with the path, so
+   * checked here: the runner has no `app` at all, resolves the model directory
+   * from the user-data directory alone, and is the only process that has to work
+   * while the window is closed. What it must never do is *pretend* — an install
+   * with nothing downloaded has to record that against the job, with the path, so
    * the person reading the jobs file can see which file was wanted.
    *
-   * No engine is started: the files are not there, which is checked before
-   * anything is spawned.
+   * The path is the user-data one rather than anything inside the app, because
+   * nothing is bundled any more: the app downloads its model on first run.
    */
-  it('records that the built-in model is missing, and where it looked', async () => {
+  it('records that the model is not installed, and where it looked', async () => {
     await seedDueJob();
 
     const report = await runDue({paths});
@@ -166,8 +166,9 @@ describe('runDue', () => {
     const job = after.jobs.jobs[0];
     expect(job.lastStatus).toBe('error');
     expect(job.lastError).toContain('model engine');
-    // The path, because a complaint about a missing file is useless without it.
-    expect(job.lastError).toContain('resources');
+    // The path, because a complaint about a missing file is useless without it —
+    // and it is the directory this install would download into.
+    expect(job.lastError).toContain(join(paths.userData, 'model', 'engine'));
   });
 
   /*

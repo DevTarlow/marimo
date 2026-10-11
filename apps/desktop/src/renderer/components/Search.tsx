@@ -97,28 +97,58 @@ export function Search({
   const grouped = group(hits);
 
   return (
-    <div className="search-backdrop" role="dialog" aria-label="Search">
+    <div
+      className="search-backdrop"
+      role="dialog"
+      aria-label="Search"
+      /*
+       * A click on the dark area closes it, and the panel is what stops that:
+       * comparing the target to the backdrop rather than checking whether the
+       * panel contains it means a click on a result cannot bubble out and shut
+       * the thing the person was reading.
+       */
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <div className="search">
-        <input
-          className="search-field"
-          autoFocus
-          placeholder="Find something by what it means…"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              onClose();
-            }
-            if (event.key === 'ArrowDown') {
-              event.preventDefault();
-              setSelected((current) => Math.min(current + 1, hits.length - 1));
-            }
-            if (event.key === 'ArrowUp') {
-              event.preventDefault();
-              setSelected((current) => Math.max(current - 1, 0));
-            }
-          }}
-        />
+        <div className="search-head">
+          <input
+            className="search-field"
+            autoFocus
+            placeholder="Find something by what it means…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                onClose();
+              }
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setSelected((current) => Math.min(current + 1, hits.length - 1));
+              }
+              if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setSelected((current) => Math.max(current - 1, 0));
+              }
+            }}
+          />
+          {/*
+            The way out, in the corner where people look for it. Escape works and
+            always did, but a panel with nothing to click is one somebody sits in.
+          */}
+          <button
+            type="button"
+            className="search-close"
+            aria-label="Close search"
+            title="Close (Esc)"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
 
         {problem !== null && <p className="search-note">{problem}</p>}
 

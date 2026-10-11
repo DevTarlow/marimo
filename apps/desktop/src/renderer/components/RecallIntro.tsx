@@ -108,27 +108,15 @@ export function RecallIntro({
       <h2>Search by what you remember about it</h2>
 
       <p className="onboarding-lead">
-        Recall looks through the folder you give your agent, and through the notes
-        it keeps about you. You ask for something the way you would say it out
-        loud, and it finds the place that matches.
+        Recall looks through the folder you give your agent and the notes it
+        keeps about you. Ask why the upload keeps failing and it lands on the
+        code that retries.
       </p>
 
       <p className="onboarding-note">
-        Ask why the upload keeps failing and it lands on the code that retries.
-        Retry is not in the question. Ask what you decided about the folders and
-        it finds the note from three weeks ago.
-      </p>
-
-      <p className="onboarding-note">
-        You can search this way yourself, from this window. Press{' '}
-        <strong>Ctrl+K</strong>, type what you remember, and read the lines where
-        they are.
-      </p>
-
-      <p className="onboarding-note">
-        It is a {size} download. It runs on your processor next to the model that
-        answers questions, so it does not take video memory from it. What you
-        search stays on this computer.
+        Search this way yourself with <strong>Ctrl+K</strong>. It is a {size}{' '}
+        download that runs on your processor, and what you search stays on this
+        computer.
       </p>
 
       {installing !== undefined && (

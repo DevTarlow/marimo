@@ -39,7 +39,13 @@ import type {IndexCoverage} from './indexer.js';
 import {documentText, queryText} from './prefixes.js';
 import {DEFAULT_LIMIT, MAX_LIMIT, searchVectors} from './search.js';
 import type {SearchHit} from './search.js';
-import {INDEX_FILE, digestOf, readIndex, removeIndex} from './store.js';
+import {
+  INDEX_FILE,
+  digestOf,
+  previewOf,
+  readIndex,
+  removeIndex,
+} from './store.js';
 import type {FileStamp, IndexModel, IndexRecord} from './store.js';
 
 /** The corpora this app can search. */
@@ -173,6 +179,7 @@ export class RecallService {
     const notes: string[] = [];
     const empty: IndexCoverage = {
       files: 0,
+      evicted: 0,
       chunks: 0,
       memory: 0,
       embedded: 0,
@@ -205,6 +212,16 @@ export class RecallService {
       if (coverage.skipped > 0) {
         notes.push(
           `${String(coverage.skipped)} file(s) could not be read or embedded.`,
+        );
+      }
+      if (coverage.evicted > 0) {
+        /*
+         * Said out loud, because the alternative is a search that answers about
+         * part of a folder while reading as though it read all of it.
+         */
+        notes.push(
+          `The index is full, so ${String(coverage.evicted)} file(s) were dropped ` +
+            'to stay within it. The ones kept are the most recently changed.',
         );
       }
     } catch (failure) {
@@ -304,10 +321,16 @@ export class RecallService {
       ...(hit.startLine === undefined ? {} : {startLine: hit.startLine}),
       ...(hit.endLine === undefined ? {} : {endLine: hit.endLine}),
       ...(hit.section === undefined ? {} : {section: hit.section}),
-      preview: hit.preview,
       score: hit.score,
     };
 
+    /*
+     * The preview is rendered from the text the read just verified, rather than
+     * kept in the index. The index holds positions and digests; the one line a
+     * list shows is derived from the source at the moment the source is checked,
+     * which is the same moment, and it means the file on disk carries no copy of
+     * anybody's code.
+     */
     if (hit.kind === 'memory') {
       const memory =
         this.options.readMemory === undefined ? '' : await this.options.readMemory();
@@ -316,19 +339,19 @@ export class RecallService {
           entry.section === hit.section && digestOf(entry.text) === hit.sha256,
       );
       return bullet === undefined
-        ? {...base, text: '', stale: true}
-        : {...base, text: bullet.text, stale: false};
+        ? {...base, preview: '', text: '', stale: true}
+        : {...base, preview: previewOf(bullet.text), text: bullet.text, stale: false};
     }
 
     const root = this.options.workspaceRoot;
     if (root === undefined || root.length === 0) {
-      return {...base, text: '', stale: true};
+      return {...base, preview: '', text: '', stale: true};
     }
     let text: string;
     try {
       text = await readFile(join(root, hit.path.split('/').join(sep)), 'utf8');
     } catch {
-      return {...base, text: '', stale: true};
+      return {...base, preview: '', text: '', stale: true};
     }
     const chunk = chunkText(text).find(
       (entry) =>
@@ -337,8 +360,8 @@ export class RecallService {
         digestOf(entry.text) === hit.sha256,
     );
     return chunk === undefined
-      ? {...base, text: '', stale: true}
-      : {...base, text: chunk.text, stale: false};
+      ? {...base, preview: '', text: '', stale: true}
+      : {...base, preview: previewOf(chunk.text), text: chunk.text, stale: false};
   }
 
   /** How many indexed files no longer match the stamp they were built from. */

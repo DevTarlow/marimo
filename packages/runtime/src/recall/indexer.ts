@@ -32,8 +32,8 @@ import {
   digestOf,
   emptyIndex,
   MEMORY_SOURCE,
+  MAX_RECORDS,
   normalize,
-  previewOf,
   readIndex,
   writeIndex,
 } from './store.js';
@@ -55,6 +55,13 @@ export const REFRESH_CHUNKS = 2_000;
 export interface IndexCoverage {
   /** Files whose text is in the index now. */
   files: number;
+  /**
+   * Files dropped by this refresh to stay under the record cap.
+   *
+   * Reported rather than silent: a search that quietly stopped covering part of
+   * somebody's folder would answer as though the rest did not exist.
+   */
+  evicted: number;
   /** Text vectors the index holds. */
   chunks: number;
   /** Memory bullets the index holds. */
@@ -93,6 +100,8 @@ export interface RefreshOptions {
   memory?: string;
   maxFiles?: number;
   maxChunks?: number;
+  /** How many vectors this index may hold before the oldest files are dropped. */
+  maxRecords?: number;
   now?: () => Date;
   /** Told after each file, for a caller that reports progress. */
   onFile?: (path: string) => void;
@@ -117,11 +126,13 @@ export async function refreshIndex(
   const now = options.now ?? (() => new Date());
   const maxFiles = options.maxFiles ?? REFRESH_FILES;
   const maxChunks = options.maxChunks ?? REFRESH_CHUNKS;
+  const maxRecords = options.maxRecords ?? MAX_RECORDS;
 
   const usable = await readIndex(dir, model);
 
   const coverage: IndexCoverage = {
     files: 0,
+    evicted: 0,
     chunks: 0,
     memory: 0,
     embedded: 0,
@@ -248,7 +259,6 @@ export async function refreshIndex(
         startLine: chunk.startLine,
         endLine: chunk.endLine,
         sha256: digestOf(chunk.text),
-        preview: previewOf(chunk.text),
       });
       vectors.push(normalize(vector));
     }
@@ -258,6 +268,16 @@ export async function refreshIndex(
     chunksThisPass += records.length;
     options.onFile?.(file.path);
   }
+
+  /*
+   * The cap, applied before anything is written.
+   *
+   * The oldest-modified files go first, because the index is a cache of the folder
+   * as it is now: a file nobody has touched in a year is the least likely thing to
+   * be asked about, and the most likely to be the thing that pushed a working index
+   * over a memory limit.
+   */
+  coverage.evicted = evict(kept, maxRecords);
 
   const memory = await memoryRecords(options, usable, coverage);
 
@@ -331,7 +351,6 @@ async function memoryRecords(
       path: MEMORY_SOURCE,
       section: bullet.section,
       sha256: digestOf(bullet.text),
-      preview: previewOf(bullet.text),
     });
     vectors.push(normalize(vector));
   }
@@ -371,6 +390,41 @@ export function memoryBullets(memory: string): MemoryBullet[] {
 
 /** What the file's preamble is called, for a bullet that has no heading. */
 const MEMORY_FALLBACK_SECTION = 'memory.md';
+
+/**
+ * Drops the oldest-modified files until the index fits.
+ *
+ * Whole files, never half of one: a chunk of a file with its neighbours missing is
+ * a result list that quotes the middle of something and cannot say what it was
+ * part of. Returns how many files went, so the caller can say so.
+ */
+function evict(
+  kept: Map<string, {stamp: FileStamp; records: IndexRecord[]; vectors: Float32Array[]}>,
+  maxRecords: number,
+): number {
+  let total = 0;
+  for (const entry of kept.values()) {
+    total += entry.records.length;
+  }
+  if (total <= maxRecords) {
+    return 0;
+  }
+
+  const oldest = [...kept.entries()]
+    .filter(([, entry]) => entry.records.length > 0)
+    .sort((left, right) => left[1].stamp.mtimeMs - right[1].stamp.mtimeMs);
+
+  let evicted = 0;
+  for (const [path, entry] of oldest) {
+    if (total <= maxRecords) {
+      break;
+    }
+    total -= entry.records.length;
+    kept.delete(path);
+    evicted += 1;
+  }
+  return evicted;
+}
 
 /**
  * The files to consider, as absolute paths.

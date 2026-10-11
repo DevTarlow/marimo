@@ -10,13 +10,13 @@
  * Files are real, in a temporary directory, because everything about deciding
  * what changed is a fact about the filesystem: stamps, sizes, and the walk.
  */
-import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {memoryBullets, refreshIndex} from './indexer.js';
-import {readIndex} from './store.js';
+import {INDEX_FILE, readIndex} from './store.js';
 import type {IndexModel} from './store.js';
 
 const MODEL: IndexModel = {repo: 'unsloth/embeddinggemma-2-GGUF', revision: 'rev2', dims: 8};
@@ -114,7 +114,15 @@ describe('refreshIndex', () => {
     const chunk = data.file.records.find((record) => record.path === 'src/retry.ts');
     expect(chunk?.startLine).toBe(1);
     expect(chunk?.endLine).toBe(2);
-    expect(chunk?.preview).toContain('withRetry');
+    expect(chunk?.sha256).toHaveLength(64);
+    /*
+     * And no text, checked against the file rather than the type: the index lives
+     * inside the folder it describes, where a `git add -A` would put a copy of
+     * somebody's code into a commit. A field would be quieter than this.
+     */
+    const written = await readFile(join(indexDir, INDEX_FILE), 'utf8');
+    expect(written).not.toContain('withRetry');
+    expect(written).not.toContain('the user prefers tabs');
     // The file name travels with the text, which is what the model was trained on.
     expect(embedder.calls.flat().join('\n')).toContain('title: src/retry.ts | text:');
   });
@@ -254,6 +262,33 @@ describe('refreshIndex', () => {
 
     expect(coverage.skipped).toBe(1);
     expect(data.file.records).toEqual([]);
+  });
+
+  /*
+   * The cap, and the reporting of it. A folder bigger than the index may hold is
+   * a real case — a monorepo — and the failure mode is a search that answers as
+   * though the rest of the folder did not exist.
+   */
+  it('drops the oldest files to stay inside the cap, and says how many', async () => {
+    await write('old.ts', 'const retry = 1;');
+    await new Promise((resolve) => setTimeout(resolve, 12));
+    await write('new.ts', 'const retry = 2;');
+
+    const {coverage, data} = await refreshIndex({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: fakeEmbedder().embed,
+      maxRecords: 1,
+    });
+
+    expect(coverage.evicted).toBe(1);
+    const paths = data.file.files.map((file) => file.path);
+    // The one that changed most recently is the one kept: the index is a cache of
+    // the folder as it is now.
+    expect(paths).toContain('new.ts');
+    expect(paths).not.toContain('old.ts');
+    expect(data.file.records).toHaveLength(1);
   });
 
   it('writes an index that a reader accepts', async () => {

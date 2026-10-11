@@ -15,8 +15,8 @@ import type {IndexRecord} from './store.js';
 /** A record whose text is its own name, for readable assertions. */
 function record(name: string, kind: 'text' | 'memory' = 'text'): IndexRecord {
   return kind === 'memory'
-    ? {kind: 'memory', path: '(memory)', section: name, sha256: name, preview: name}
-    : {kind: 'text', path: name, startLine: 1, endLine: 2, sha256: name, preview: name};
+    ? {kind: 'memory', path: '(memory)', section: name, sha256: name}
+    : {kind: 'text', path: name, startLine: 1, endLine: 2, sha256: name};
 }
 
 /** One unit vector per record, pointing at a named axis. */

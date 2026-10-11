@@ -42,6 +42,19 @@ import {join} from 'node:path';
 export const INDEX_VERSION = 1;
 
 export const INDEX_FILE = 'index.json';
+
+/**
+ * How many vectors one index may hold.
+ *
+ * A bound rather than a target, and it exists because of what a search does with
+ * the file: the whole vector array is read into memory and scored, on a machine
+ * already holding a 4.7B model. At 768 dimensions a record is 3 KB, so this is
+ * about 150 MB at the ceiling — past which the answer is not "a bigger index" but
+ * "this folder is not the one to index whole".
+ *
+ * Fifty thousand chunks is roughly a large monorepo, or six copies of this one.
+ */
+export const MAX_RECORDS = 50_000;
 export const VECTORS_FILE = 'vectors.bin';
 
 /**
@@ -78,16 +91,22 @@ export interface IndexRecord {
    * longer matches it.
    */
   sha256: string;
-  /**
-   * A one-line preview, for a result list.
-   *
-   * Stored rather than read back, because rendering a list of twenty results
-   * should not be twenty file reads — and because a preview is not a quote: the
-   * lines a hit actually stands for are read from the source when somebody looks
-   * at one.
-   */
-  preview: string;
 }
+
+/*
+ * There is deliberately no `preview` field here, and there was one.
+ *
+ * It stored the first line of every chunk, which meant this file held snippets of
+ * every file the app had read — and this file lives *inside the folder it
+ * describes*, where a `git add -A` puts it in a commit and a shared branch. The
+ * promise made to the user is that an index holds positions and digests rather
+ * than content, and a preview quietly broke it for a saving that turns out not to
+ * exist: every hit that is actually returned is read back from its source anyway,
+ * to check the digest, so the preview was a copy of text the caller already had.
+ *
+ * `previewOf` below still exists — it renders one line from text that is already
+ * in hand.
+ */
 
 /** A file as the index last saw it, for deciding what changed. */
 export interface FileStamp {

@@ -10,7 +10,12 @@
  */
 import {describe, expect, it} from 'vitest';
 
-import {documentText, QUERY_PREFIX, queryText} from './prefixes.js';
+import {
+  CODE_QUERY_PREFIX,
+  documentText,
+  QUERY_PREFIX,
+  queryText,
+} from './prefixes.js';
 
 describe('queryText', () => {
   it('prefixes the question the way the model was trained', () => {
@@ -30,6 +35,19 @@ describe('queryText', () => {
     expect(queryText('  what\n  uses\tretries?  ')).toBe(
       'task: search result | query: what uses retries?',
     );
+  });
+
+  /*
+   * The other query prompt, for a folder that is mostly code. Same question, same
+   * document side, one word of instruction different — which is exactly the kind
+   * of difference that has to be asserted, because a search under the wrong one
+   * returns a plausible list rather than an error.
+   */
+  it('asks a code question the code way when the folder is code', () => {
+    expect(queryText('where is the retry logic', 'code')).toBe(
+      'task: code retrieval | query: where is the retry logic',
+    );
+    expect(CODE_QUERY_PREFIX).toBe('task: code retrieval | query:');
   });
 
   it('leaves an empty question as the bare prefix', () => {

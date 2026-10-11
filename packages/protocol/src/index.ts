@@ -471,6 +471,18 @@ export const recallSettingsSchema = z.object({
   enabled: z.boolean(),
   memory: z.boolean(),
   workspace: z.boolean(),
+  /**
+   * Whether questions about this folder are asked the model's *code* way.
+   *
+   * The model was trained with two query prompts and identical document prompts:
+   * `task: search result` for prose and `task: code retrieval` for code, where the
+   * second scores better on code-only corpora. There is no way to tell which one a
+   * question wants — "why does the upload keep failing" is equally about a file
+   * and about a function — so this is the user's answer about their folder rather
+   * than a guess made per query. Off by default: a wrong guess is invisible in a
+   * result list, and prose is the safer thing to be wrong about.
+   */
+  codeQueries: z.boolean(),
 });
 
 export type RecallSettings = z.infer<typeof recallSettingsSchema>;
@@ -559,7 +571,7 @@ export interface RecallModelStatus {
 }
 
 export function defaultRecallSettings(): RecallSettings {
-  return {enabled: false, memory: true, workspace: true};
+  return {enabled: false, memory: true, workspace: true, codeQueries: false};
 }
 
 /**

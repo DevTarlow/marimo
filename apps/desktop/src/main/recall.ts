@@ -55,6 +55,14 @@ export interface RecallHostOptions {
   onInstalled?: (piece: 'text' | 'media') => void;
   onFailed?: (message: string) => void;
   onIndexed?: (counts: {records: number; chunks: number; memory: number}) => void;
+  /**
+   * Read indexes and never build one.
+   *
+   * The headless runner's mode. It may start the engine to embed a question; it is
+   * refused the refresh, because a scheduled run has nobody watching it, can be
+   * killed mid-write, and must not fight the window over the same files.
+   */
+  readOnly?: boolean;
   spawnImpl?: typeof import('node:child_process').spawn;
   fetchImpl?: typeof fetch;
 }
@@ -147,6 +155,8 @@ export class RecallHost {
         dims: EMBEDDING_PINS.weights.dims,
       },
       embed: async (texts) => await this.engine.embedText(texts),
+      codeQueries: settings.recall.codeQueries,
+      ...(this.options.readOnly === true ? {readOnly: true} : {}),
       ...(settings.recall.memory
         ? {readMemory: async () => await memory.read()}
         : {}),

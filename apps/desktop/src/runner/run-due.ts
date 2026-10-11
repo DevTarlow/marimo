@@ -32,6 +32,8 @@
  */
 import {pathToFileURL} from 'node:url';
 
+import {RecallHost} from '../main/recall.js';
+
 import {
   AgentRuntime,
   createJobRunner,
@@ -152,10 +154,36 @@ export async function runDue(options: {
     },
   });
 
-  const runtime = new AgentRuntime({
+  /*
+   * Recall, in its read-only form.
+   *
+   * A scheduled job may search an index the window built and may never write one:
+   * it has nobody watching, it can be killed at any moment, and two processes
+   * indexing the same folder is the fight the file lock exists to prevent. The
+   * engine is still started on demand, because turning a question into a vector
+   * needs it — what is refused is the refresh.
+   */
+  const recall = new RecallHost({
+    userData: paths.userData,
+    // Assigned below: the settings live on the runtime, and the host reads them
+    // per call rather than at construction, so this closure is never called early.
+    readSettings: async () => await agent.settings(),
+    readOnly: true,
+  });
+
+  const agent: AgentRuntime = new AgentRuntime({
     paths,
     appName: PRODUCT_NAME,
     localModel,
+    recall: {
+      stop: async () => {
+        await recall.stop();
+      },
+    },
+    services: async (profileId, workspaceRoot) => {
+      const service = await recall.serviceFor(profileId, workspaceRoot);
+      return service === undefined ? {} : {recallService: service};
+    },
   });
 
   /*
@@ -171,7 +199,7 @@ export async function runDue(options: {
   const lock = await holdProcessLock(paths.appLock);
   if (lock === undefined) {
     // Somebody took it between the check above and here. Theirs.
-    await runtime.dispose();
+    await agent.dispose();
     return {
       userData: paths.userData,
       appIsRunning: true,
@@ -191,7 +219,7 @@ export async function runDue(options: {
   const ran = new Set<string>();
   const scheduler = new JobScheduler({
     store: jobs,
-    runner: createJobRunner({runtime, jobs}),
+    runner: createJobRunner({runtime: agent, jobs}),
     onChange: (jobId) => {
       ran.add(jobId);
       options.onRun?.(jobId);
@@ -206,7 +234,7 @@ export async function runDue(options: {
     await scheduler.runOnce();
   } finally {
     await lock.release();
-    await runtime.dispose();
+    await agent.dispose();
   }
 
   const after = await jobs.load();

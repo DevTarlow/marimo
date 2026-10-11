@@ -998,6 +998,7 @@ describe('the recall block', () => {
       enabled: false,
       memory: true,
       workspace: true,
+      codeQueries: false,
     });
   });
 
@@ -1049,6 +1050,11 @@ describe('the recall block', () => {
     await store.patch({recall: {enabled: true}});
     const merged = await store.patch({recall: {workspace: false}});
 
-    expect(merged.recall).toEqual({enabled: true, memory: true, workspace: false});
+    expect(merged.recall).toEqual({
+      enabled: true,
+      memory: true,
+      workspace: false,
+      codeQueries: false,
+    });
   });
 });

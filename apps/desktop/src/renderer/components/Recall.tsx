@@ -79,6 +79,7 @@ export function Recall({
     enabled?: boolean;
     memory?: boolean;
     workspace?: boolean;
+    codeQueries?: boolean;
   }): Promise<void> => {
     setBusy(true);
     try {
@@ -217,6 +218,24 @@ export function Recall({
             />
             Index what it remembers about you
           </label>
+
+          <label className="settings-check">
+            <input
+              type="checkbox"
+              checked={settings?.recall.codeQueries ?? false}
+              disabled={busy}
+              onChange={(event) => {
+                void set({codeQueries: event.target.checked});
+              }}
+            />
+            This folder is mostly code
+          </label>
+          <p className="settings-muted">
+            The model has two ways of being asked a question, one for prose and one
+            for code, and the code one finds code better. Nothing here can tell
+            which a question wants, so this is your answer about the folder rather
+            than a guess made per search.
+          </p>
 
           <p className="settings-muted">
             {index === undefined || index.records === 0

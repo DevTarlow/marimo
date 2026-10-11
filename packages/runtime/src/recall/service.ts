@@ -122,6 +122,23 @@ export interface RecallServiceOptions {
    * opinion about which file the agent's memory is in.
    */
   readMemory?: () => Promise<string>;
+  /**
+   * Ask questions the model's code way.
+   *
+   * The user's answer about their folder, since a question cannot say whether it
+   * is about prose or about code. Only the query prefix changes.
+   */
+  codeQueries?: boolean;
+  /**
+   * Never write: read an index somebody else built.
+   *
+   * The headless runner's mode. A scheduled job has no user watching it, can be
+   * killed at any moment, and must not fight the window over the same files — so
+   * it may start the engine to embed a *question* and is refused the refresh that
+   * would build an index. With none to read, the search says so rather than
+   * quietly reporting that the folder holds nothing.
+   */
+  readOnly?: boolean;
   /** Caps for one refresh, for a caller that has to answer quickly. */
   maxFiles?: number;
   maxChunks?: number;
@@ -200,8 +217,29 @@ export class RecallService {
     }
 
     let coverage = empty;
-    try {
-      coverage = await this.refresh();
+    if (this.options.readOnly === true) {
+      /*
+       * The runner's path: no refresh, and the sentence that says why. Reported
+       * before ranking so that "found nothing" is never mistaken for "read
+       * nothing".
+       */
+      const existing = await readIndex(this.options.dir, this.options.model);
+      if (existing === undefined || existing.file.count === 0) {
+        notes.push(
+          'Nothing is indexed for this folder yet, and a scheduled run does not ' +
+            'build an index. Open the app and search once.',
+        );
+        return {
+          hits: [],
+          searched: wanted,
+          coverage: empty,
+          index: await this.status(),
+          notes,
+        };
+      }
+    } else {
+      try {
+        coverage = await this.refresh();
       if (coverage.truncated) {
         notes.push(
           'The folder is large enough that indexing happens in slices, and ' +
@@ -224,13 +262,14 @@ export class RecallService {
             'to stay within it. The ones kept are the most recently changed.',
         );
       }
-    } catch (failure) {
-      /*
-       * A folder that cannot be indexed is not a search that failed. Memory may
-       * still be searchable, and the sentence says which half is missing rather
-       * than reporting "no results" for both.
-       */
-      notes.push(`The folder could not be indexed: ${describe(failure)}.`);
+      } catch (failure) {
+        /*
+         * A folder that cannot be indexed is not a search that failed. Memory may
+         * still be searchable, and the sentence says which half is missing rather
+         * than reporting "no results" for both.
+         */
+        notes.push(`The folder could not be indexed: ${describe(failure)}.`);
+      }
     }
 
     const data = await readIndex(this.options.dir, this.options.model);
@@ -239,7 +278,9 @@ export class RecallService {
       return {hits: [], searched: wanted, coverage, index, notes};
     }
 
-    const answer = await this.options.embed([queryText(query)]);
+    const answer = await this.options.embed([
+      queryText(query, this.options.codeQueries === true ? 'code' : 'search'),
+    ]);
     const vector = answer.vectors[0];
     if (vector === undefined) {
       notes.push('The question could not be turned into a vector.');

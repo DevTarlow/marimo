@@ -23,21 +23,34 @@
  * is what the card specifies for a document with no title, and it is used for a
  * file whose path is the only name it has.
  *
- * These are the expansions of the two prompt names the model's libraries expose,
- * `SearchQuery` for the question and `Document` for the passage, checked against
- * Google's developer guide for this model. That guide also names a `CodeRetrieval`
- * query prompt, `task: code retrieval | query: {query}`, which scores better on
- * code-only corpora and is deliberately not used here: the folder this app indexes
- * holds prose and code together, the prompt is chosen per *question* rather than
- * per document, and picking between two prompts by guessing at the question would
- * be a silent coin toss that nobody could see in a result list. The document side
- * is identical either way, so adding it later is a change to `queryText` alone and
- * touches no index.
+ * These are the expansions of the prompt names the model's libraries expose:
+ * `SearchQuery` for the question, `Document` for the passage, and `CodeRetrieval`
+ * for the question again when the folder is mostly code. Checked against Google's
+ * developer guide for this model.
+ *
+ * Which query prompt is used is the user's setting rather than a guess made per
+ * question, because there is nothing in a question to guess from: "why does the
+ * upload keep failing" wants the same words whether the answer is in a comment or
+ * a function. The document side is identical for both, so choosing differently
+ * changes which questions are asked how and never touches an index.
  *
  * Media is the other half of that rule, and it lives in `client.ts` rather than
  * here: images, audio and video go in with no prefix at all.
  */
 export const QUERY_PREFIX = 'task: search result | query:';
+
+/**
+ * The other query prompt, for a folder that is mostly code.
+ *
+ * The model's guide names this one `CodeRetrieval` and it scores better on code
+ * corpora. Only the *query* side differs: both recipes put `title: … | text: …` on
+ * the passage, so an index built under one prompt is searchable under the other
+ * and switching costs nothing but the questions.
+ */
+export const CODE_QUERY_PREFIX = 'task: code retrieval | query:';
+
+/** Which of the two a query is asked with. */
+export type QueryKind = 'search' | 'code';
 
 /**
  * A question, as the model wants to be asked one.
@@ -48,9 +61,10 @@ export const QUERY_PREFIX = 'task: search result | query:';
  * sentence — the model would be reading the shape of the text rather than the
  * question.
  */
-export function queryText(query: string): string {
+export function queryText(query: string, kind: QueryKind = 'search'): string {
   const trimmed = query.trim().replaceAll(/\s+/gu, ' ');
-  return `${QUERY_PREFIX} ${trimmed}`;
+  const prefix = kind === 'code' ? CODE_QUERY_PREFIX : QUERY_PREFIX;
+  return `${prefix} ${trimmed}`;
 }
 
 /**

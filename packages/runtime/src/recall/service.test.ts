@@ -201,6 +201,63 @@ describe('RecallService', () => {
     expect(impossible.notes.join(' ')).toMatch(/Nothing is available/u);
   });
 
+  /*
+   * The runner's mode. A scheduled job has nobody watching, can be killed at any
+   * moment, and must not fight the window over the same files — so it may embed a
+   * question and is refused the refresh that would write an index. What it must
+   * never do is answer "nothing found" about a folder it did not look at.
+   */
+  it('never writes when it is read-only, and says when there is nothing to read', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+    const quiet = new RecallService({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      embed: fakeEmbedder(),
+      readOnly: true,
+    });
+
+    const first = await quiet.search({query: 'retry'});
+    expect(first.coverage.embedded).toBe(0);
+    expect(first.hits).toEqual([]);
+    expect(first.notes.join(' ')).toMatch(/does not build an index/u);
+
+    // Once somebody else has built one, the same read-only search finds things
+    // and still writes nothing.
+    await service().search({query: 'retry'});
+    const second = await quiet.search({query: 'retry'});
+    expect(second.hits.length).toBeGreaterThan(0);
+    expect(second.coverage.embedded).toBe(0);
+  });
+
+  /*
+   * The code prompt, chosen by the setting rather than guessed per query. Tested
+   * by what reaches the engine, because nothing else about the answer would show
+   * which instruction was used.
+   */
+  it('asks questions the code way when it is told the folder is code', async () => {
+    await write('src/retry.ts', 'export function withRetry() {}');
+    const asked: string[] = [];
+    const recall = new RecallService({
+      workspaceRoot: workspace,
+      dir: indexDir,
+      model: MODEL,
+      codeQueries: true,
+      embed: async (texts) => {
+        asked.push(...texts);
+        return {
+          vectors: texts.map(() => Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0])),
+        };
+      },
+    });
+
+    await recall.search({query: 'where is retry'});
+
+    expect(asked.some((text) => text.startsWith('task: code retrieval | query:'))).toBe(
+      true,
+    );
+  });
+
   it('reports what it indexed when a folder is only partly done', async () => {
     await write('a.ts', 'const retry = 1;');
     await write('b.ts', 'const bake = 2;');

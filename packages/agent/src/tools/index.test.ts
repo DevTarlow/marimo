@@ -11,6 +11,22 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
+import type {RecallLookup} from './recall-tools.js';
+
+/**
+ * A recall service that claims both corpora.
+ *
+ * `scopes()` is what decides whether the tool is built at all, so a stub that
+ * answered with an empty list would make every comparison in this file pass by
+ * absence — and recall is a *default*, which means the tests that check the
+ * defaults and the catalogue both have to be able to build it.
+ */
+function recallStub(): RecallLookup {
+  return {
+    scopes: () => ['folder', 'memory'],
+    search: async () => ({hits: [], searched: [], notes: []}),
+  };
+}
 import {toOpenAiTools} from '../models/openai-mapping.js';
 import {
   CAPABILITY_PRESETS,
@@ -362,6 +378,9 @@ describe('the safe defaults', () => {
         // Present so the web-search name resolves; the defaults name it.
         webSearch: {search: async () => []},
         subagent: {build: () => ({}) as never},
+        // And recall, which is a default too — offered, and only *buildable*
+        // when the app has an index to answer from.
+        recallService: recallStub(),
       },
     ).map((tool) => tool.name);
   }
@@ -437,8 +456,10 @@ describe('the tool catalogue', () => {
       skillService: {} as never,
       discordService: {} as never,
       deskService: {} as never,
+      recallService: recallStub(),
     };
   }
+
 
   /** Every tool the host can build, when everything is wired. */
   function everything(): string[] {
@@ -467,6 +488,7 @@ describe('the tool catalogue', () => {
         skills: true,
         discord: true,
         desk: true,
+        recall: true,
       }).map((entry) => entry.name),
     );
 
@@ -489,6 +511,7 @@ describe('the tool catalogue', () => {
       skills: true,
       discord: true,
       desk: true,
+      recall: true,
     });
 
     expect(entries).toHaveLength(everything().length);
@@ -514,6 +537,9 @@ describe('the tool catalogue', () => {
       webSearch: {search: async () => []},
       subagent: true,
       jobs: true,
+      // Recall is one of the defaults, so the catalogue that checks the defaults
+      // has to be built the way an install with recall wired is.
+      recall: true,
     });
 
     const byDefault = entries
@@ -564,6 +590,7 @@ describe('the capability presets', () => {
           skillService: {} as never,
           discordService: {} as never,
           deskService: {} as never,
+          recallService: recallStub(),
         },
       ).map((tool) => tool.name),
     );

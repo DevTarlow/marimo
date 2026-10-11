@@ -72,6 +72,15 @@ export type {
   DiscordToolContext,
 } from './tools/discord-tools.js';
 export {deskTools} from './tools/desk-tools.js';
+export {createRecallTool, RECALL_SCOPES} from './tools/recall-tools.js';
+export type {
+  RecallAnswer,
+  RecallHit,
+  RecallLookup,
+  RecallRequest,
+  RecallScope,
+  RecallToolContext,
+} from './tools/recall-tools.js';
 export type {
   DeskEdit,
   DeskService,

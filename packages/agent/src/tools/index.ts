@@ -44,6 +44,8 @@ import {
   createReadMemoryTool,
   createUpdateMemoryTool,
 } from './memory-tools.js';
+import {createRecallTool} from './recall-tools.js';
+import type {RecallLookup} from './recall-tools.js';
 import {createShellTool} from './shell-tool.js';
 import {createSpawnAgentTool} from './subagent-tool.js';
 import type {SubagentDeps} from './subagent-tool.js';
@@ -78,6 +80,15 @@ export const SAFE_DEFAULT_TOOLS = [
   'read_file',
   'list_dir',
   'search_knowledge_base',
+  /*
+   * Recall is offered by default, and deliberately beside the literal search
+   * rather than instead of it. Both are ways of looking at the same folder without
+   * changing anything, which is the line this list draws — and the model needs
+   * both: an identifier it was told is a literal search, and a description is a
+   * recall. It only exists at all when the app has an index to answer from, which
+   * is the user's switch and not this list's.
+   */
+  'recall',
   'read_memory',
   'update_memory',
   'prune_memory',
@@ -197,6 +208,14 @@ export function describeTools(options: {
   skills?: boolean;
   discord?: boolean;
   desk?: boolean;
+  /**
+   * Whether this install has recall, so the switch for it exists.
+   *
+   * A tool the host builds but the catalogue omits can never be granted, which is
+   * a capability that exists and is unreachable — the failure the comment below
+   * this list was written about.
+   */
+  recall?: boolean;
 }): CatalogTool[] {
   const built = createTools(
     {
@@ -224,6 +243,15 @@ export function describeTools(options: {
       ...(options.skills === true ? {skillService: {} as never} : {}),
       ...(options.discord === true ? {discordService: {} as never} : {}),
       ...(options.desk === true ? {deskService: {} as never} : {}),
+      /* A stand-in that claims both corpora, so the tool is built and listed. */
+      ...(options.recall === true
+        ? {
+            recallService: {
+              scopes: () => ['folder', 'memory'],
+              search: async () => ({hits: [], searched: [], notes: []}),
+            },
+          }
+        : {}),
     },
   );
 
@@ -279,6 +307,8 @@ const TOOL_BLURBS: Record<string, string> = {
     'address can be anywhere — including inside your own network — so it is off ' +
     'until you ask for it.',
   web_search: 'Search the web and read the results. No account or key needed.',
+  recall:
+    'Search your folder and its own notes by what you mean, not by the exact words.',
   read_memory: 'Read its own notes about you and this folder.',
   update_memory:
     'Write something down to remember for next time — a preference, a decision, ' +
@@ -340,6 +370,12 @@ export interface ToolDependencies {
    */
   skillService?: SkillService;
   /**
+   * Present only when recall is switched on and something is indexed; without it
+   * there is nothing to find by meaning, so the tool is absent rather than
+   * offered and empty.
+   */
+  recallService?: RecallLookup;
+  /**
    * The MCP servers that are connected, with the tools each one offers.
    *
    * The connection is passed in rather than made here, because connecting is the
@@ -372,19 +408,40 @@ export function createTools(
 }
 
 function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
+  /*
+   * Two pushes rather than one array literal, because recall belongs *between*
+   * them: directly after the literal search, which is where the model reads the
+   * two as the pair they are — same folder, same memory, two ways of asking. The
+   * order the model actually sees is asserted by a test, so this cannot drift.
+   */
   const tools: BaseTool[] = [
     createCurrentTimeTool(),
     createReadFileTool({workspaceRoot: config.workspaceRoot}),
     createListDirTool({workspaceRoot: config.workspaceRoot}),
     createWriteFileTool({workspaceRoot: config.workspaceRoot}),
     createSearchKnowledgeBaseTool({workspaceRoot: config.workspaceRoot}),
+  ];
+
+  /*
+   * `createRecallTool` answers `undefined` when there is no corpus to search — a
+   * service with nothing indexed is not a tool that returns nothing, which is the
+   * rule every conditional tool in this package follows.
+   */
+  if (deps.recallService) {
+    const recall = createRecallTool({recall: deps.recallService});
+    if (recall !== undefined) {
+      tools.push(recall);
+    }
+  }
+
+  tools.push(
     createReadMemoryTool({memory: deps.memory}),
     createUpdateMemoryTool({memory: deps.memory}),
     createPruneMemoryTool({memory: deps.memory}),
     createHttpFetchTool({
       allowPrivateNetworkFetch: config.allowPrivateNetworkFetch,
     }),
-  ];
+  );
 
   if (deps.webSearch) {
     tools.push(createWebSearchTool({provider: deps.webSearch}));

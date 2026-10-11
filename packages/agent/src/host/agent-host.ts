@@ -33,6 +33,9 @@ import {MAIN_AGENT_NAME} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
+import {selectMemory} from '../memory/select.js';
+import type {RecalledBullet} from '../memory/select.js';
+import type {RecallLookup} from '../tools/recall-tools.js';
 import {MEMORY_SOFT_LIMIT_BYTES} from '../memory/size.js';
 import {OpenAiCompatLlm} from '../models/openai-compat-llm.js';
 import {FileSessionService} from '../sessions/file-session-service.js';
@@ -103,6 +106,15 @@ export interface AgentHostOptions {
    */
   mcpServers?: readonly McpToolsetSource[];
   /**
+   * Supplied by the desktop app when recall is switched on and something is
+   * indexed. Absent means memory is injected whole, exactly as it always was.
+   *
+   * Change it with {@link AgentHost.setRecallService} when the setting moves,
+   * rather than rebuilding the host: the service is a fact about the turn being
+   * assembled, not about the agent.
+   */
+  recallService?: RecallLookup;
+  /**
    * Where a helper agent's words go while it runs.
    *
    * Out of band rather than through the turn's generator, because a tool call
@@ -152,6 +164,54 @@ interface GateRound {
  * ADK matches it to the gate by `id` and to the original call through the gate's
  * own arguments, so the name has to be the gate's rather than the tool's.
  */
+/**
+ * How short a question can be before it is not worth retrieving against.
+ *
+ * "ok", "yes" and "go on" are turns, not questions: a vector for them is closer
+ * to the noise in memory than to anything the user meant, and retrieving on one
+ * would replace the whole file with whatever happened to rank. Below this, memory
+ * is injected whole — the behaviour that existed before any of this.
+ */
+const MIN_RETRIEVAL_QUERY_CHARS = 3;
+
+/**
+ * How long retrieval may take before the whole file is used instead.
+ *
+ * Generous for what it is — a query embed and a pass over the memory index, which
+ * is tens of milliseconds warm — and short enough that a cold engine does not
+ * hold a request open. The first turn after switching recall on is spent loading
+ * the model; that turn is not the one to make the user wait for.
+ */
+const RETRIEVAL_DEADLINE_MS = 1_500;
+
+/** The most bullets retrieval may add, matching what the service will rank. */
+const RETRIEVED_BULLETS = 12;
+
+/**
+ * A promise, or a rejection if it takes longer than the deadline.
+ *
+ * Rejection rather than a resolved sentinel so the caller's `catch` handles one
+ * thing: every way this can go wrong means the same answer, which is the whole
+ * file.
+ */
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`retrieval did not answer within ${String(ms)}ms`));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function confirmationResponse(callId: string, decision: GateDecision): Part {
   return {
     functionResponse: {
@@ -190,6 +250,35 @@ export class AgentHost {
    * next turn has to be offered what is actually reachable now.
    */
   private mcpServers: readonly McpToolsetSource[];
+  /**
+   * What recall can answer, when the app has one switched on.
+   *
+   * Mutable like `mcpServers` and for the same reason: the user can turn it on
+   * while the window is open, and the next turn must be built from what is true
+   * then rather than from what was true when the host was made.
+   */
+  private recallService: RecallLookup | undefined;
+  /**
+   * The question the current turn is answering.
+   *
+   * What memory is retrieved *for*. Held here rather than read from the model
+   * context because a resumed turn — the user answering an approval card — has a
+   * function response where its content should be, and the question worth
+   * retrieving against there is the one that started the turn, not "confirmed".
+   */
+  private memoryQuery: string | undefined;
+  /**
+   * The last block this host composed, and what it was composed from.
+   *
+   * The instruction provider runs once per *request*, and a turn with six tool
+   * calls is seven requests. Memory is still re-read every time — that is what
+   * makes a mid-turn write visible to the next request, and it is one small file
+   * — but the retrieval behind it is only worth doing again when the question or
+   * the file has changed.
+   */
+  private memoryBlockCache:
+    | {query: string; memory: string; text: string}
+    | undefined;
   private readonly onSubagentEvent: ((event: AgentUiEvent) => void) | undefined;
   private readonly subagentLimits: Partial<SubagentLimits> | undefined;
   private config: AgentConfig;
@@ -244,6 +333,7 @@ export class AgentHost {
     this.deskService = options.deskService;
     this.skillService = options.skillService;
     this.mcpServers = options.mcpServers ?? [];
+    this.recallService = options.recallService;
     this.onSubagentEvent = options.onSubagentEvent;
     this.subagentLimits = options.subagentLimits;
   }
@@ -312,6 +402,29 @@ export class AgentHost {
    */
   setMcpServers(sources: readonly McpToolsetSource[]): void {
     this.mcpServers = sources;
+    this.runners.clear();
+  }
+
+  /**
+   * Replaces what recall can answer, or removes it.
+   *
+   * Dropped rather than updated when it changes, for the same reason a tool list
+   * is: the cached runner holds the tool closures it was built with, so a service
+   * that appeared after that build would be invisible until something rebuilt —
+   * "I switched it on and nothing happened".
+   *
+   * A turn in flight is not aborted. Tools are chosen when a turn begins, and
+   * memory narrowed under a request already being composed is not worth losing
+   * the answer the user is reading; the next turn has it.
+   */
+  setRecallService(service: RecallLookup | undefined): void {
+    if (this.recallService === service) {
+      return;
+    }
+    this.recallService = service;
+    // The block itself is derived from memory and the question, so a cached one
+    // belongs to the service that produced it.
+    this.memoryBlockCache = undefined;
     this.runners.clear();
   }
 
@@ -626,6 +739,14 @@ export class AgentHost {
       instruction === undefined
         ? {...this.config, ...{instruction: undefined}}
         : {...this.config, instruction};
+    /*
+     * The question memory is retrieved *for*, kept for the length of the turn.
+     * `approve` deliberately does not overwrite it: a resumed turn's content is a
+     * function response, and the thing worth retrieving against is still the
+     * question the user asked before the card appeared.
+     */
+    this.memoryQuery = text;
+    this.memoryBlockCache = undefined;
     yield* this.drive(sessionId, {role: 'user', parts: [{text}]}, profileId);
   }
 
@@ -659,6 +780,65 @@ export class AgentHost {
   /** What the agent currently remembers, as it would be injected. */
   async memoryText(): Promise<string> {
     return await this.memory.readForPrompt();
+  }
+
+  /**
+   * Memory as this request should see it: rules whole, facts recalled.
+   *
+   * The fallback is the whole file, and it is the important half. Every reason
+   * retrieval might not happen — no service, no question, a question too short to
+   * retrieve against, no memory corpus, a search that failed, one that took too
+   * long — produces exactly the block this app has always produced. Retrieval may
+   * only narrow the prompt when it is working; a smaller prompt produced by a
+   * broken step is a silent loss of facts the user wrote down, which is the one
+   * failure nobody would notice.
+   */
+  private async memoryForPrompt(): Promise<string> {
+    const whole = await this.memory.readForPrompt();
+    const recall = this.recallService;
+    const query = this.memoryQuery?.trim() ?? '';
+    if (
+      recall === undefined ||
+      query.length < MIN_RETRIEVAL_QUERY_CHARS ||
+      !recall.scopes().includes('memory')
+    ) {
+      return whole;
+    }
+
+    let text: string;
+    try {
+      text = await this.memory.read();
+    } catch {
+      // `readForPrompt` already turned this into a sentence; nothing to add.
+      return whole;
+    }
+    const cached = this.memoryBlockCache;
+    if (cached !== undefined && cached.query === query && cached.memory === text) {
+      return cached.text;
+    }
+
+    try {
+      const answer = await withDeadline(
+        recall.search({query, scopes: ['memory'], limit: RETRIEVED_BULLETS}),
+        RETRIEVAL_DEADLINE_MS,
+      );
+      const recalled: RecalledBullet[] = answer.hits
+        .map((hit) => ({section: hit.section ?? '', text: hit.text}))
+        .filter((bullet) => bullet.text.length > 0);
+      /*
+       * A hit with no text is one the index could not verify — a stale bullet, or
+       * a cold engine that answered with previews only. Nothing recalled is not a
+       * reason to narrow: it is the case the whole-file fallback is for.
+       */
+      if (recalled.length === 0) {
+        return whole;
+      }
+      const block = selectMemory({memory: text, recalled, usedRetrieval: true}).text;
+      this.memoryBlockCache = {query, memory: text, text: block};
+      return block;
+    } catch {
+      return whole;
+    }
   }
 
   /** How many bytes this agent's memory file holds right now. */
@@ -881,8 +1061,9 @@ export class AgentHost {
             ? {preferences: this.config.preferences}
             : {}),
           // Read per request rather than per turn: the model may have just
-          // written to memory, and the next request should already see it.
-          memory: await this.memory.readForPrompt(),
+          // written to memory, and the next request should already see it. What
+          // of it is *shown* depends on the question, when recall is available.
+          memory: await this.memoryForPrompt(),
           // Whatever the surface that asked for this turn wanted, if there was
           // anything. `run` cleared it on its way in, so a turn that asked for
           // nothing — every turn from the window — carries no trace of the pet's.
@@ -908,6 +1089,9 @@ export class AgentHost {
         }),
       tools: createTools(this.config, {
         memory: this.memory,
+        ...(this.recallService === undefined
+          ? {}
+          : {recallService: this.recallService}),
         model,
         ...(this.webSearch ? {webSearch: this.webSearch} : {}),
         ...(this.jobService ? {jobService: this.jobService} : {}),

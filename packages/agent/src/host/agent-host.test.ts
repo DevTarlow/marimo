@@ -22,6 +22,7 @@ import type {AgentConfig} from '../config.js';
 
 import {resolveMemoryFile} from '../memory/index.js';
 import type {JobService} from '../tools/job-tools.js';
+import type {RecallAnswer, RecallLookup} from '../tools/recall-tools.js';
 import type {WebSearchProvider} from '../tools/web-search-tool.js';
 import {AgentHost} from './agent-host.js';
 
@@ -1686,4 +1687,184 @@ describe('AgentHost', () => {
     // a turn waiting on the user is not a turn that said nothing.
     expect(fake?.requests).toHaveLength(1);
   });
+  /*
+   * What of memory reaches the prompt, once recall is available.
+   *
+   * This is the half of the feature that changes behaviour rather than adding a
+   * tool, so it is tested where a turn is: the instruction the provider is handed
+   * is inspected, and what it is inspected *for* is the asymmetry — rules whole,
+   * facts recalled, and the whole file whenever retrieval could not be trusted to
+   * answer.
+   */
+  describe('memory retrieval', () => {
+    /** A lookup that answers with whatever the test says, and records the asks. */
+    function lookup(
+      answer: Partial<RecallAnswer> = {},
+    ): {service: RecallLookup; asked: string[]} {
+      const asked: string[] = [];
+      return {
+        asked,
+        service: {
+          scopes: () => ['folder', 'memory'],
+          search: async (request) => {
+            asked.push(request.query);
+            return {hits: [], searched: ['memory'], notes: [], ...answer};
+          },
+        },
+      };
+    }
+
+    function bullet(section: string, text: string) {
+      return {
+        kind: 'memory' as const,
+        path: '',
+        section,
+        preview: text,
+        score: 0.8,
+        text,
+        stale: false,
+      };
+    }
+
+    async function start(
+      recall: RecallLookup | undefined,
+      responder: Responder,
+    ): Promise<{host: AgentHost; session: string}> {
+      fake = await startFakeDeepSeek(responder);
+      const host = new AgentHost({
+        sessionsDir: join(workDir, 'sessions'),
+        config: createConfig(fake.baseUrl),
+        ...(recall === undefined ? {} : {recallService: recall}),
+      });
+      host.init();
+      openHosts.push(host);
+      const session = await host.createSession();
+      return {host, session: session.id};
+    }
+
+    /** The system instruction of the first request the fake model was sent. */
+    function instructionOf(): string {
+      const system = fake?.requests[0]?.messages[0];
+      return String(system?.['content'] ?? '');
+    }
+
+    async function seedMemory(host: AgentHost): Promise<void> {
+      await host.remember('About the user', 'Has a dog called Sunshine');
+      await host.remember('About the user', 'Lives in Berlin');
+      await host.remember('Boundaries', 'Never force-push');
+    }
+
+    it('injects the whole file when there is no recall service', async () => {
+      const {host, session} = await start(undefined, () => textChunks('ok'));
+      await seedMemory(host);
+
+      await collect(host.run(session, 'where does the retry logic live'));
+
+      const instruction = instructionOf();
+      expect(instruction).toContain('Never force-push');
+      expect(instruction).toContain('Has a dog called Sunshine');
+      expect(instruction).toContain('Lives in Berlin');
+      expect(instruction).not.toContain('Recalled for this question');
+    });
+
+    it('keeps the rules whole and recalls the rest', async () => {
+      const {service, asked} = lookup({
+        hits: [bullet('About the user', 'Lives in Berlin')],
+      });
+      const {host, session} = await start(service, () => textChunks('ok'));
+      await seedMemory(host);
+
+      await collect(host.run(session, 'where does the retry logic live'));
+
+      expect(asked).toEqual(['where does the retry logic live']);
+      const instruction = instructionOf();
+      // The rule is there without having been recalled, and the fact that did not
+      // rank is not.
+      expect(instruction).toContain('Never force-push');
+      expect(instruction).toContain('Lives in Berlin');
+      expect(instruction).not.toContain('Has a dog called Sunshine');
+      // And the model is told it is looking at part of memory rather than all of
+      // it, in the words `selectMemory` writes.
+      expect(instruction).toContain('1 of 3 bullets');
+      expect(instruction).toContain('read_memory');
+    });
+
+    /*
+     * The fallback, which is the whole safety of this design. A retrieval that
+     * failed must leave the prompt exactly as it was before the feature existed —
+     * a smaller prompt produced by a broken step loses facts nobody would notice
+     * were missing.
+     */
+    it('falls back to the whole file when recall fails', async () => {
+      const failing: RecallLookup = {
+        scopes: () => ['folder', 'memory'],
+        search: async () => {
+          throw new Error('the recall model is not running');
+        },
+      };
+      const {host, session} = await start(failing, () => textChunks('ok'));
+      await seedMemory(host);
+
+      await collect(host.run(session, 'where does the retry logic live'));
+
+      const instruction = instructionOf();
+      expect(instruction).toContain('Never force-push');
+      expect(instruction).toContain('Has a dog called Sunshine');
+      expect(instruction).not.toContain('Recalled for this question');
+    });
+
+    /*
+     * A turn can be three characters long, and a vector for "ok" is nearer the
+     * noise in memory than to anything the user meant. Retrieving on one would
+     * swap the whole file for whatever happened to rank.
+     */
+    it('does not retrieve against a question too short to mean anything', async () => {
+      const {service, asked} = lookup({hits: [bullet('About the user', 'Lives in Berlin')]});
+      const {host, session} = await start(service, () => textChunks('ok'));
+      await seedMemory(host);
+
+      await collect(host.run(session, 'ok'));
+
+      expect(asked).toEqual([]);
+      expect(instructionOf()).toContain('Has a dog called Sunshine');
+      expect(instructionOf()).not.toContain('Recalled for this question');
+    });
+
+    /*
+     * A retrieval that never answers must not hold a request open. The engine is
+     * a process that can be cold or wedged, and the turn it is serving is one a
+     * user is watching.
+     */
+    it('gives up on a retrieval that does not answer, and uses the whole file', async () => {
+      const hanging: RecallLookup = {
+        scopes: () => ['folder', 'memory'],
+        search: () => new Promise<RecallAnswer>(() => undefined),
+      };
+      const {host, session} = await start(hanging, () => textChunks('ok'));
+      await seedMemory(host);
+
+      const events = await collect(host.run(session, 'where does the retry logic live'));
+
+      expect(typesOf(events)).toContain('turn.completed');
+      const instruction = instructionOf();
+      expect(instruction).toContain('Never force-push');
+      expect(instruction).toContain('Has a dog called Sunshine');
+    }, 10_000);
+
+    /*
+     * A fact section that was not recalled is not omitted forever: the model can
+     * ask. The tool is offered exactly when the service is, which is the same rule
+     * every other conditional tool here follows.
+     */
+    it('offers the recall tool when the service is there, and not when it is not', async () => {
+      const withRecall = await start(lookup().service, () => textChunks('ok'));
+      await collect(withRecall.host.run(withRecall.session, 'hi'));
+      const names = (fake?.requests[0]?.body['tools'] as Array<{function: {name: string}}>)
+        .map((tool) => tool.function.name);
+
+      expect(names).toContain('recall');
+      expect(names?.indexOf('recall')).toBe(names.indexOf('search_knowledge_base') + 1);
+    });
+  });
 });
+

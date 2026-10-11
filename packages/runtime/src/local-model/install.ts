@@ -41,12 +41,15 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 
 import type {
+  EmbeddingManifest,
+  EmbeddingPieceName,
   EngineAsset,
+  EngineManifest,
   LocalModelManifest,
   ModelTier,
   ModelTierName,
 } from './manifest.js';
-import {engineAssetFor, engineUrl, weightsUrl} from './manifest.js';
+import {embeddingUrl, engineAssetFor, engineUrl, weightsUrl} from './manifest.js';
 import {engineBinaryName, engineDir} from './files.js';
 
 const run = promisify(execFile);
@@ -61,10 +64,20 @@ export interface DownloadProgress {
   percent?: number;
 }
 
+/**
+ * What every installer here needs: where, and how to reach the network.
+ *
+ * The manifest is deliberately *not* in here. There are three installers now and
+ * they read three different documents — the engine, which lives in both model
+ * manifests and needs nothing else; a chat tier, which needs the weights; and a
+ * recall piece, which needs the projector table. A single `InstallOptions`
+ * carrying a whole manifest would have made the engine installer's type claim it
+ * needs a `weights.tiers` it never reads, and that is exactly the sort of claim
+ * that lets a caller pass the wrong manifest and find out at run time.
+ */
 export interface InstallOptions {
   /** The model directory, as `modelDir` resolves it. */
   dir: string;
-  manifest: LocalModelManifest;
   platform?: NodeJS.Platform;
   arch?: string;
   onProgress?: (progress: DownloadProgress) => void;
@@ -77,6 +90,23 @@ export interface InstallOptions {
   ) => Promise<{stdout: string; stderr: string}>;
   /** Cancels an install in flight, which is what closing the app does. */
   signal?: AbortSignal;
+}
+
+/** Anything with an engine block: either model manifest will do. */
+export interface EngineInstallOptions extends InstallOptions {
+  manifest: {engine: EngineManifest};
+}
+
+/** A tier of the chat model. */
+export interface TierInstallOptions extends InstallOptions {
+  manifest: LocalModelManifest;
+  tier: ModelTierName;
+}
+
+/** One piece of the recall model. */
+export interface EmbeddingInstallOptions extends InstallOptions {
+  manifest: EmbeddingManifest;
+  piece: EmbeddingPieceName;
 }
 
 /** Raised when a download cannot be completed, with a sentence for the user. */
@@ -96,7 +126,7 @@ export class InstallError extends Error {
  * what stops a first run downloading 4.5 GB a machine cannot use.
  */
 export async function installEngine(
-  options: InstallOptions,
+  options: EngineInstallOptions,
 ): Promise<{installed: boolean}> {
   const found = engineAssetFor(options.manifest, {
     ...(options.platform === undefined ? {} : {platform: options.platform}),
@@ -139,7 +169,7 @@ export async function installEngine(
 
 /** Fetches one tier's weights, unless they are already there. */
 export async function installTier(
-  options: InstallOptions & {tier: ModelTierName},
+  options: TierInstallOptions,
 ): Promise<{installed: boolean}> {
   const tier: ModelTier = options.manifest.weights.tiers[options.tier];
   const destination = join(options.dir, tier.file);
@@ -153,6 +183,42 @@ export async function installTier(
     destination,
     sha256: tier.sha256,
     label: `The ${tier.label} model`,
+    ...(options.onProgress === undefined
+      ? {}
+      : {onProgress: options.onProgress}),
+    ...(options.fetchImpl === undefined ? {} : {fetchImpl: options.fetchImpl}),
+    ...(options.signal === undefined ? {} : {signal: options.signal}),
+  });
+
+  return {installed: true};
+}
+
+/**
+ * Fetches one piece of the recall model, unless it is already there.
+ *
+ * The same shape as `installTier` down to the size check, which is the point:
+ * an interrupted 555 MB download that left a file behind is not an install, and
+ * the test that catches it is the one the chat tiers have always used.
+ *
+ * The engine is *not* fetched here. It goes first and on its own, exactly as it
+ * does for the chat model, because it is the cheap half and because a build that
+ * cannot run on this platform should be refused before 310 MB is spent on it.
+ */
+export async function installEmbeddingPiece(
+  options: EmbeddingInstallOptions,
+): Promise<{installed: boolean}> {
+  const piece = options.manifest.weights.pieces[options.piece];
+  const destination = join(options.dir, piece.file);
+
+  if ((await sizeOf(destination)) === piece.bytes) {
+    return {installed: false};
+  }
+
+  await downloadVerified({
+    url: embeddingUrl(options.manifest, piece),
+    destination,
+    sha256: piece.sha256,
+    label: piece.label,
     ...(options.onProgress === undefined
       ? {}
       : {onProgress: options.onProgress}),

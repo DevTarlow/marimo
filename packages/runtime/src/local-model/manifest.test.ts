@@ -11,13 +11,16 @@ import {describe, expect, it} from 'vitest';
 
 import {
   backendNameFor,
+  embeddingUrl,
   engineAssetFor,
   engineUrl,
   ManifestError,
+  parseEmbeddingManifest,
   parseManifest,
   platformKey,
   weightsUrl,
 } from './manifest.js';
+import {EMBEDDING_PINS, MODEL_PINS} from './pins.js';
 
 /** The smallest document that is a valid manifest. */
 function fixture(): Record<string, unknown> {
@@ -230,6 +233,120 @@ describe('the URLs a download uses', () => {
   it('pins the weights to a revision, not a branch', () => {
     expect(weightsUrl(manifest, manifest.weights.tiers.high)).toBe(
       'https://huggingface.co/someone/model-GGUF/resolve/deadbeef/high.gguf',
+    );
+  });
+});
+
+/**
+ * The recall model's pins.
+ *
+ * Separate from the chat manifest rather than a third tier of it, so the parse
+ * is separate too — and the field it checks that the other one does not is
+ * `dims`. A vector of the wrong width does not fail anywhere: it scores against
+ * nothing, which reads as a search that finds nothing rather than as two files
+ * that do not belong together. So the width is pinned, and the two pieces are
+ * named rather than implied, because the projector is the difference between a
+ * picture being indexable and a media request being one the engine cannot serve.
+ */
+function embeddingFixture(): unknown {
+  return {
+    engine: {
+      tag: 'b2',
+      baseUrl: 'https://example.test/dl',
+      assets: {'linux-x64': {file: 'e.tar.gz', sha256: 'a'.repeat(64)}},
+      backends: {'linux-x64': 'Vulkan'},
+    },
+    weights: {
+      repo: 'unsloth/embeddinggemma-2-GGUF',
+      revision: 'deadbeef',
+      license: 'Apache-2.0',
+      dims: 768,
+      contextSize: 8192,
+      pooling: 'mean',
+      pieces: {
+        text: {label: 'The recall model', file: 'text.gguf', sha256: 'b'.repeat(64), bytes: 10},
+        media: {label: 'The encoder', file: 'mmproj.gguf', sha256: 'c'.repeat(64), bytes: 20},
+      },
+    },
+  };
+}
+
+describe('parseEmbeddingManifest', () => {
+  it('reads the document and names each piece', () => {
+    const manifest = parseEmbeddingManifest(embeddingFixture());
+
+    expect(manifest.weights.dims).toBe(768);
+    expect(manifest.weights.contextSize).toBe(8192);
+    expect(manifest.weights.pooling).toBe('mean');
+    expect(manifest.weights.pieces.text.name).toBe('text');
+    expect(manifest.weights.pieces.media.file).toBe('mmproj.gguf');
+    expect(manifest.engine.tag).toBe('b2');
+  });
+
+  /*
+   * A pooling the engine does not have is a start that fails with a usage
+   * message, so it is caught here where the message can name the field.
+   */
+  it('refuses a pooling this build does not know', () => {
+    const broken = embeddingFixture() as {weights: {pooling: string}};
+    broken.weights.pooling = 'average';
+
+    expect(() => parseEmbeddingManifest(broken)).toThrow(/weights\.pooling/u);
+  });
+
+  it('refuses a document with a piece missing', () => {
+    const broken = embeddingFixture() as {weights: {pieces: Record<string, unknown>}};
+    delete broken.weights.pieces['media'];
+
+    expect(() => parseEmbeddingManifest(broken)).toThrow(/weights\.pieces\.media/u);
+  });
+
+  it('refuses a width that is not a positive whole number', () => {
+    const broken = embeddingFixture() as {weights: {dims: number}};
+    broken.weights.dims = 0;
+
+    expect(() => parseEmbeddingManifest(broken)).toThrow(/weights\.dims/u);
+  });
+
+  it('pins each piece to a revision, not a branch', () => {
+    const manifest = parseEmbeddingManifest(embeddingFixture());
+
+    expect(embeddingUrl(manifest, manifest.weights.pieces.media)).toBe(
+      'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/deadbeef/mmproj.gguf',
+    );
+  });
+});
+
+/**
+ * The pins that actually ship, checked as a document.
+ *
+ * `parseEmbeddingManifest` runs at import, so a malformed paste is already a
+ * failure — but only of a shape the parser knows about. What is asserted here is
+ * the arithmetic the index depends on and the one thing that has already been
+ * wrong once in this repository's history: the engine tag.
+ */
+describe('EMBEDDING_PINS', () => {
+  it('is a document this build can read', () => {
+    expect(EMBEDDING_PINS.weights.dims).toBe(768);
+    expect(EMBEDDING_PINS.weights.pieces.text.bytes).toBe(309_855_520);
+    expect(EMBEDDING_PINS.weights.pieces.media.bytes).toBe(554_821_120);
+  });
+
+  /*
+   * The recall model needs an engine that knows `gemma-embedding2`, and the one
+   * the chat model runs on does not: b11429 answers "unknown model architecture:
+   * 'gemma-embedding2'" and exits. Two different tags is the whole reason this
+   * pin exists beside the other one, so it is asserted rather than commented.
+   */
+  it('runs on a newer engine than the chat model, and says so', () => {
+    expect(EMBEDDING_PINS.engine.tag).not.toBe(MODEL_PINS.engine.tag);
+    expect(EMBEDDING_PINS.engine.tag).toBe('b11557');
+    expect(MODEL_PINS.engine.tag).toBe('b11429');
+  });
+
+  it('has an engine build for every platform the chat model has', () => {
+    expect(Object.keys(EMBEDDING_PINS.engine.assets).sort()).toEqual(
+      Object.keys(MODEL_PINS.engine.assets).sort(),
     );
   });
 });

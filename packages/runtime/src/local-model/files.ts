@@ -23,6 +23,8 @@ import {dirname, join} from 'node:path';
 
 import type {LocalModelManifest, ModelTierName} from './manifest.js';
 import {MODEL_TIERS} from './manifest.js';
+import {EMBEDDING_PIECES} from './manifest.js';
+import type {EmbeddingManifest, EmbeddingPieceName, EmbeddingPooling} from './manifest.js';
 
 /**
  * Points both processes at a directory of their own.
@@ -210,6 +212,133 @@ function sizeOf(path: string): number {
   } catch {
     return -1;
   }
+}
+
+/**
+ * The recall model lives in a subdirectory of the model directory.
+ *
+ * `model/recall/` rather than a second concept beside it, and that is the whole
+ * design of this block: everything above — the engine directory, its shared
+ * libraries, the binary's name, the presence checks — is written in terms of a
+ * directory, so pointing it at `model/recall` reuses all of it. A second layout
+ * would be a second place for the two processes to disagree about where a file
+ * is, which is the failure this file's history is entirely about.
+ *
+ * What differs is only *which* files: a different engine build (see
+ * `EMBEDDING_PINS` for why), one GGUF for text, and one projector that may not
+ * be there at all.
+ */
+export const RECALL_DIR_NAME = 'recall';
+
+/** Where the recall model is unpacked and downloaded. */
+export function recallDir(options: {
+  userData: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  return join(modelDir(options), RECALL_DIR_NAME);
+}
+
+export interface RecallFiles {
+  dir: string;
+  engine: string;
+  libraryDir: string;
+  /** The text backbone's GGUF. */
+  model: string;
+  /**
+   * The projector's path, or `''` when this install is not using media.
+   *
+   * `''` rather than a path plus a flag, because the two answers would have to
+   * be kept in step at every call site and only one of them is what the engine
+   * is handed. What decides `--mmproj` is whether this names a file that is
+   * there.
+   */
+  projector: string;
+  enginePresent: boolean;
+  modelPresent: boolean;
+  projectorPresent: boolean;
+}
+
+/**
+ * What the recall engine would be started with.
+ *
+ * `media` is the user's switch, not a fact about the disk: asked for but not
+ * downloaded resolves to no projector, and the args builder then leaves
+ * `--mmproj` off rather than handing the engine a path that is not there. The
+ * status card reads the two apart, because "you asked for images and the encoder
+ * has not been downloaded" and "you have not asked for images" are different
+ * sentences.
+ */
+export function resolveRecallFiles(options: {
+  dir: string;
+  manifest: EmbeddingManifest;
+  media: boolean;
+  platform?: NodeJS.Platform;
+}): RecallFiles {
+  const {dir} = options;
+  const engine =
+    dir.length > 0
+      ? join(engineDir(dir), engineBinaryName(options.platform))
+      : '';
+  const model =
+    dir.length > 0 ? join(dir, options.manifest.weights.pieces.text.file) : '';
+  const projector =
+    options.media && dir.length > 0
+      ? join(dir, options.manifest.weights.pieces.media.file)
+      : '';
+
+  return {
+    dir,
+    engine,
+    libraryDir: engine.length > 0 ? dirname(engine) : '',
+    model,
+    projector,
+    enginePresent: isFile(engine),
+    modelPresent: isFile(model),
+    projectorPresent: isFile(projector),
+  };
+}
+
+/** The recall spec: the files, and the two numbers an index depends on. */
+export function recallSpec(options: {
+  dir: string;
+  manifest: EmbeddingManifest;
+  media: boolean;
+  platform?: NodeJS.Platform;
+}): RecallSpec {
+  return {
+    files: resolveRecallFiles(options),
+    contextSize: options.manifest.weights.contextSize,
+    pooling: options.manifest.weights.pooling,
+    media: options.media,
+  };
+}
+
+export interface RecallSpec {
+  files: RecallFiles;
+  contextSize: number;
+  pooling: EmbeddingPooling;
+  media: boolean;
+}
+
+/**
+ * Which pieces of the recall model are on disk, by exact size.
+ *
+ * The same test `installedTiers` uses and for the same reason: hashing 310 MB on
+ * every launch is not an option, and a size check still catches the failure that
+ * matters — a download that was interrupted and left a file that looks present.
+ */
+export function recallPiecesInstalled(options: {
+  dir: string;
+  manifest: EmbeddingManifest;
+}): EmbeddingPieceName[] {
+  const {dir, manifest} = options;
+  if (dir.length === 0) {
+    return [];
+  }
+  return EMBEDDING_PIECES.filter((name) => {
+    const piece = manifest.weights.pieces[name];
+    return sizeOf(join(dir, piece.file)) === piece.bytes;
+  });
 }
 
 /**

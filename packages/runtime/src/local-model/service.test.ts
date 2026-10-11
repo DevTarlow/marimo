@@ -20,7 +20,7 @@ import {PassThrough} from 'node:stream';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {LocalModelService, localModelPidFile} from './service.js';
-import type {LocalModelFiles} from './files.js';
+import type {LocalModelFiles, LocalModelSpec} from './files.js';
 
 /** One child process, as much of it as the supervisor touches. */
 class FakeChild extends EventEmitter {
@@ -85,7 +85,7 @@ describe('LocalModelService', () => {
     files?: () => LocalModelFiles;
     spawnCount?: {count: number};
     log?: string[];
-  }): LocalModelService {
+  }): LocalModelService<LocalModelFiles, LocalModelSpec> {
     const child = options.child ?? new FakeChild();
     const spawnImpl = ((): FakeChild => {
       if (options.spawnCount) {
@@ -108,12 +108,21 @@ describe('LocalModelService', () => {
       throw new Error('connection refused');
     }) as unknown as typeof fetch;
 
+    /*
+     * The spec is named rather than written inline, and it is the chat model's
+     * own type. The supervisor is generic over the spec it is handed — that is
+     * what lets one class run two engines — and an object literal would infer a
+     * spec type narrowed to this literal, which no other caller's spec could be
+     * assigned to.
+     */
+    const spec = (): LocalModelSpec => ({
+      files: (options.files ?? files)(),
+      contextSize: 8192,
+      thinking: false,
+    });
+
     return new LocalModelService({
-      spec: () => ({
-        files: (options.files ?? files)(),
-        contextSize: 8192,
-        thinking: false,
-      }),
+      spec,
       pidFile: localModelPidFile(dir),
       spawnImpl,
       fetchImpl,

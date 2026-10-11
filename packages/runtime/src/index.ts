@@ -87,6 +87,13 @@ export {
   CONTEXT_FLOOR,
   contextThatFits,
   downloadVerified,
+  EMBEDDING_ALIAS,
+  EMBEDDING_PIECES,
+  EMBEDDING_PINS,
+  EMBEDDING_POOLINGS,
+  embeddingArgs,
+  embeddingPidFile,
+  embeddingUrl,
   engineArgs,
   engineAssetFor,
   engineBinaryName,
@@ -97,6 +104,7 @@ export {
   estimatedResidentBytes,
   formatBytes,
   freePort,
+  installEmbeddingPiece,
   installEngine,
   InstallError,
   installedTiers,
@@ -112,12 +120,18 @@ export {
   MODEL_TIERS,
   modelDir,
   parseDevices,
+  parseEmbeddingManifest,
   parseManifest,
   planTier,
   platformKey,
   probeDevices,
+  RECALL_DIR_NAME,
+  recallDir,
+  recallPiecesInstalled,
+  recallSpec,
   requiredFreeBytes,
   resolveLocalModelFiles,
+  resolveRecallFiles,
   resolveTier,
   SAFETY_MARGIN_BYTES,
   systemMemoryBytes,
@@ -127,7 +141,17 @@ export {
 export type {
   DeviceProbe,
   DownloadProgress,
+  EmbeddingInstallOptions,
+  EmbeddingManifest,
+  EmbeddingPiece,
+  EmbeddingPieceName,
+  EmbeddingPooling,
+  EmbeddingSpec,
   EngineAsset,
+  EngineFiles,
+  EngineInstallOptions,
+  EngineManifest,
+  EngineRunSpec,
   EngineSpec,
   InstallOptions,
   LocalModelFiles,
@@ -142,6 +166,34 @@ export type {
   TierPlan,
   TierPlanInput,
 } from './local-model/index.js';
+
+/*
+ * Recall: the embedding model, and the pieces that turn it into an answer.
+ *
+ * Beside the model above because it *is* a model — a second engine, its own
+ * pins, its own directory under the same model directory — and apart from it
+ * because none of what is above applies: no tiers, no probe, no GPU.
+ */
+export {
+  CHUNK_CHARS,
+  CHUNK_OVERLAP_CHARS,
+  chunkText,
+  documentText,
+  EmbeddingClient,
+  EmbeddingError,
+  QUERY_PREFIX,
+  queryText,
+  RECALL_IDLE_MS,
+  RecallEngine,
+} from './recall/index.js';
+export type {
+  ChunkOptions,
+  EmbeddingClientOptions,
+  EmbeddingPart,
+  EmbeddingResult,
+  RecallEngineOptions,
+  TextChunk,
+} from './recall/index.js';
 
 /*
  * Format versions, and refusing to overwrite a document we cannot read.

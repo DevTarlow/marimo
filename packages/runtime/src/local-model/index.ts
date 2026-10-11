@@ -24,22 +24,41 @@ export {
   MODEL_DIR_ENV,
   MODEL_DIR_NAME,
   modelDir,
+  RECALL_DIR_NAME,
+  recallDir,
+  recallPiecesInstalled,
+  recallSpec,
   resolveLocalModelFiles,
+  resolveRecallFiles,
 } from './files.js';
-export type {LocalModelFiles, LocalModelSpec} from './files.js';
+export type {
+  LocalModelFiles,
+  LocalModelSpec,
+  RecallFiles,
+  RecallSpec,
+} from './files.js';
 
 export {
   backendNameFor,
+  EMBEDDING_PIECES,
+  EMBEDDING_POOLINGS,
+  embeddingUrl,
   engineAssetFor,
   engineUrl,
   ManifestError,
   MODEL_TIERS,
+  parseEmbeddingManifest,
   parseManifest,
   platformKey,
   weightsUrl,
 } from './manifest.js';
 export type {
+  EmbeddingManifest,
+  EmbeddingPiece,
+  EmbeddingPieceName,
+  EmbeddingPooling,
   EngineAsset,
+  EngineManifest,
   LocalModelManifest,
   ModelTier,
   ModelTierName,
@@ -62,20 +81,36 @@ export type {TierChoice, TierPlan, TierPlanInput} from './plan.js';
 export {
   downloadVerified,
   engineIsPinned,
+  installEmbeddingPiece,
   installEngine,
   InstallError,
   installTier,
   unpackEngine,
 } from './install.js';
-export type {DownloadProgress, InstallOptions} from './install.js';
+export type {
+  DownloadProgress,
+  EmbeddingInstallOptions,
+  EngineInstallOptions,
+  InstallOptions,
+  TierInstallOptions,
+} from './install.js';
 
-export {MODEL_PINS} from './pins.js';
+export {EMBEDDING_PINS, MODEL_PINS} from './pins.js';
 
 export {localModelSpecFor, resolveTier} from './resolve.js';
 export type {ResolveTierOptions} from './resolve.js';
 
-export {engineArgs} from './args.js';
-export type {EngineSpec} from './args.js';
+export {EMBEDDING_ALIAS, embeddingArgs, engineArgs} from './args.js';
+export type {EmbeddingSpec, EngineSpec} from './args.js';
 
-export {freePort, LocalModelService, localModelPidFile} from './service.js';
-export type {LocalModelOptions} from './service.js';
+export {
+  embeddingPidFile,
+  freePort,
+  LocalModelService,
+  localModelPidFile,
+} from './service.js';
+export type {
+  EngineFiles,
+  EngineRunSpec,
+  LocalModelOptions,
+} from './service.js';

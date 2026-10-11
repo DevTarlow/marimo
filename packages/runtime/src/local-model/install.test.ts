@@ -17,13 +17,14 @@ import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {parseManifest} from './manifest.js';
-import type {LocalModelManifest} from './manifest.js';
+import {parseEmbeddingManifest, parseManifest} from './manifest.js';
+import type {EmbeddingManifest, LocalModelManifest} from './manifest.js';
 import {engineBinaryName, engineDir} from './files.js';
 import {
   downloadVerified,
   engineIsPinned,
   InstallError,
+  installEmbeddingPiece,
   installEngine,
   installTier,
   unpackEngine,
@@ -477,3 +478,128 @@ describe('InstallError', () => {
     expect(new InstallError('nope').name).toBe('InstallError');
   });
 });
+
+/**
+ * The recall model's two pieces.
+ *
+ * The same downloader as the chat tiers, so what is asserted here is only what
+ * differs: a piece is fetched from the recall repository at the pinned revision,
+ * and a second piece — the projector — is a separate download that can be
+ * present or absent entirely without the first being re-fetched.
+ */
+describe('installEmbeddingPiece', () => {
+  let dir: string;
+  let manifest: EmbeddingManifest;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-install-recall-'));
+    manifest = embeddingFixture();
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  it('downloads the text model from the pinned revision', async () => {
+    const calls: Array<{url: string; headers: Record<string, string>}> = [];
+    const result = await installEmbeddingPiece({
+      dir,
+      manifest,
+      piece: 'text',
+      fetchImpl: fakeFetch('the backbone', {calls}),
+    });
+
+    expect(result.installed).toBe(true);
+    expect(calls[0]?.url).toBe(
+      'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/rev2/text.gguf',
+    );
+    expect(await readFile(join(dir, 'text.gguf'), 'utf8')).toBe('the backbone');
+  });
+
+  it('downloads the projector separately', async () => {
+    const result = await installEmbeddingPiece({
+      dir,
+      manifest,
+      piece: 'media',
+      fetchImpl: fakeFetch('the encoders'),
+    });
+
+    expect(result.installed).toBe(true);
+    expect(await readFile(join(dir, 'mmproj.gguf'), 'utf8')).toBe('the encoders');
+  });
+
+  it('leaves a piece that is already the pinned size alone', async () => {
+    const piece = manifest.weights.pieces.text;
+    await writeFile(join(dir, piece.file), '', 'utf8');
+    const {truncate} = await import('node:fs/promises');
+    await truncate(join(dir, piece.file), piece.bytes);
+
+    let called = false;
+    const result = await installEmbeddingPiece({
+      dir,
+      manifest,
+      piece: 'text',
+      fetchImpl: (async () => {
+        called = true;
+        return new Response('');
+      }) as unknown as typeof fetch,
+    });
+
+    expect(called).toBe(false);
+    expect(result.installed).toBe(false);
+  });
+
+  /*
+   * A file with the right name and the wrong length is what an interrupted
+   * download leaves behind, and counting it as installed is an engine that fails
+   * to load a model the card says is there.
+   */
+  it('re-fetches a piece that is the wrong size', async () => {
+    const piece = manifest.weights.pieces.text;
+    await writeFile(join(dir, piece.file), 'half of it', 'utf8');
+
+    const result = await installEmbeddingPiece({
+      dir,
+      manifest,
+      piece: 'text',
+      fetchImpl: fakeFetch('the backbone'),
+    });
+
+    expect(result.installed).toBe(true);
+    expect(await readFile(join(dir, piece.file), 'utf8')).toBe('the backbone');
+  });
+});
+
+/** A recall manifest whose pieces are small enough to write in a test. */
+function embeddingFixture(): EmbeddingManifest {
+  return parseEmbeddingManifest({
+    engine: {
+      tag: 'b2',
+      baseUrl: 'https://example.test/dl',
+      assets: {'linux-x64': {file: 'e.tar.gz', sha256: 'a'.repeat(64)}},
+      backends: {'linux-x64': 'Vulkan'},
+    },
+    weights: {
+      repo: 'unsloth/embeddinggemma-2-GGUF',
+      revision: 'rev2',
+      license: 'Apache-2.0',
+      dims: 768,
+      contextSize: 8192,
+      pooling: 'mean',
+      pieces: {
+        text: {
+          label: 'The recall model',
+          file: 'text.gguf',
+          sha256: digestOf('the backbone'),
+          bytes: 'the backbone'.length,
+        },
+        media: {
+          label: 'The encoder',
+          file: 'mmproj.gguf',
+          sha256: digestOf('the encoders'),
+          bytes: 'the encoders'.length,
+        },
+      },
+    },
+  });
+}

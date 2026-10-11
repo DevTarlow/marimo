@@ -30,7 +30,7 @@ import {join} from 'node:path';
 import type {EngineStatus} from '@marimo/protocol';
 
 import {engineArgs} from './args.js';
-import type {LocalModelFiles, LocalModelSpec} from './files.js';
+import type {LocalModelFiles} from './files.js';
 
 /** How long the engine gets to load the weights and answer `/health`. */
 const READY_TIMEOUT_MS = 90_000;
@@ -49,7 +49,10 @@ const STOP_GRACE_MS = 3_000;
  */
 const LOG_LINES = 40;
 
-export interface LocalModelOptions {
+export interface LocalModelOptions<
+  T extends EngineFiles = LocalModelFiles,
+  S extends EngineRunSpec<T> = EngineRunSpec<T>,
+> {
   /**
    * Resolved fresh on every start and every status, so a settings change shows
    * up on the next question rather than the next launch.
@@ -59,12 +62,72 @@ export interface LocalModelOptions {
    * into whoever assembled this object — where the first symptom of getting it
    * wrong is "the engine is not installed, it should be at undefined".
    */
-  spec: () => LocalModelSpec | Promise<LocalModelSpec>;
+  spec: () => S | Promise<S>;
+  /**
+   * The command line, as data, for whatever model this supervisor is running.
+   *
+   * Absent means the chat model's own argv, which is what the one caller that
+   * has been here all along wants. The recall engine passes `embeddingArgs`,
+   * because the two servers share a binary and almost nothing else: a
+   * supervisor duplicated to say `--embeddings` instead of `--jinja` would be a
+   * second copy of the pid file, the reap, the health poll and the log tail, and
+   * every one of those is a failure this class exists to have already handled.
+   *
+   * It is handed the whole spec rather than the three fields this class reads,
+   * because the resolver is allowed to know things the supervisor is not — the
+   * recall spec carries the pooling its argv needs — and a callback typed to a
+   * stripped-down spec would be a place a caller's field could go missing with
+   * no type error to say so.
+   */
+  args?: (spec: S, port: number | string) => string[];
   /** Where the pid file goes. Absent means no stray-process protection. */
   pidFile?: string;
   log?: (line: string) => void;
   spawnImpl?: typeof spawn;
   fetchImpl?: typeof fetch;
+}
+
+/**
+ * What the supervisor needs to know about the files, whatever is being run.
+ *
+ * Narrower than `LocalModelFiles` on purpose: a recall install has no tiers and
+ * an extra projector, and the supervisor cares about none of that. It reads the
+ * engine, the directory its libraries are in, and whether the two files it needs
+ * are there. Everything else belongs to whoever resolved the spec.
+ */
+export interface EngineFiles {
+  engine: string;
+  libraryDir: string;
+  model: string;
+  enginePresent: boolean;
+  modelPresent: boolean;
+}
+
+/**
+ * The files, plus the two numbers the argv is built from.
+ *
+ * `thinking` is optional because it is the chat model's: the recall engine has
+ * no template to switch, and a required field there would be a value invented to
+ * satisfy a type.
+ */
+export interface EngineRunSpec<T extends EngineFiles> {
+  files: T;
+  contextSize: number;
+  thinking?: boolean;
+}
+
+/** The chat model's argv, which is what a caller without an `args` gets. */
+function chatArgs(
+  spec: EngineRunSpec<EngineFiles>,
+  port: number | string,
+): string[] {
+  return engineArgs({
+    engine: spec.files.engine,
+    model: spec.files.model,
+    port,
+    contextSize: spec.contextSize,
+    thinking: spec.thinking ?? false,
+  });
 }
 
 type Child = Pick<
@@ -74,7 +137,10 @@ type Child = Pick<
 
 type Started = {ok: true; baseUrl: string} | {ok: false; problem: string};
 
-export class LocalModelService {
+export class LocalModelService<
+  T extends EngineFiles = LocalModelFiles,
+  S extends EngineRunSpec<T> = EngineRunSpec<T>,
+> {
   private child: Child | undefined;
   private starting: Promise<Started> | undefined;
   private url: string | undefined;
@@ -103,7 +169,7 @@ export class LocalModelService {
   private generation = 0;
   private readonly log: string[] = [];
 
-  constructor(private readonly options: LocalModelOptions) {}
+  constructor(private readonly options: LocalModelOptions<T, S>) {}
 
   /**
    * Starts the engine if it is not already up, and answers where it is.
@@ -173,7 +239,8 @@ export class LocalModelService {
   }
 
   async status(): Promise<EngineStatus> {
-    const {files, ...tuning} = await this.options.spec();
+    const spec = await this.options.spec();
+    const {files} = spec;
     const failure = this.liveFailure(files);
     const state: EngineStatus['state'] =
       this.url !== undefined
@@ -192,7 +259,7 @@ export class LocalModelService {
       enginePresent: files.enginePresent,
       modelPath: files.model,
       enginePath: files.engine,
-      command: this.command(files, tuning),
+      command: this.command(spec),
       log: [...this.log],
     };
   }
@@ -204,19 +271,16 @@ export class LocalModelService {
    * `service.definitionPath` is: it is the difference between "the app runs a
    * model" and being able to run the same thing by hand and see what it says.
    */
-  private command(
-    files: LocalModelFiles,
-    tuning: {contextSize: number; thinking: boolean},
-  ): string[] {
+  private command(spec: S): string[] {
     return [
-      files.engine,
-      ...engineArgs({
-        engine: files.engine,
-        model: files.model,
-        port: this.port ?? '<port>',
-        ...tuning,
-      }),
+      spec.files.engine,
+      ...this.args(spec, this.port ?? '<port>'),
     ];
+  }
+
+  /** The argv this supervisor was configured with, or the chat model's. */
+  private args(spec: S, port: number | string): string[] {
+    return (this.options.args ?? chatArgs)(spec, port);
   }
 
   private async start(): Promise<Started> {
@@ -224,7 +288,8 @@ export class LocalModelService {
     this.log.length = 0;
     const generation = this.generation;
 
-    const {files, ...tuning} = await this.options.spec();
+    const spec = await this.options.spec();
+    const {files} = spec;
     if (!files.enginePresent) {
       return this.fail(
         `The model engine is not installed. It should be at ${files.engine}.`,
@@ -260,12 +325,7 @@ export class LocalModelService {
       return {ok: false, problem: 'The model was stopped.'};
     }
 
-    const args = engineArgs({
-      engine: files.engine,
-      model: files.model,
-      port,
-      ...tuning,
-    });
+    const args = this.args(spec, port);
 
     const spawnImpl = this.options.spawnImpl ?? spawn;
     let child: Child;
@@ -339,7 +399,7 @@ export class LocalModelService {
   /** Polls `/health` until it answers, or gives up. */
   private async waitForHealth(
     baseUrl: string,
-    files: LocalModelFiles,
+    files: EngineFiles,
   ): Promise<Started> {
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const deadline = Date.now() + READY_TIMEOUT_MS;
@@ -394,7 +454,7 @@ export class LocalModelService {
    * is the premise the sentence was built on. An engine that is here and crashes
    * is a failure about the engine, and it stands until the next start.
    */
-  private liveFailure(files: LocalModelFiles): string | undefined {
+  private liveFailure(files: EngineFiles): string | undefined {
     const failure = this.failure;
     if (failure === undefined) {
       return undefined;
@@ -405,7 +465,7 @@ export class LocalModelService {
       : undefined;
   }
 
-  private fail(problem: string, files: LocalModelFiles): Started {
+  private fail(problem: string, files: EngineFiles): Started {
     this.failure = {
       problem,
       enginePresent: files.enginePresent,
@@ -506,7 +566,7 @@ export async function freePort(): Promise<number> {
 }
 
 /** `LD_LIBRARY_PATH`, keeping whatever the user's environment already had. */
-function libraryPath(files: LocalModelFiles): string {
+function libraryPath(files: EngineFiles): string {
   const existing = process.env['LD_LIBRARY_PATH'];
   return existing !== undefined && existing.length > 0
     ? `${files.libraryDir}:${existing}`
@@ -530,7 +590,20 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-/** Where the pid file lives, given a user-data directory. */
+/**
+ * Where the pid file lives, given a user-data directory.
+ *
+ * Two of these, and they must never be the same file. `reapPrevious` kills
+ * whatever pid a file names before loading its own model, so one pid file shared
+ * between the chat engine and the recall engine would have whichever started
+ * second kill the other — an app that answers questions and cannot remember, or
+ * the reverse, depending on the order a user happened to click things.
+ */
 export function localModelPidFile(userData: string): string {
   return join(userData, 'local-model.pid');
+}
+
+/** The recall engine's own, for the reason above. */
+export function embeddingPidFile(userData: string): string {
+  return join(userData, 'recall.pid');
 }

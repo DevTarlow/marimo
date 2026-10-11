@@ -14,6 +14,8 @@
  */
 import {LOCAL_MODEL_ID} from '@marimo/protocol';
 
+import type {EmbeddingPooling} from './manifest.js';
+
 export interface EngineSpec {
   /** The `llama-server` binary. */
   engine: string;
@@ -122,4 +124,101 @@ function chatTemplateArgs(thinking: boolean): string[] {
   return thinking
     ? []
     : ['--chat-template-kwargs', '{"enable_thinking":false}'];
+}
+
+/**
+ * The id the recall engine answers to, as `--alias` and as the request's `model`.
+ *
+ * The same constant on both sides of the wire, for the reason `LOCAL_MODEL_ID`
+ * is: the file name has a quantization in it, and a request that named the file
+ * would be a second place the quantization is written down.
+ */
+export const EMBEDDING_ALIAS = 'embeddinggemma-2';
+
+/**
+ * Everything a recall input is given, in tokens.
+ *
+ * Not a tuning knob but the boundary that makes a media request possible at all:
+ * llama.cpp's physical batch defaults to 512, and an input larger than it is
+ * refused with a 500 rather than truncated. Measured, on the pinned build: a
+ * two-second video is 669 tokens and failed at the default, and the largest
+ * input this app will ever send — a 120-second WAV, at about 27 tokens per
+ * second — is around 3,000. Two thousand and forty-eight was tried first and is
+ * not enough for that WAV, which is why this is a measured number and not a
+ * round one.
+ */
+const EMBEDDING_BATCH = 4096;
+
+/**
+ * The command line for the recall model.
+ *
+ * A second function rather than a branch inside `engineArgs`, because the two
+ * servers have almost nothing in common: this one applies no chat template, has
+ * no thoughts to switch off, keeps no KV cache worth quantizing, and must *not*
+ * be pinned to the GPU. Every flag that is absent here is absent on purpose:
+ *
+ * - No `--jinja`. There is no template and no tool call; the input is text the
+ *   caller assembled, and `--jinja` on an embedding server would be a flag that
+ *   does nothing while looking load-bearing.
+ * - No `--flash-attn` and no quantized cache. Those exist to make a long chat
+ *   context affordable. An embedding input is one pass over at most 8K tokens.
+ * - **`--n-gpu-layers 0`**: the recall engine runs on the processor. Two
+ *   reasons, and the second is the one that is easy to miss. `plan.ts` decides
+ *   the chat tier by assuming the engine may use *all* the free device memory,
+ *   and a second client holding a slice of it would make that estimate a lie. And
+ *   this model's card warns that its activations exceed float16's range and
+ *   return NaN in it, while the CPU backend accumulates in f32 — so the slower
+ *   path is also the one that does not need the model card's warning.
+ * - No `--no-webui` omission: there is still no browser to serve.
+ *
+ * `--batch-size` and `--ubatch-size` are both set, and setting only the second
+ * would be wrong: llama.cpp clamps `n_batch` down to `n_ubatch` with a warning,
+ * so an install that raised one and not the other would silently lose the batching
+ * that makes indexing a folder quick.
+ */
+export function embeddingArgs(spec: EmbeddingSpec): string[] {
+  return [
+    '--model',
+    spec.model,
+    ...(spec.projector === undefined
+      ? []
+      : ['--mmproj', spec.projector]),
+    '--alias',
+    EMBEDDING_ALIAS,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(spec.port),
+    '--ctx-size',
+    String(spec.contextSize),
+    '--n-gpu-layers',
+    '0',
+    '--embeddings',
+    '--pooling',
+    spec.pooling,
+    '--parallel',
+    '1',
+    '--batch-size',
+    String(EMBEDDING_BATCH),
+    '--ubatch-size',
+    String(EMBEDDING_BATCH),
+    '--no-webui',
+  ];
+}
+
+export interface EmbeddingSpec {
+  /** The `llama-server` binary. */
+  engine: string;
+  /** The text backbone's GGUF. */
+  model: string;
+  /**
+   * The vision and audio projector, when this install has one.
+   *
+   * Absent is not "text preferred": without it the engine has no image encoder
+   * in the process, and a picture cannot be embedded at all.
+   */
+  projector?: string;
+  port: number | string;
+  contextSize: number;
+  pooling: EmbeddingPooling;
 }

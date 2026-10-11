@@ -55,6 +55,7 @@ export type {RecallEngineOptions} from './engine.js';
 
 export {RECALL_INDEX_FILE, RecallService, recallIndexDir} from './service.js';
 export type {
+  MemoryIndexState,
   RecallAnswer,
   RecallHit,
   RecallIndexStatus,

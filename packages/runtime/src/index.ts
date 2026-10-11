@@ -240,6 +240,7 @@ export type {
   MediaKind,
   MediaSource,
   MemoryBullet,
+  MemoryIndexState,
   RecallAnswer,
   RecallEngineOptions,
   RecallHit,

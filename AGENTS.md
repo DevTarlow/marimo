@@ -65,7 +65,7 @@ Each of these is silent when it breaks. That is the whole reason they are listed
 7. **Truncation is visible.** A capped tool result says so, so the model knows
    there is more rather than believing it read everything.
 8. **Secrets never cross to the renderer.** Settings report whether a connector's
-   secret is *set*, never its value — and there is a test that walks the payload
+   secret is _set_, never its value — and there is a test that walks the payload
    rather than trusting one call site.
 9. **A capability the user turned off is absent, not discouraged.**
 10. **One turn at a time holds across processes.** The app and the runner are
@@ -79,7 +79,7 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     of this and no longer is**: it was bundled, so the window found it through
     Electron's `process.resourcesPath` while the runner derived the path from its
     own executable. It is downloaded into the user-data directory now and the pins
-    are *imported* rather than located, so there is one derivation instead of two —
+    are _imported_ rather than located, so there is one derivation instead of two —
     and `resolveTier`/`localModelSpecFor` are what both processes call to get the
     same tier at the same context.
 14. **An MCP server's tools cannot take a built-in name.** The reserved set is
@@ -351,7 +351,7 @@ inversion of what this file used to say: an installer with 1.1 GB inside it work
 offline out of the box, and the cost was a build that needed a gigabyte of network
 and a release that could only be rebuilt by downloading it again. The trade now is
 one download on first run, and the pins — tag, revision, per-asset sha256 — live in
-`packages/runtime/src/local-model/pins.ts`, which both processes *import* rather
+`packages/runtime/src/local-model/pins.ts`, which both processes _import_ rather
 than find on disk.
 
 **There are two tiers of one model, and no CPU path.** `low` is Qwen3.5-4B at
@@ -359,7 +359,7 @@ Q4_K_M (2.7 GB, 16K) and `high` is the same model at Q8_0 (4.5 GB, 32K). Every
 engine asset is a GPU build — Vulkan on Linux and Windows, Metal on macOS — and a
 machine with no usable device is refused with a sentence rather than quietly run on
 a processor. `local-model/plan.ts` decides the tier from what the engine reports as
-free, and the decision is an *estimate*: weights, a quantized cache and a compute
+free, and the decision is an _estimate_: weights, a quantized cache and a compute
 buffer, plus a margin. It probes and then downloads; it never tries and falls back.
 The estimate is why `modelTier` exists as a settings field — `auto`, `low` or
 `high` — and an explicit choice is never second-guessed, only warned about.
@@ -453,3 +453,32 @@ writes the runner's path into a systemd unit. Check `pnpm --filter
 - Tests that touch the filesystem use `mkdtemp` under the working directory
   (`.marimo-*`, gitignored) rather than `/tmp`, so a sandbox that only permits
   writes inside the repository still runs them.
+- **One test loads the real embedding model, and it is skipped unless asked for.**
+  `packages/runtime/src/recall/memory-retrieval.live.test.ts` asserts that a
+  question actually retrieves the memory bullet that answers it, through the
+  pinned model, revision, prefixes and pooling — the one thing a fake embedder
+  cannot check, because a regression there returns a plausible result list rather
+  than an error. Run it by hand when you touch `prefixes.ts`, the scoring floor,
+  the pooling, or the model pins:
+
+  ```bash
+  # a directory holding the weights, the pinned engine in engine/, and nothing else
+  MARIMO_MODEL_DIR=$PWD/apps/desktop/.model-cache/live-model \
+    pnpm --filter @marimo/runtime test:live
+  ```
+
+  `$PWD` and not a relative path: the filter runs the suite with the package as
+  its working directory, so `apps/desktop/...` from inside `packages/runtime/` is
+  a directory that does not exist — which reports as a skipped test rather than as
+  a bad path.
+
+  The directory has to be laid out the way the app uses it — weights at its root,
+  engine in `engine/` — because that is where the supervisor takes the engine's
+  shared libraries from, so an engine binary kept elsewhere is given the app's
+  libraries and fails with `unknown model architecture`. That is also why
+  `pins.ts` carries a second `RECALL_ENGINE`: the app's own build cannot load this
+  model at all. `model:fetch` populates the chat side only, so a live run usually
+  means pointing this at a directory assembled by hand — symlinking the pinned
+  weights beside an extracted `RECALL_ENGINE` archive is enough. An unset
+  environment, missing weights or a missing engine all report as skipped rather
+  than failing, because none of them is a broken build.

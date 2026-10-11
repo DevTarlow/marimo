@@ -425,10 +425,21 @@ function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
     }
   }
 
+  /*
+   * The memory tools are handed recall when it is there, because a write is the
+   * only moment anything knows memory changed: this is what warms the engine so
+   * the next turn's retrieval is an embed rather than a load, and what lets the
+   * result say that the fact just stored is not searchable yet. One condition, so
+   * the three tools cannot disagree about whether the feature is on.
+   */
+  const memoryContext = {
+    memory: deps.memory,
+    ...(deps.recallService === undefined ? {} : {recall: deps.recallService}),
+  };
   tools.push(
-    createReadMemoryTool({memory: deps.memory}),
-    createUpdateMemoryTool({memory: deps.memory}),
-    createPruneMemoryTool({memory: deps.memory}),
+    createReadMemoryTool(memoryContext),
+    createUpdateMemoryTool(memoryContext),
+    createPruneMemoryTool(memoryContext),
     createHttpFetchTool({
       allowPrivateNetworkFetch: config.allowPrivateNetworkFetch,
     }),

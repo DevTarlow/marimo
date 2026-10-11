@@ -20,10 +20,25 @@ import {ConversationWatermarkStore} from './conversations.js';
 import type {ConversationEvent} from './conversations.js';
 import type {IndexModel} from './store.js';
 
-const MODEL: IndexModel = {repo: 'unsloth/embeddinggemma-2-GGUF', revision: 'rev2', dims: 8};
-const VOCABULARY = ['retry', 'upload', 'cookie', 'bake', 'memory', 'tabs', 'oven', 'user'];
+const MODEL: IndexModel = {
+  repo: 'unsloth/embeddinggemma-2-GGUF',
+  revision: 'rev2',
+  dims: 8,
+};
+const VOCABULARY = [
+  'retry',
+  'upload',
+  'cookie',
+  'bake',
+  'memory',
+  'tabs',
+  'oven',
+  'user',
+];
 
-function fakeEmbedder(): (texts: readonly string[]) => Promise<{vectors: Float32Array[]}> {
+function fakeEmbedder(): (
+  texts: readonly string[],
+) => Promise<{vectors: Float32Array[]}> {
   return async (texts) => ({
     vectors: texts.map((text) => {
       const vector = new Float32Array(VOCABULARY.length);
@@ -56,13 +71,20 @@ describe('RecallService', () => {
     await rm(indexDir, {recursive: true, force: true});
   });
 
-  function service(options: {memory?: boolean; folder?: boolean} = {}): RecallService {
+  function service(
+    options: {
+      memory?: boolean;
+      folder?: boolean;
+      warm?: () => Promise<void>;
+    } = {},
+  ): RecallService {
     return new RecallService({
       workspaceRoot: options.folder === false ? '' : workspace,
       dir: indexDir,
       model: MODEL,
       embed: fakeEmbedder(),
       ...(options.memory === false ? {} : {readMemory: async () => memory}),
+      ...(options.warm === undefined ? {} : {warm: options.warm}),
     });
   }
 
@@ -80,7 +102,10 @@ describe('RecallService', () => {
   });
 
   it('answers a question about the code with the lines themselves', async () => {
-    await write('src/retry.ts', 'export function withRetry() {\n  // three attempts\n}');
+    await write(
+      'src/retry.ts',
+      'export function withRetry() {\n  // three attempts\n}',
+    );
     await write('src/oven.ts', 'export function preheat() {}');
 
     const answer = await service().search({query: 'how does retry work?'});
@@ -103,7 +128,9 @@ describe('RecallService', () => {
     await write('src/retry.ts', 'export function withRetry() {}');
     memory = '## Preferences and tone\n- the user prefers tabs over spaces\n';
 
-    const answer = await service().search({query: 'what does the user prefer?'});
+    const answer = await service().search({
+      query: 'what does the user prefer?',
+    });
 
     const hit = answer.hits.find((entry) => entry.kind === 'memory');
     expect(hit).toBeDefined();
@@ -283,9 +310,9 @@ describe('RecallService', () => {
 
     await recall.search({query: 'where is retry'});
 
-    expect(asked.some((text) => text.startsWith('task: code retrieval | query:'))).toBe(
-      true,
-    );
+    expect(
+      asked.some((text) => text.startsWith('task: code retrieval | query:')),
+    ).toBe(true);
   });
 
   it('reports what it indexed when a folder is only partly done', async () => {
@@ -340,8 +367,14 @@ describe('RecallService', () => {
 
     it('finds a chat and reads the stretch back', async () => {
       const recall = recallWith(() => [
-        {author: 'user', content: {parts: [{text: 'how should the retry work?'}]}},
-        {author: 'agent', content: {parts: [{text: 'three attempts, then give up'}]}},
+        {
+          author: 'user',
+          content: {parts: [{text: 'how should the retry work?'}]},
+        },
+        {
+          author: 'agent',
+          content: {parts: [{text: 'three attempts, then give up'}]},
+        },
       ]);
 
       const answer = await recall.search({
@@ -360,16 +393,25 @@ describe('RecallService', () => {
 
     it('stops finding a chat that has been forgotten', async () => {
       let events: ConversationEvent[] = [
-        {author: 'user', content: {parts: [{text: 'how should the retry work?'}]}},
+        {
+          author: 'user',
+          content: {parts: [{text: 'how should the retry work?'}]},
+        },
       ];
       const recall = recallWith(() => events);
-      const first = await recall.search({query: 'retry', scopes: ['conversation']});
+      const first = await recall.search({
+        query: 'retry',
+        scopes: ['conversation'],
+      });
       expect(first.hits.length).toBeGreaterThan(0);
 
       await recall.forgetSessions(['s1']);
       events = [];
 
-      const second = await recall.search({query: 'retry', scopes: ['conversation']});
+      const second = await recall.search({
+        query: 'retry',
+        scopes: ['conversation'],
+      });
       expect(second.hits).toEqual([]);
     });
 
@@ -386,6 +428,99 @@ describe('RecallService', () => {
         },
       });
       expect(withMedia.scopes()).toContain('media');
+    });
+  });
+
+  /*
+   * The two answers a memory write needs, and both are about timing rather than
+   * content: whether the vectors on disk describe the file in front of you, and
+   * a way to spend the engine's load time somewhere other than inside a turn's
+   * retrieval deadline.
+   */
+  describe('memory freshness', () => {
+    it('says nothing has been indexed before the first search', async () => {
+      const state = await service().memoryState();
+      expect(state).toEqual({vectors: 0, index: false, behind: true});
+    });
+
+    it('is current once a search has refreshed the index', async () => {
+      await service().search({query: 'tabs', scopes: ['memory']});
+      const state = await service().memoryState();
+      expect(state.index).toBe(true);
+      expect(state.vectors).toBe(1);
+      expect(state.behind).toBe(false);
+    });
+
+    /*
+     * The case the note exists for: memory was written, nothing has searched
+     * since, and the index still holds the bullets from before. The state has to
+     * be read from the digests rather than remembered, because the refresh that
+     * closes the gap is performed by a *search* — anything the service cached
+     * would claim a freshness that only the next search can produce.
+     */
+    it('reports the index behind after the file changes', async () => {
+      await service().search({query: 'tabs', scopes: ['memory']});
+      memory = `${memory}- the user also prefers pnpm\n`;
+
+      const state = await service().memoryState();
+      expect(state.index).toBe(true);
+      expect(state.behind).toBe(true);
+      // Still the *old* count: the vectors are what is behind, not the file.
+      expect(state.vectors).toBe(1);
+    });
+
+    /*
+     * An empty memory is not behind. Nothing to embed and nothing embedded is the
+     * same state, and a note saying otherwise would be a sentence the model reads
+     * on the very first write of a fresh install.
+     */
+    it('is not behind when the file has no bullets at all', async () => {
+      memory = '';
+      expect(await service().memoryState()).toEqual({
+        vectors: 0,
+        index: false,
+        behind: false,
+      });
+    });
+
+    it('has no memory state to report when memory is not a corpus', async () => {
+      expect(await service({memory: false}).memoryState()).toEqual({
+        vectors: 0,
+        index: false,
+        behind: false,
+      });
+    });
+
+    /*
+     * The warm is a delegation and nothing more. Asserting the call rather than
+     * an effect is deliberate: what "up" means belongs to the engine, and a
+     * service that embedded something here would be a second thing deciding what
+     * has to be in the index.
+     */
+    it('warms the engine without embedding anything', async () => {
+      let warms = 0;
+      let embedded = 0;
+      const recall = new RecallService({
+        workspaceRoot: workspace,
+        dir: indexDir,
+        model: MODEL,
+        embed: async (texts) => {
+          embedded += texts.length;
+          return await fakeEmbedder()(texts);
+        },
+        readMemory: async () => memory,
+        warm: async () => {
+          warms += 1;
+        },
+      });
+
+      await recall.warm();
+      expect(warms).toBe(1);
+      expect(embedded).toBe(0);
+    });
+
+    it('has nothing to warm when the caller supplied no engine', async () => {
+      await expect(service().warm()).resolves.toBeUndefined();
     });
   });
 });

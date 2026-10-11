@@ -13,11 +13,69 @@
 import {FunctionTool} from '@google/adk';
 import {z} from 'zod';
 
+import {memoryIndexNote} from '../memory/index-note.js';
 import {memorySizeWarning} from '../memory/size.js';
+import type {MemoryIndexState} from '../memory/index-note.js';
 import type {MemoryStore} from '../memory/index.js';
+import type {RecallLookup} from './recall-tools.js';
 
 export interface MemoryToolContext {
   memory: MemoryStore;
+  /**
+   * Recall, when this install has it and memory is one of its corpora.
+   *
+   * The memory tools are the only place that knows a *write* happened, which is
+   * the one moment worth doing two things at: telling the engine to come up so
+   * the next turn's refresh is embedding rather than loading, and telling the
+   * model that what it just wrote is not searchable yet. Absent means the feature
+   * is off, and neither sentence is owed.
+   */
+  recall?: RecallLookup;
+}
+
+/**
+ * Warms the recall engine after a memory write, and never lets it matter.
+ *
+ * Deliberately not awaited: the model is waiting on this tool result and loading
+ * the weights takes seconds, while the turn that benefits is the next one. The
+ * failure is dropped rather than reported for the same reason — a service that
+ * cannot start will say so on the search that needs it, and a stored fact is not
+ * a worse fact for having no index behind it.
+ */
+function warmRecall(recall: RecallLookup | undefined): void {
+  try {
+    void recall?.warm?.().catch(() => undefined);
+  } catch {
+    // A synchronous throw from an injected seam is still not the write's problem.
+  }
+}
+
+/**
+ * The index note for a call that has just written, or `''`.
+ *
+ * Every failure here is the same answer — say nothing — because this is an
+ * annotation on a successful write. A lookup that cannot answer the question
+ * must not turn a stored fact into an error.
+ */
+async function indexNote(
+  context: MemoryToolContext,
+  bullets: number,
+): Promise<string> {
+  const state: MemoryIndexState | undefined = await context.recall
+    ?.memoryState?.()
+    .catch(() => undefined);
+  if (state === undefined) {
+    return '';
+  }
+  return memoryIndexNote({state, bullets});
+}
+
+/** How many bullets a document holds, for a note that has to count them. */
+function bulletCount(text: string): number {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^[-*]\s+\S/u.test(line)).length;
 }
 
 export function createReadMemoryTool(context: MemoryToolContext) {
@@ -134,7 +192,18 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
       // here as well as on a read: a run that never calls read_memory still
       // gets told before the file is the cap's problem.
       const warning = memorySizeWarning(bytes, context.memory.softLimitBytes);
-      return warning ? `${outcome}\n\n${warning}` : outcome;
+      /*
+       * And the moment the file and its vectors diverge, which is the other thing
+       * only this call knows. The warm is requested before the state is asked
+       * for, so a lookup whose engine is already up has nothing to do and one
+       * that is cold has started by the time the answer comes back.
+       */
+      warmRecall(context.recall);
+      const note = await indexNote(context, bulletCount(report.content));
+      const suffix = [warning, note]
+        .filter((part) => part.length > 0)
+        .join('\n\n');
+      return suffix.length > 0 ? `${outcome}\n\n${suffix}` : outcome;
     },
   });
 }
@@ -175,7 +244,16 @@ export function createPruneMemoryTool(context: MemoryToolContext) {
         return `Could not prune memory.md: ${describeError(error)}`;
       }
       const suffix = reason ? ` Reason: ${reason}` : '';
-      return `Pruned ${context.memory.file} (${byteLength(before)} → ${byteLength(content)} bytes). Previous contents kept as memory.md.bak.${suffix}`;
+      /*
+       * A prune rewrites every bullet, so the index is behind by definition and
+       * the note is the same one a write gets. The warm matters more here than
+       * anywhere: the whole file has to be re-embedded on the next search, and
+       * that is the largest batch this app ever sends inside a turn's deadline.
+       */
+      warmRecall(context.recall);
+      const indexMessage = await indexNote(context, bulletCount(content));
+      const tail = indexMessage.length > 0 ? `\n\n${indexMessage}` : '';
+      return `Pruned ${context.memory.file} (${byteLength(before)} → ${byteLength(content)} bytes). Previous contents kept as memory.md.bak.${suffix}${tail}`;
     },
   });
 }

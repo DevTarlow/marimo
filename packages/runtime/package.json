@@ -18,7 +18,8 @@
     "build": "tsc -b",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:live": "MARIMO_LIVE_EMBEDDINGS=1 vitest run"
   },
   "dependencies": {
     "@marimo/agent": "workspace:*",

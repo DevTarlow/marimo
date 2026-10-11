@@ -8,11 +8,13 @@ import type {BaseTool, Context} from '@google/adk';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {MEMORY_SOFT_LIMIT_BYTES, MemoryStore} from '../memory/index.js';
+import type {MemoryIndexState} from '../memory/index-note.js';
 import {
   createPruneMemoryTool,
   createReadMemoryTool,
   createUpdateMemoryTool,
 } from './memory-tools.js';
+import type {RecallLookup} from './recall-tools.js';
 
 async function run(
   tool: BaseTool,
@@ -23,6 +25,34 @@ async function run(
     toolContext: undefined as unknown as Context,
   });
   return typeof result === 'string' ? result : JSON.stringify(result);
+}
+
+/**
+ * A recall lookup that records what was asked of it.
+ *
+ * Only the two methods the memory tools reach for exist here, which is the point:
+ * the tools must work against the narrow shape rather than the service, and a
+ * fake that implemented the whole thing would hide a tool reaching for more.
+ */
+function fakeRecall(state: MemoryIndexState | Error): {
+  recall: RecallLookup;
+  asked: {warms: number};
+} {
+  const asked = {warms: 0};
+  const recall: RecallLookup = {
+    scopes: () => ['memory'],
+    search: async () => ({hits: [], searched: ['memory'], notes: []}),
+    warm: async () => {
+      asked.warms += 1;
+    },
+    memoryState: async () => {
+      if (state instanceof Error) {
+        throw state;
+      }
+      return state;
+    },
+  };
+  return {recall, asked};
 }
 
 describe('memory tools', () => {
@@ -286,6 +316,103 @@ describe('memory tools', () => {
       });
       const after = await run(createReadMemoryTool({memory}), {});
       expect(after).not.toContain('soft limit');
+    });
+  });
+
+  /*
+   * A write is the only moment anything knows memory changed, which makes it the
+   * only moment the engine can be warmed and the only moment the model can be
+   * told that what it just stored is not searchable yet. Both halves are here
+   * because both are invisible when they stop happening: the write still works,
+   * the fact is still stored, and the search that misses it looks like a search
+   * that found nothing.
+   */
+  describe('the search index', () => {
+    it('warms the engine and says the write is not indexed yet', async () => {
+      const {recall, asked} = fakeRecall({
+        vectors: 0,
+        index: false,
+        behind: true,
+      });
+      const output = await run(createUpdateMemoryTool({memory, recall}), {
+        content: 'Prefers pnpm',
+      });
+
+      expect(asked.warms).toBe(1);
+      expect(output).toContain('not in the search index yet');
+      // The write is the thing that matters, and the note says so.
+      expect(await memory.read()).toContain('- Prefers pnpm');
+    });
+
+    it('still warms when the index is current, and says nothing', async () => {
+      const {recall, asked} = fakeRecall({
+        vectors: 1,
+        index: true,
+        behind: false,
+      });
+      const output = await run(createUpdateMemoryTool({memory, recall}), {
+        content: 'Prefers pnpm',
+      });
+
+      // The warm is not a consequence of the note: the *next* write also has to
+      // find a live engine, and a service that stopped after five idle minutes
+      // is exactly the case this catches.
+      expect(asked.warms).toBe(1);
+      expect(output).not.toContain('search index');
+    });
+
+    it('says nothing about the index when recall is off', async () => {
+      const output = await run(createUpdateMemoryTool({memory}), {
+        content: 'Prefers pnpm',
+      });
+      expect(output).not.toContain('search index');
+      expect(output).toContain('Updated');
+    });
+
+    /*
+     * The injection seam is a service that spawns a process, so it can throw and
+     * it can reject. Neither is the write's problem, and a note that failed must
+     * not turn a stored fact into a failed turn.
+     */
+    it('reports an unreadable index state as no note rather than an error', async () => {
+      const {recall} = fakeRecall(new Error('engine refused to start'));
+      const output = await run(createUpdateMemoryTool({memory, recall}), {
+        content: 'Prefers pnpm',
+      });
+      expect(output).toContain('Updated');
+      expect(output).not.toContain('engine refused');
+    });
+
+    it('reports the index note on a prune, which rewrites every bullet', async () => {
+      const {recall} = fakeRecall({vectors: 4, index: true, behind: true});
+      const output = await run(createPruneMemoryTool({memory, recall}), {
+        content: '- the only fact\n',
+        reason: 'tidy',
+      });
+      expect(output).toContain('Pruned');
+      expect(output).toContain('4 memory bullets');
+      expect(output).toContain('Reason: tidy');
+    });
+
+    /*
+     * The count is bullets rather than lines, and this is the case that shows
+     * why: a file whose only content is a `#` title has no facts in it, so
+     * telling the model that none of them are searchable would be a sentence
+     * about nothing.
+     */
+    it('says nothing when the file holds no bullets', async () => {
+      const {recall, asked} = fakeRecall({
+        vectors: 0,
+        index: false,
+        behind: true,
+      });
+      const output = await run(createPruneMemoryTool({memory, recall}), {
+        content: '# Notes about the user\n',
+      });
+      expect(output).toContain('Pruned');
+      expect(output).not.toContain('search index');
+      // The engine is still warmed: the empty file may be the first of two writes.
+      expect(asked.warms).toBe(1);
     });
   });
 });

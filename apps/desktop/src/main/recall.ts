@@ -174,7 +174,10 @@ export class RecallHost {
      * image encoder fails, and the sentence it fails with is about the request.
      * One model load on the next request is the whole cost.
      */
-    if (this.lastMedia !== undefined && this.lastMedia !== settings.recall.media) {
+    if (
+      this.lastMedia !== undefined &&
+      this.lastMedia !== settings.recall.media
+    ) {
       await this.engine.stop();
     }
     this.lastMedia = settings.recall.media;
@@ -244,6 +247,9 @@ export class RecallHost {
         dims: EMBEDDING_PINS.weights.dims,
       },
       embed: async (texts) => await this.engine.embedText(texts),
+      warm: async () => {
+        await this.engine.ensureRunning();
+      },
       codeQueries: settings.recall.codeQueries,
       ...(this.options.readOnly === true ? {readOnly: true} : {}),
       ...(settings.recall.memory
@@ -253,7 +259,8 @@ export class RecallHost {
         ? {
             conversations: {
               list: async () => await list(profileId),
-              read: async (sessionId: string) => await read(profileId, sessionId),
+              read: async (sessionId: string) =>
+                await read(profileId, sessionId),
             },
             watermark,
           }
@@ -262,7 +269,8 @@ export class RecallHost {
         ? {
             media: {
               decode,
-              embedParts: async (inputs) => await this.engine.embedParts(inputs),
+              embedParts: async (inputs) =>
+                await this.engine.embedParts(inputs),
             },
           }
         : {}),
@@ -290,7 +298,14 @@ export class RecallHost {
     const service = await this.serviceFor(profileId, workspaceRoot);
     const index =
       service === undefined
-        ? {records: 0, chunks: 0, memory: 0, conversations: 0, media: 0, changed: 0}
+        ? {
+            records: 0,
+            chunks: 0,
+            memory: 0,
+            conversations: 0,
+            media: 0,
+            changed: 0,
+          }
         : await service.status();
 
     return {
@@ -441,10 +456,7 @@ export class RecallHost {
     }
   }
 
-  private report(
-    piece: 'text' | 'media',
-    progress: DownloadProgress,
-  ): void {
+  private report(piece: 'text' | 'media', progress: DownloadProgress): void {
     this.progress = {
       piece,
       label: progress.label,

@@ -35,7 +35,10 @@ import {splitMemory} from '@marimo/agent';
 import {chunkText} from './chunk.js';
 import type {TextChunk} from './chunk.js';
 import {renderConversationText} from './conversations.js';
-import type {ConversationEvent, ConversationWatermarkStore} from './conversations.js';
+import type {
+  ConversationEvent,
+  ConversationWatermarkStore,
+} from './conversations.js';
 import {refreshIndex} from './indexer.js';
 import type {
   ConversationSource,
@@ -119,6 +122,22 @@ export interface RecallIndexStatus {
   changed: number;
 }
 
+/**
+ * Whether the memory vectors describe the memory file as it is now.
+ *
+ * Three fields rather than a boolean, because the three states a caller might
+ * want to say are different sentences: nothing has been indexed at all, memory
+ * was indexed and has changed since, and memory is current.
+ */
+export interface MemoryIndexState {
+  /** Memory vectors in the index. */
+  vectors: number;
+  /** Whether an index exists. False means nothing has been built here yet. */
+  index: boolean;
+  /** Whether the file has changed since its bullets were embedded. */
+  behind: boolean;
+}
+
 export interface RecallAnswer {
   hits: RecallHit[];
   /** The corpora that were actually searched. */
@@ -139,6 +158,15 @@ export interface RecallServiceOptions {
   model: IndexModel;
   /** Turns text into vectors. */
   embed: (texts: readonly string[]) => Promise<{vectors: Float32Array[]}>;
+  /**
+   * Gets the engine up without embedding anything.
+   *
+   * Separate from `embed` because the caller who wants it is warming rather than
+   * asking: loading 310 MB of weights is seconds, which does not fit inside a
+   * turn's retrieval deadline, so it has to happen at a moment somebody chose
+   * rather than one they were waiting on.
+   */
+  warm?: () => Promise<void>;
   /**
    * The agent's memory file, read by whoever knows where it lives.
    *
@@ -230,16 +258,27 @@ export class RecallService {
   async status(): Promise<RecallIndexStatus> {
     const data = await readIndex(this.options.dir, this.options.model);
     if (data === undefined) {
-      return {records: 0, chunks: 0, memory: 0, conversations: 0, media: 0, changed: 0};
+      return {
+        records: 0,
+        chunks: 0,
+        memory: 0,
+        conversations: 0,
+        media: 0,
+        changed: 0,
+      };
     }
     return {
       builtAt: data.file.builtAt,
       records: data.file.count,
-      chunks: data.file.records.filter((record) => record.kind === 'text').length,
-      memory: data.file.records.filter((record) => record.kind === 'memory').length,
-      conversations: data.file.records.filter((record) => record.kind === 'conversation')
+      chunks: data.file.records.filter((record) => record.kind === 'text')
         .length,
-      media: data.file.records.filter((record) => record.kind === 'media').length,
+      memory: data.file.records.filter((record) => record.kind === 'memory')
+        .length,
+      conversations: data.file.records.filter(
+        (record) => record.kind === 'conversation',
+      ).length,
+      media: data.file.records.filter((record) => record.kind === 'media')
+        .length,
       changed: await this.changedCount(data.file.files),
     };
   }
@@ -277,7 +316,8 @@ export class RecallService {
         searched: [],
         coverage: empty,
         index: await this.status(),
-        notes: wanted.length === 0 ? ['Nothing is available to search yet.'] : [],
+        notes:
+          wanted.length === 0 ? ['Nothing is available to search yet.'] : [],
       };
     }
 
@@ -305,35 +345,35 @@ export class RecallService {
     } else {
       try {
         coverage = await this.refresh();
-      if (coverage.truncated) {
-        /*
-         * Two budgets can stop a refresh, and they mean different things: a
-         * folder still being sliced, and conversations whose newest exchange has
-         * not been embedded yet. Saying "the folder is large" about a chat would
-         * send the reader looking in the wrong place.
-         */
-        notes.push(
-          'The index is built in slices, and ' +
-            `${String(coverage.pending)} file(s) and ` +
-            `${String(coverage.pendingConversations)} conversation(s) are not ` +
-            'indexed yet. Ask again to continue.',
-        );
-      }
-      if (coverage.skipped > 0) {
-        notes.push(
-          `${String(coverage.skipped)} file(s) could not be read or embedded.`,
-        );
-      }
-      if (coverage.evicted > 0) {
-        /*
-         * Said out loud, because the alternative is a search that answers about
-         * part of a folder while reading as though it read all of it.
-         */
-        notes.push(
-          `The index is full, so ${String(coverage.evicted)} file(s) were dropped ` +
-            'to stay within it. The ones kept are the most recently changed.',
-        );
-      }
+        if (coverage.truncated) {
+          /*
+           * Two budgets can stop a refresh, and they mean different things: a
+           * folder still being sliced, and conversations whose newest exchange has
+           * not been embedded yet. Saying "the folder is large" about a chat would
+           * send the reader looking in the wrong place.
+           */
+          notes.push(
+            'The index is built in slices, and ' +
+              `${String(coverage.pending)} file(s) and ` +
+              `${String(coverage.pendingConversations)} conversation(s) are not ` +
+              'indexed yet. Ask again to continue.',
+          );
+        }
+        if (coverage.skipped > 0) {
+          notes.push(
+            `${String(coverage.skipped)} file(s) could not be read or embedded.`,
+          );
+        }
+        if (coverage.evicted > 0) {
+          /*
+           * Said out loud, because the alternative is a search that answers about
+           * part of a folder while reading as though it read all of it.
+           */
+          notes.push(
+            `The index is full, so ${String(coverage.evicted)} file(s) were dropped ` +
+              'to stay within it. The ones kept are the most recently changed.',
+          );
+        }
       } catch (failure) {
         /*
          * A folder that cannot be indexed is not a search that failed. Memory may
@@ -375,8 +415,19 @@ export class RecallService {
     }).filter((hit) => wanted.includes(scopeOf(hit)));
 
     const hits: RecallHit[] = [];
+    /*
+     * Memory is read once for the whole answer rather than once per hit. A search
+     * that returns eight memory bullets would otherwise read and split the same
+     * file eight times — and the file a caller is most likely to have just
+     * written is the one where that cost is paid inside a turn's retrieval
+     * deadline.
+     */
+    const memory =
+      this.options.readMemory === undefined
+        ? ''
+        : await this.options.readMemory();
     for (const hit of ranked) {
-      hits.push(await this.read(hit));
+      hits.push(await this.read(hit, memory));
     }
 
     /*
@@ -495,7 +546,9 @@ export class RecallService {
 
   private async refresh(): Promise<IndexCoverage> {
     const memory =
-      this.options.readMemory === undefined ? '' : await this.options.readMemory();
+      this.options.readMemory === undefined
+        ? ''
+        : await this.options.readMemory();
     const watermark =
       this.options.watermark === undefined
         ? undefined
@@ -539,7 +592,7 @@ export class RecallService {
    * file that has changed in any way that matters has no chunk at those lines,
    * which is what `stale` reports.
    */
-  private async read(hit: SearchHit): Promise<RecallHit> {
+  private async read(hit: SearchHit, memory: string): Promise<RecallHit> {
     const base = {
       kind: hit.kind,
       path: hit.path,
@@ -560,15 +613,18 @@ export class RecallService {
      * anybody's code.
      */
     if (hit.kind === 'memory') {
-      const memory =
-        this.options.readMemory === undefined ? '' : await this.options.readMemory();
       const bullet = memoryBullets(memory).find(
         (entry) =>
           entry.section === hit.section && digestOf(entry.text) === hit.sha256,
       );
       return bullet === undefined
         ? {...base, preview: '', text: '', stale: true}
-        : {...base, preview: previewOf(bullet.text), text: bullet.text, stale: false};
+        : {
+            ...base,
+            preview: previewOf(bullet.text),
+            text: bullet.text,
+            stale: false,
+          };
     }
 
     if (hit.kind === 'conversation') {
@@ -597,7 +653,12 @@ export class RecallService {
     );
     return chunk === undefined
       ? {...base, preview: '', text: '', stale: true}
-      : {...base, preview: previewOf(chunk.text), text: chunk.text, stale: false};
+      : {
+          ...base,
+          preview: previewOf(chunk.text),
+          text: chunk.text,
+          stale: false,
+        };
   }
 
   /**
@@ -630,7 +691,10 @@ export class RecallService {
     }
 
     const start = Math.max(0, hit.startEvent ?? 0);
-    const end = Math.min(hit.endEvent ?? read.events.length, read.events.length);
+    const end = Math.min(
+      hit.endEvent ?? read.events.length,
+      read.events.length,
+    );
     const text = renderConversationText(read.events.slice(start, end));
     return digestOf(text) === hit.sha256
       ? {...base, preview: previewOf(text), text, stale: false}
@@ -653,7 +717,12 @@ export class RecallService {
     const root = this.options.workspaceRoot;
     const label = hit.mediaKind ?? 'media';
     if (root === undefined || root.length === 0) {
-      return {...base, preview: `[${label}] ${hit.path}`, text: '', stale: true};
+      return {
+        ...base,
+        preview: `[${label}] ${hit.path}`,
+        text: '',
+        stale: true,
+      };
     }
     try {
       const info = await stat(join(root, hit.path.split('/').join(sep)));
@@ -666,8 +735,62 @@ export class RecallService {
         stale: !fresh,
       };
     } catch {
-      return {...base, preview: `[${label}] ${hit.path}`, text: '', stale: true};
+      return {
+        ...base,
+        preview: `[${label}] ${hit.path}`,
+        text: '',
+        stale: true,
+      };
     }
+  }
+
+  /**
+   * Whether the memory file's bullets are the ones the index holds.
+   *
+   * The answer a caller needs to say "this fact is not searchable yet" honestly,
+   * and the reason it is a question rather than a flag: retrieval refreshes the
+   * index on the way through, so the state that matters is always the one on
+   * disk right now — the file's digest against the digest the vectors were built
+   * from. A tool result that claimed freshness from a flag it set itself would be
+   * the one thing worth knowing, guessed at.
+   *
+   * `vectors` counts the memory records in the index. Zero with `index: false`
+   * means no index has been built, which is different from one built before
+   * memory.md had anything in it.
+   */
+  async memoryState(): Promise<MemoryIndexState> {
+    if (this.options.readMemory === undefined) {
+      return {vectors: 0, behind: false, index: false};
+    }
+    const memory = await this.options.readMemory();
+    const data = await readIndex(this.options.dir, this.options.model);
+    if (data === undefined) {
+      return {
+        vectors: 0,
+        behind: memoryBullets(memory).length > 0,
+        index: false,
+      };
+    }
+    return {
+      vectors: data.file.records.filter((record) => record.kind === 'memory')
+        .length,
+      behind: data.file.memoryHash !== digestOf(memory),
+      index: true,
+    };
+  }
+
+  /**
+   * Brings the embedding engine up, and answers nothing.
+   *
+   * Called by whoever has just changed memory, so the next turn's refresh is a
+   * few hundred milliseconds of embedding rather than seconds of loading behind
+   * a retrieval deadline that would give up and inject the whole file instead.
+   * Deliberately not a hint about *what* to embed: the refresh a search performs
+   * decides that from the file's digest, and a second opinion here would be a
+   * second place for the two to disagree.
+   */
+  async warm(): Promise<void> {
+    await this.options.warm?.();
   }
 
   /** How many indexed files no longer match the stamp they were built from. */

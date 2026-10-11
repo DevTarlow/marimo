@@ -18,8 +18,15 @@
 import {FunctionTool} from '@google/adk';
 import {z} from 'zod';
 
+import type {MemoryIndexState} from '../memory/index-note.js';
+
 /** The corpora recall can search. The literals are the contract. */
-export const RECALL_SCOPES = ['folder', 'memory', 'conversation', 'media'] as const;
+export const RECALL_SCOPES = [
+  'folder',
+  'memory',
+  'conversation',
+  'media',
+] as const;
 export type RecallScope = (typeof RECALL_SCOPES)[number];
 
 /**
@@ -75,6 +82,27 @@ export interface RecallLookup {
   /** The corpora available right now — absent ones are not offered to the model. */
   scopes(): readonly RecallScope[];
   search(request: RecallRequest): Promise<RecallAnswer>;
+  /**
+   * Gets the embedding engine up, without embedding anything.
+   *
+   * Called when memory changes, and the reason is a deadline rather than a
+   * courtesy: loading the weights is seconds, retrieval inside a turn gets 1.5 of
+   * them, and a cold engine means the turn falls back to injecting the whole file.
+   * Warming at the moment memory is written means the next turn's refresh is
+   * embedding rather than loading.
+   *
+   * Optional because a store that only reads — the headless runner — has no
+   * reason to bring an engine up.
+   */
+  warm?(): Promise<void>;
+  /**
+   * Whether memory is indexed, and whether the index is behind the file.
+   *
+   * Asked after a write rather than before, so the answer is about the document
+   * the write produced. Optional for the same reason `warm` is: a caller with no
+   * memory corpus has nothing to report.
+   */
+  memoryState?(): Promise<MemoryIndexState>;
   /**
    * Drops conversations from the index, when one is deleted.
    *
@@ -202,9 +230,7 @@ function render(
   scopes: readonly RecallScope[],
 ): string {
   const where =
-    answer.searched.length > 0
-      ? ` in ${answer.searched.join(' and ')}`
-      : '';
+    answer.searched.length > 0 ? ` in ${answer.searched.join(' and ')}` : '';
   /*
    * The notes are built before the two ways out, because the empty one needs them
    * most. "Nothing found for X in the folder" on a question about the user, when
@@ -250,7 +276,9 @@ function render(
   }`;
   const header = `${count} for "${query}"${where}`;
   if (cut || shown < answer.hits.length) {
-    notes.push('the answer was cut at its size cap; narrow the question for the rest');
+    notes.push(
+      'the answer was cut at its size cap; narrow the question for the rest',
+    );
   }
   const suffix = notes.length > 0 ? `\n[${notes.join('; ')}]` : '';
   return `${header}\n\n${lines.join('\n\n')}${suffix}`;

@@ -110,11 +110,39 @@ turns them on. They cannot be used yet.
 Skills are read from a file, but nothing in the window writes them. You have to
 edit the file by hand.
 
-The model needs a graphics card. There is no fallback that runs it on the
-processor, and the app says so plainly when it cannot find a device.
-
 The download itself is checked against a checksum pinned inside the app. That
 catches a damaged or swapped file, but there is no signature chain behind it.
+
+## What your computer needs
+
+The model runs on your graphics card, and there is no fallback that runs it on
+the processor. The app measures what the card has free the first time it starts
+and picks a size for you.
+
+About 4 GB of free video memory runs the smaller size, which the app calls Low,
+with a 16K window of conversation. About 6 GB runs the larger one, High, with a
+32K window, or roughly twice as much conversation. Between those the smaller size
+runs with a shorter window. Below about 2 GB, or with no usable graphics device,
+the model cannot run at all and the app says so.
+
+You can force either size in Settings. The app warns you when the choice looks too
+big for the card, and lets you try it anyway.
+
+The rest it wants:
+
+- A 64-bit version of Linux, Windows or macOS. The Linux and Windows builds use
+  Vulkan, so the graphics driver needs to support it. macOS uses Metal.
+- Disk space. The first download is about 2.7 GB for the smaller size and about
+  4.5 GB for the larger one. Turning on search adds about 310 MB, or about
+  555 MB more if you want it to search pictures and sounds. Leave about 3 GB
+  free for the smaller size, or about 6 GB if you use the larger one with search.
+- The Windows and macOS installers are not built yet, so Linux is the only
+  platform with something you can run today.
+
+A couple of suggestions. Close games and video editors before you switch to the
+larger size, since they use the same video memory. Keep the app's data folder on
+a disk with a few gigabytes free, because the model and the search index both
+live there.
 
 ## For developers
 

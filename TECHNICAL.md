@@ -127,6 +127,16 @@ decided on is one a person can disagree with. The switch beside it is `auto`, th
 small one or the large one; an explicit choice is honoured and warned about rather
 than overruled.
 
+**The tier is chosen from free video memory, and the arithmetic is an estimate.**
+One tier wants its weights, a quantized cache at 16 KiB per token, a 384 MB compute
+buffer and a 384 MB safety margin. At its full window that comes to about 3.6 GB of
+free video memory for Low at 16K and about 5.4 GB for High at 32K. So the planner
+takes High at 32K on a card reporting 6 GB, Low at 16K on one reporting 4 GB, Low
+at the 8K floor on one reporting 3.5 GB, and refuses below about 2 GB or with no
+usable device. Those are judgements rather than measurements, which is why the
+override exists and why the reason string on the Model card shows the number the
+decision was made on.
+
 **Nothing is bundled, and the first run downloads.** A packaged app carries no
 weights and no engine, because an installer with a gigabyte inside it is a
 gigabyte in every release and every rebuild. The first run downloads a 32 MB

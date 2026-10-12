@@ -70,8 +70,8 @@ describe('memory tools', () => {
 
   it('says the memory is empty before anything is written', async () => {
     const output = await run(createReadMemoryTool({memory}), {});
-    expect(output).toContain('memory.md is empty');
-    expect(output).toContain(memory.file);
+    expect(output).toContain('Memory is empty');
+    expect(output).toContain(memory.location);
   });
 
   it('reads back what was written', async () => {
@@ -198,7 +198,7 @@ describe('memory tools', () => {
     const output = await run(createPruneMemoryTool({memory}), {
       content: 'x'.repeat(70 * 1024),
     });
-    expect(output).toContain('Could not prune memory.md');
+    expect(output).toContain('Could not prune memory');
     expect(output).toContain('cap');
   });
 
@@ -206,11 +206,11 @@ describe('memory tools', () => {
     // A directory where the memory file belongs cannot be read or written.
     await mkdir(memory.file, {recursive: true});
     const readOutput = await run(createReadMemoryTool({memory}), {});
-    expect(readOutput).toContain('Could not read memory.md');
+    expect(readOutput).toContain('Could not read memory');
     const writeOutput = await run(createUpdateMemoryTool({memory}), {
       content: 'x',
     });
-    expect(writeOutput).toContain('Could not update memory.md');
+    expect(writeOutput).toContain('Could not update memory');
   });
 
   /*

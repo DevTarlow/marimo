@@ -498,6 +498,9 @@ export class AgentRuntime {
       this.options.paths.defaultWorkspace;
     const store = new MemoryStore({
       workspaceRoot: workspace,
+      // The same directory the host's store uses, so the bar and the prompt are
+      // measuring the same two files rather than one of them.
+      personMemoryRoot: this.options.paths.personMemoryDir,
       softLimitBytes: settings.memorySoftLimitBytes,
       ...(profile !== undefined ? {profileId: profile.id} : {}),
     });
@@ -1163,6 +1166,13 @@ export class AgentRuntime {
     const services = (await this.options.services?.(profileId)) ?? {};
     const host = new AgentHost({
       sessionsDir: this.options.paths.sessions,
+      /*
+       * Where the half of memory that is about the *person* lives. Under user
+       * data rather than in a folder, because that is what makes it survive
+       * switching projects — and it is passed on every host this process builds,
+       * including the headless runner's, so both resolve one layout.
+       */
+      personMemoryDir: this.options.paths.personMemoryDir,
       // A placeholder config: `host()` resolves the real one and calls
       // `updateConfig` before any turn runs. Constructing with the settings
       // shape here would mean reading them twice and risking the two reads

@@ -307,7 +307,7 @@ describe('AgentHost', () => {
     // The operating protocol and the memory block ride in the instruction, not
     // in the stored prompt, so even an old saved prompt carries both.
     expect(systemText).toContain('# Operating protocol');
-    expect(systemText).toContain('# Long-term memory (memory.md)');
+    expect(systemText).toContain('# Long-term memory');
 
     const tools = request?.body['tools'] as Array<{
       function: {name: string; parameters: unknown};
@@ -340,7 +340,7 @@ describe('AgentHost', () => {
 
     await collect(host.run(session, 'first'));
     expect(String(fake?.requests[0]?.messages[0]?.['content'])).toContain(
-      '(no memory yet',
+      '(nothing remembered yet',
     );
 
     // Anything that writes memory — here the file itself — shows up on the very

@@ -12,13 +12,16 @@ export {
   applyUpdateWithReport,
   resolveAgentDataDir,
   resolveMemoryFile,
+  resolvePersonMemoryFile,
   splitMemory,
   toBullets,
 } from './memory-store.js';
 export type {
   MemoryPruneRequest,
+  MemoryScope,
   MemoryStoreOptions,
   MemoryUpdate,
+  PruneReport,
   SupersedeReport,
   UpdateReport,
 } from './memory-store.js';
@@ -40,8 +43,10 @@ export type {RefusedFact, ReviewEvent, ReviewRequest} from './review.js';
 export {
   CANONICAL_SECTIONS,
   CANONICAL_SECTION_NAMES,
+  describeScope,
   isAlwaysInjected,
   renderSectionGuide,
+  scopeForSection,
 } from './sections.js';
 export type {CanonicalSection} from './sections.js';
 

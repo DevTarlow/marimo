@@ -22,6 +22,7 @@ import {
   applyUpdateWithReport,
   resolveAgentDataDir,
   resolveMemoryFile,
+  resolvePersonMemoryFile,
   splitMemory,
 } from './memory-store.js';
 import {MEMORY_SOFT_LIMIT_BYTES} from './size.js';
@@ -51,6 +52,38 @@ describe('memory paths', () => {
     );
     expect(resolveAgentDataDir('/work/project', '')).toBe(
       join('/work/project', AGENT_DATA_DIR, DEFAULT_PROFILE_ID),
+    );
+  });
+
+  /*
+   * The person half lives under user data rather than inside the folder, which is
+   * the whole reason it survives switching projects — and it keeps the same file
+   * name as the workspace one, so a `.bak` beside either means the same thing.
+   */
+  it('keeps the person half under user data, one folder per profile', () => {
+    expect(resolvePersonMemoryFile('/home/u/.config/Marimo Agent/memory')).toBe(
+      join(
+        '/home/u/.config/Marimo Agent/memory',
+        DEFAULT_PROFILE_ID,
+        'memory.md',
+      ),
+    );
+    expect(
+      resolvePersonMemoryFile('/home/u/.config/Marimo Agent/memory', 'research'),
+    ).toBe(
+      join('/home/u/.config/Marimo Agent/memory', 'research', 'memory.md'),
+    );
+  });
+
+  it('refuses a profile id that would escape the person folder', () => {
+    expect(
+      resolvePersonMemoryFile('/home/u/.config/Marimo Agent/memory', '../..'),
+    ).toBe(
+      join(
+        '/home/u/.config/Marimo Agent/memory',
+        DEFAULT_PROFILE_ID,
+        'memory.md',
+      ),
     );
   });
 });
@@ -271,6 +304,339 @@ describe('splitMemory', () => {
   });
 });
 
+/*
+ * The two-file half of memory.
+ *
+ * What is being pinned here is not the file layout — it is the behaviour a
+ * person notices. A fact about them is there in every project. A repo rule is
+ * there only in that repo. And an upgrade must not lose either, including if it
+ * is interrupted halfway, which is the state nobody tests and everybody ships.
+ */
+describe('MemoryStore, split by layer', () => {
+  let workDir: string;
+  let personDir: string;
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(process.cwd(), '.marimo-memory-'));
+    personDir = join(workDir, 'userdata', 'memory');
+  });
+
+  afterEach(async () => {
+    await rm(workDir, {recursive: true, force: true});
+  });
+
+  function store(profileId?: string): MemoryStore {
+    return new MemoryStore({
+      workspaceRoot: workDir,
+      personMemoryRoot: personDir,
+      ...(profileId === undefined ? {} : {profileId}),
+    });
+  }
+
+  it('writes a person-level layer into the person file', async () => {
+    const memory = store();
+    await memory.update({section: 'About the user', content: 'Has a dog'});
+
+    expect(await readFile(memory.personFile ?? '', 'utf8')).toContain(
+      '- Has a dog',
+    );
+    // And not into the workspace file, which is the whole point: the fact has to
+    // survive the folder changing.
+    await expect(readFile(memory.file, 'utf8')).rejects.toThrow();
+  });
+
+  it('writes a workspace-level layer into the workspace file', async () => {
+    const memory = store();
+    await memory.update({
+      section: 'Environment and conventions',
+      content: 'Uses pnpm',
+    });
+
+    expect(await readFile(memory.file, 'utf8')).toContain('- Uses pnpm');
+    await expect(readFile(memory.personFile ?? '', 'utf8')).rejects.toThrow();
+  });
+
+  it('keeps a fact about the person across a change of folder', async () => {
+    const first = store();
+    await first.update({section: 'About the user', content: 'Has a dog'});
+    await first.update({section: 'Project pointers', content: 'State in TODO.md'});
+
+    // A different project: new workspace root, same person directory.
+    const otherRoot = await mkdtemp(join(process.cwd(), '.marimo-project-'));
+    try {
+      const second = new MemoryStore({
+        workspaceRoot: otherRoot,
+        personMemoryRoot: personDir,
+      });
+      const text = await second.read();
+      expect(text).toContain('- Has a dog');
+      expect(text).not.toContain('State in TODO.md');
+    } finally {
+      await rm(otherRoot, {recursive: true, force: true});
+    }
+  });
+
+  it('reads the person half before the project half', async () => {
+    const memory = store();
+    await memory.update({section: 'Project pointers', content: 'State in TODO.md'});
+    await memory.update({section: 'About the user', content: 'Has a dog'});
+
+    const text = await memory.read();
+    expect(text.indexOf('Has a dog')).toBeLessThan(
+      text.indexOf('State in TODO.md'),
+    );
+  });
+
+  it('lets an explicit scope place a heading the app never named', async () => {
+    const memory = store();
+    await memory.update({
+      section: 'Recipes I like',
+      content: 'Miso soup',
+      scope: 'person',
+    });
+
+    expect(await readFile(memory.personFile ?? '', 'utf8')).toContain(
+      '- Miso soup',
+    );
+  });
+
+  it('puts a heading the app never named in the workspace by default', async () => {
+    const memory = store();
+    await memory.update({section: 'Recipes I like', content: 'Miso soup'});
+
+    expect(await readFile(memory.file, 'utf8')).toContain('- Miso soup');
+  });
+
+  it('gives each profile its own person file', async () => {
+    const first = store('default');
+    const second = store('research');
+    await first.update({section: 'About the user', content: 'Has a dog'});
+
+    expect(await second.read()).not.toContain('Has a dog');
+    expect(second.personFile).not.toBe(first.personFile);
+  });
+
+  it('shares one person file between two projects of the same profile', async () => {
+    const otherRoot = await mkdtemp(join(process.cwd(), '.marimo-project-'));
+    try {
+      const here = store();
+      const there = new MemoryStore({
+        workspaceRoot: otherRoot,
+        personMemoryRoot: personDir,
+      });
+      await here.update({section: 'Preferences and tone', content: 'No emoji'});
+
+      expect(await there.read()).toContain('- No emoji');
+    } finally {
+      await rm(otherRoot, {recursive: true, force: true});
+    }
+  });
+
+  it('counts both files in the size it reports', async () => {
+    const memory = store();
+    await memory.update({section: 'About the user', content: 'Has a dog'});
+    await memory.update({section: 'Project pointers', content: 'State in TODO.md'});
+
+    const merged = await memory.read();
+    expect(await memory.bytes()).toBe(Buffer.byteLength(merged, 'utf8'));
+    expect(merged).toContain('Has a dog');
+    expect(merged).toContain('State in TODO.md');
+  });
+
+  it('names both files when it says where memory lives', async () => {
+    const memory = store();
+    expect(memory.location).toContain(memory.personFile ?? '');
+    expect(memory.location).toContain(memory.file);
+  });
+
+  describe('adoption of a file written before the split', () => {
+    /** A workspace file in the old one-file layout. */
+    async function seedOldLayout(text: string): Promise<void> {
+      const at = join(
+        workDir,
+        AGENT_DATA_DIR,
+        DEFAULT_PROFILE_ID,
+        'memory.md',
+      );
+      await mkdir(join(workDir, AGENT_DATA_DIR, DEFAULT_PROFILE_ID), {
+        recursive: true,
+      });
+      await writeFile(at, text, 'utf8');
+    }
+
+    it('moves person-level sections out on the first read', async () => {
+      await seedOldLayout(
+        '## About the user\n- Has a dog\n\n' +
+          '## Environment and conventions\n- Uses pnpm\n\n' +
+          '## Boundaries\n- Never force-push\n',
+      );
+      const memory = store();
+
+      const text = await memory.read();
+
+      expect(text).toContain('- Has a dog');
+      expect(text).toContain('- Uses pnpm');
+      expect(text).toContain('- Never force-push');
+      const person = await readFile(memory.personFile ?? '', 'utf8');
+      expect(person).toContain('- Has a dog');
+      expect(person).toContain('- Never force-push');
+      expect(person).not.toContain('- Uses pnpm');
+      const workspace = await readFile(memory.file, 'utf8');
+      expect(workspace).toContain('- Uses pnpm');
+      expect(workspace).not.toContain('- Has a dog');
+    });
+
+    it('is idempotent, and does nothing at all the second time', async () => {
+      await seedOldLayout('## About the user\n- Has a dog\n');
+      const memory = store();
+      await memory.read();
+
+      const afterFirst = await readFile(memory.personFile ?? '', 'utf8');
+      await memory.read();
+      expect(await readFile(memory.personFile ?? '', 'utf8')).toBe(afterFirst);
+      expect(await memory.read()).toBe('## About the user\n- Has a dog\n');
+    });
+
+    /*
+     * The crash nobody tests: the person file was written and the workspace file
+     * was not rewritten. The fact is then legitimately in both, and the prompt has
+     * to show it once — a doubled sentence reads as emphasis, and the model has no
+     * way to tell which copy is real.
+     *
+     * The duplication is set up where adoption cannot clean it: the workspace
+     * copy is under a heading the app never named, so it stays in the workspace
+     * file and the merged read is what has to collapse it.
+     */
+    it('shows a fact once when it is in both files', async () => {
+      await seedOldLayout('## Recipes I like\n- Has a dog\n');
+      await mkdir(join(personDir, DEFAULT_PROFILE_ID), {recursive: true});
+      await writeFile(
+        join(personDir, DEFAULT_PROFILE_ID, 'memory.md'),
+        '## About the user\n- Has a dog\n',
+        'utf8',
+      );
+
+      const text = await store().read();
+
+      expect(text.match(/Has a dog/gu)).toHaveLength(1);
+      // And the heading that held it is still there, because a heading is
+      // structure rather than a fact and dropping one would edit the user's file.
+      expect(text).toContain('## Recipes I like');
+      expect(text).toContain('## About the user');
+    });
+
+    it('leaves a heading the app never named in the workspace file', async () => {
+      await seedOldLayout('## Recipes I like\n- Miso soup\n');
+      const memory = store();
+
+      await memory.read();
+
+      expect(await readFile(memory.file, 'utf8')).toContain('- Miso soup');
+      await expect(readFile(memory.personFile ?? '', 'utf8')).rejects.toThrow();
+    });
+
+    it('writes nothing when there is nothing to adopt', async () => {
+      await seedOldLayout('## Project pointers\n- State in TODO.md\n');
+      const memory = store();
+      await memory.read();
+      // No person file at all: the steady state costs no write.
+      await expect(readFile(memory.personFile ?? '', 'utf8')).rejects.toThrow();
+    });
+
+    it('merges into a person file that already has the layer', async () => {
+      await mkdir(join(personDir, DEFAULT_PROFILE_ID), {recursive: true});
+      await writeFile(
+        join(personDir, DEFAULT_PROFILE_ID, 'memory.md'),
+        '## About the user\n- Lives in Berlin\n',
+        'utf8',
+      );
+      await seedOldLayout('## About the user\n- Has a dog\n');
+
+      const text = await store().read();
+
+      expect(text).toContain('- Lives in Berlin');
+      expect(text).toContain('- Has a dog');
+    });
+  });
+
+  describe('prune across two files', () => {
+    it('routes each half of the document to its own file', async () => {
+      const memory = store();
+      await memory.update({section: 'About the user', content: 'Has a dog'});
+      await memory.update({section: 'Project pointers', content: 'old pointer'});
+
+      const report = await memory.prune({
+        content:
+          '## About the user\n- Has a dog and a cat\n\n' +
+          '## Project pointers\n- State in docs/STATE.md\n',
+      });
+
+      expect(report.personUntouched).toBe(false);
+      const person = await readFile(memory.personFile ?? '', 'utf8');
+      expect(person).toContain('Has a dog and a cat');
+      expect(person).not.toContain('- old pointer');
+      const workspace = await readFile(memory.file, 'utf8');
+      expect(workspace).toContain('State in docs/STATE.md');
+      expect(workspace).not.toContain('Has a dog and a cat');
+    });
+
+    /*
+     * The failure this guard exists for: a rewrite that only speaks for the
+     * project would otherwise delete everything the agent knows about the
+     * person, and nothing could reconstruct it.
+     */
+    it('refuses to empty the person file for a document that never mentions it', async () => {
+      const memory = store();
+      await memory.update({section: 'About the user', content: 'Has a dog'});
+      await memory.update({section: 'Project pointers', content: 'old pointer'});
+
+      const report = await memory.prune({
+        content: '## Project pointers\n- State in docs/STATE.md\n',
+      });
+
+      expect(report.personUntouched).toBe(true);
+      expect(await readFile(memory.personFile ?? '', 'utf8')).toContain(
+        '- Has a dog',
+      );
+      expect(await memory.read()).toContain('- Has a dog');
+    });
+
+    /*
+     * And the way to say it on purpose: naming the layer with nothing under it.
+     * A guard with no escape hatch would be a layer that could never be cleared.
+     */
+    it('lets a prune clear a person layer by naming it empty', async () => {
+      const memory = store();
+      await memory.update({section: 'About the user', content: 'Has a dog'});
+
+      const report = await memory.prune({
+        content: '## About the user\n\n## Notes\n- nothing personal yet\n',
+      });
+
+      expect(report.personUntouched).toBe(false);
+      expect(await memory.read()).not.toContain('- Has a dog');
+    });
+
+    it('keeps one backup beside each file it rewrote', async () => {
+      const memory = store();
+      await memory.update({section: 'About the user', content: 'Has a dog'});
+      await memory.update({section: 'Project pointers', content: 'old pointer'});
+
+      await memory.prune({
+        content:
+          '## About the user\n- Has a cat\n\n## Project pointers\n- new pointer\n',
+      });
+
+      expect(
+        await readFile(`${memory.personFile ?? ''}.bak`, 'utf8'),
+      ).toContain('- Has a dog');
+      expect(await readFile(`${memory.file}.bak`, 'utf8')).toContain(
+        '- old pointer',
+      );
+    });
+  });
+});
+
 describe('MemoryStore', () => {
   let workDir: string;
 
@@ -351,7 +717,7 @@ describe('MemoryStore', () => {
     });
     await writeFile(store.file, 'x'.repeat(MAX_PROMPT_CHARS + 100), 'utf8');
     const prompt = await store.readForPrompt();
-    expect(prompt).toContain('[memory.md truncated');
+    expect(prompt).toContain('[memory truncated');
     expect(prompt.length).toBeLessThan(MAX_PROMPT_CHARS + 200);
   });
 

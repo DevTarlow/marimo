@@ -165,6 +165,9 @@ export async function runDue(options: {
    */
   const recall = new RecallHost({
     userData: paths.userData,
+    // The same person-level memory the window reads: a search from a scheduled
+    // job has to find a fact about the user that the window wrote, and vice versa.
+    personMemoryDir: paths.personMemoryDir,
     // Assigned below: the settings live on the runtime, and the host reads them
     // per call rather than at construction, so this closure is never called early.
     readSettings: async () => await agent.settings(),

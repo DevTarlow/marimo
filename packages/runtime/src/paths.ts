@@ -50,6 +50,17 @@ export interface AppPaths {
    */
   memoryProposals: string;
   /**
+   * The half of memory that is about the person rather than the project.
+   *
+   * One folder per profile under here, each holding a `memory.md`, mirroring the
+   * workspace layout exactly — so a `.bak` beside either file means the same
+   * thing and a user who has learned to read one can read the other. Under user
+   * data rather than inside a folder, which is the whole point: a fact about the
+   * person has to outlive whichever project happened to be open when they said
+   * it. The workspace half still travels with the folder.
+   */
+  personMemoryDir: string;
+  /**
    * Where a running app says so.
    *
    * The headless runner reads it to answer one question: is the app already
@@ -90,6 +101,7 @@ export function resolveAppPaths(userData: string): AppPaths {
     workspaces: join(userData, 'workspaces.json'),
     jobs: join(userData, 'jobs.json'),
     memoryProposals: join(userData, 'memory-proposals.json'),
+    personMemoryDir: join(userData, 'memory'),
     appLock: join(userData, 'app.lock'),
     skills: join(userData, 'skills.json'),
     defaultWorkspace: homedir(),

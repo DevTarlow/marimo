@@ -15,10 +15,21 @@ describe('resolveAppPaths', () => {
       paths.profiles,
       paths.jobs,
       paths.skills,
+      paths.personMemoryDir,
     ]) {
       expect(isAbsolute(value)).toBe(true);
       expect(relative(paths.userData, value).startsWith('..')).toBe(false);
     }
+  });
+
+  /*
+   * The person half of memory lives under user data rather than under a
+   * workspace, and that is the point of the split: it has to still be there when
+   * the user points the app at another folder. Asserting the name keeps a later
+   * tidy-up from folding it back in beside `jobs.json`.
+   */
+  it('puts the person-level memory under user data, not in a folder', () => {
+    expect(paths.personMemoryDir).toBe(join('/data/marimo-agent', 'memory'));
   });
 
   it('resolves from the argument rather than from the environment', () => {

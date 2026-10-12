@@ -82,9 +82,10 @@ export function createReadMemoryTool(context: MemoryToolContext) {
   return new FunctionTool({
     name: 'read_memory',
     description:
-      "Return the current contents of memory.md, the agent's long-term memory " +
-      'for this workspace. The same contents are already included in your ' +
-      'system prompt, so this is only for re-checking your own recent writes.',
+      "Return the current contents of the agent's long-term memory — the facts " +
+      'about this person and the facts about this workspace, together. The same ' +
+      'contents are already included in your system prompt, so this is only for ' +
+      're-checking your own recent writes.',
     parameters: z.object({}),
     execute: async () => {
       try {
@@ -99,11 +100,11 @@ export function createReadMemoryTool(context: MemoryToolContext) {
         );
         const suffix = sizeWarning ? `\n\n${sizeWarning}` : '';
         if (text.trim().length === 0) {
-          return `memory.md is empty (${context.memory.file}). Use update_memory to record durable facts.`;
+          return `Memory is empty (${context.memory.location}). Use update_memory to record durable facts.`;
         }
-        return `${context.memory.file} (${String(bytes)} bytes)\n\n${text}${suffix}`;
+        return `${context.memory.location} (${String(bytes)} bytes)\n\n${text}${suffix}`;
       } catch (error) {
-        return `Could not read memory.md: ${describeError(error)}`;
+        return `Could not read memory: ${describeError(error)}`;
       }
     },
   });
@@ -113,13 +114,13 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
   return new FunctionTool({
     name: 'update_memory',
     description:
-      "Add, correct or replace a fact in memory.md, the agent's long-term " +
-      'memory for this workspace. Use it for durable things a future session ' +
-      'should know: user preferences, project conventions, environment quirks, ' +
-      'decisions. When the user corrects something you already remembered, pass ' +
-      'the old bullet as "replaces" so the wrong version does not stay behind. ' +
-      'Never store secrets, credentials, or transient output. Duplicate facts ' +
-      'are dropped rather than repeated.',
+      "Add, correct or replace a fact in long-term memory. Use it for durable " +
+      'things a future session should know: who the user is, how they want to be ' +
+      'talked to, what they have asked you never to do — and, separately, this ' +
+      "project's conventions, paths and quirks. When the user corrects something " +
+      'you already remembered, pass the old bullet as "replaces" so the wrong ' +
+      'version does not stay behind. Never store secrets, credentials, or ' +
+      'transient output. Duplicate facts are dropped rather than repeated.',
     parameters: z.object({
       content: z
         .string()
@@ -131,8 +132,19 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
         .string()
         .optional()
         .describe(
-          'Layer to write into, e.g. "Preferences and tone", "Environment and ' +
-            'conventions", "Project pointers", "Boundaries". Defaults to "Notes".',
+          'Layer to write into, e.g. "About the user", "Preferences and tone", ' +
+            '"Environment and conventions", "Project pointers", "Boundaries". ' +
+            'Defaults to "Notes".',
+        ),
+      scope: z
+        .enum(['person', 'workspace'])
+        .optional()
+        .describe(
+          'Which memory this belongs in, for a layer the list does not name. ' +
+            '"person" is true everywhere the user goes (who they are, how they ' +
+            'want to be talked to, what they forbid); "workspace" is true only ' +
+            'inside the folder you are working in. Leave it out to let the ' +
+            'section decide — a layer the app does not know goes to the workspace.',
         ),
       mode: z
         .enum(['append', 'replace'])
@@ -150,17 +162,18 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
             'never sit next to each other.',
         ),
     }),
-    execute: async ({content, section, mode, replaces}) => {
+    execute: async ({content, section, scope, mode, replaces}) => {
       let report: Awaited<ReturnType<MemoryStore['update']>>;
       try {
         report = await context.memory.update({
           content,
           ...(section !== undefined ? {section} : {}),
+          ...(scope !== undefined ? {scope} : {}),
           ...(mode !== undefined ? {mode} : {}),
           ...(replaces !== undefined ? {replaces} : {}),
         });
       } catch (error) {
-        return `Could not update memory.md: ${describeError(error)}`;
+        return `Could not update memory: ${describeError(error)}`;
       }
       const bytes = byteLength(report.content);
       const size = `${bytes} bytes`;
@@ -173,20 +186,20 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
       let outcome: string;
       switch (report.supersede.outcome) {
         case 'removed':
-          outcome = `Updated ${context.memory.file} (now ${size}). Replaced "${report.supersede.removed}". The new contents are in your prompt on the next request.`;
+          outcome = `Updated memory (now ${size}). Replaced "${report.supersede.removed}". The new contents are in your prompt on the next request.`;
           break;
         case 'absent':
-          outcome = `Updated ${context.memory.file} (now ${size}), but nothing in "${
+          outcome = `Updated memory (now ${size}), but nothing in "${
             (section ?? 'Notes').trim() || 'Notes'
           }" matched "${replaces}" so no old bullet was removed. The fact you were correcting may still be there under other words; check read_memory and retry if so.`;
           break;
         case 'ambiguous':
-          outcome = `Updated ${context.memory.file} (now ${size}), but "${replaces}" matched ${String(
+          outcome = `Updated memory (now ${size}), but "${replaces}" matched ${String(
             report.supersede.matches ?? 0,
           )} bullets, so none was removed. Pass more of the bullet you mean, or use mode "replace" to rewrite the section.`;
           break;
         default:
-          outcome = `Updated ${context.memory.file} (now ${size}). The new contents are in your prompt on the next request.`;
+          outcome = `Updated memory (now ${size}). The new contents are in your prompt on the next request.`;
       }
       // A write is the moment the file got bigger, so the size advice lands
       // here as well as on a read: a run that never calls read_memory still
@@ -212,16 +225,18 @@ export function createPruneMemoryTool(context: MemoryToolContext) {
   return new FunctionTool({
     name: 'prune_memory',
     description:
-      'Replace memory.md with a deduplicated, summarised rewrite: drop what is ' +
+      'Replace memory with a deduplicated, summarised rewrite: drop what is ' +
       'outdated or no longer true, merge repeats, and keep everything that still ' +
-      'matters. The previous contents are kept as memory.md.bak. Use this when ' +
-      'memory has grown noisy, repetitive, or contradictory.',
+      'matters. Send the *whole* document — every layer you mean to keep, ' +
+      'including the ones about the person. A layer you leave out is kept only if ' +
+      'it is a person-level layer, and you are told when that happened. The ' +
+      'previous contents are kept as memory.md.bak.',
     parameters: z.object({
       content: z
         .string()
         .min(1)
         .describe(
-          'The complete replacement document, in the same markdown shape as the current memory.md.',
+          'The complete replacement document, in the same markdown shape as the current memory.',
         ),
       reason: z
         .string()
@@ -233,17 +248,27 @@ export function createPruneMemoryTool(context: MemoryToolContext) {
       try {
         before = await context.memory.read();
       } catch (error) {
-        return `Could not read memory.md before pruning: ${describeError(error)}`;
+        return `Could not read memory before pruning: ${describeError(error)}`;
       }
+      let report: Awaited<ReturnType<MemoryStore['prune']>>;
       try {
-        await context.memory.prune({
+        report = await context.memory.prune({
           content,
           ...(reason !== undefined ? {reason} : {}),
         });
       } catch (error) {
-        return `Could not prune memory.md: ${describeError(error)}`;
+        return `Could not prune memory: ${describeError(error)}`;
       }
       const suffix = reason ? ` Reason: ${reason}` : '';
+      /*
+       * The one thing a prune can get wrong now that memory is two files. The
+       * model cannot see the files, so "you named no facts about the person" is
+       * the only way it can learn it sent half a document — and the person-level
+       * half is the half nothing else can reconstruct.
+       */
+      const kept = report.personUntouched
+        ? '\n\nThe rewrite named no person-level layer (About the user, Preferences and tone, Boundaries), so that half of memory was left exactly as it was. Include those sections in the document if you meant to rewrite them too.'
+        : '';
       /*
        * A prune rewrites every bullet, so the index is behind by definition and
        * the note is the same one a write gets. The warm matters more here than
@@ -251,9 +276,9 @@ export function createPruneMemoryTool(context: MemoryToolContext) {
        * that is the largest batch this app ever sends inside a turn's deadline.
        */
       warmRecall(context.recall);
-      const indexMessage = await indexNote(context, bulletCount(content));
+      const indexMessage = await indexNote(context, bulletCount(report.content));
       const tail = indexMessage.length > 0 ? `\n\n${indexMessage}` : '';
-      return `Pruned ${context.memory.file} (${byteLength(before)} → ${byteLength(content)} bytes). Previous contents kept as memory.md.bak.${suffix}${tail}`;
+      return `Pruned memory (${byteLength(before)} → ${byteLength(report.content)} bytes). Previous contents kept as memory.md.bak.${suffix}${kept}${tail}`;
     },
   });
 }

@@ -16,7 +16,9 @@ import {
 import {
   CANONICAL_SECTIONS,
   CANONICAL_SECTION_NAMES,
+  describeScope,
   renderSectionGuide,
+  scopeForSection,
 } from './sections.js';
 import {memorySkill} from '../skills/memory-skill.js';
 
@@ -56,11 +58,53 @@ describe('the section vocabulary', () => {
     expect(CANONICAL_SECTION_NAMES).toContain(DEFAULT_SECTION);
   });
 
-  it('renders each name with its description', () => {
+  it('renders each name with its description and its scope', () => {
     const guide = renderSectionGuide();
     for (const section of CANONICAL_SECTIONS) {
-      expect(guide).toContain(`- ${section.name}: ${section.description}`);
+      expect(guide).toContain(
+        `- ${section.name} (${describeScope(section.scope)}): ${section.description}`,
+      );
     }
+  });
+
+  /*
+   * The scope decides which of the two memory files a fact is written into, and
+   * it is the one property of a section that is invisible in the prompt unless
+   * the renderer puts it there. A section whose scope silently became
+   * `workspace` would be a fact about the person remembered only while one
+   * folder is open — which is the failure the split exists to fix.
+   */
+  it("puts the person's layers in the person file and the project's in the folder", () => {
+    expect(scopeForSection('About the user')).toBe('person');
+    expect(scopeForSection('Preferences and tone')).toBe('person');
+    expect(scopeForSection('Boundaries')).toBe('person');
+    expect(scopeForSection('Environment and conventions')).toBe('workspace');
+    expect(scopeForSection('Project pointers')).toBe('workspace');
+    expect(scopeForSection('Notes')).toBe('workspace');
+  });
+
+  it('matches a section name the way the store matches a heading', () => {
+    expect(scopeForSection('  preferences   AND tone ')).toBe('person');
+  });
+
+  /*
+   * A heading the app never named stays in the workspace file, which is where it
+   * already is. The alternative — treating an unknown heading as person-level —
+   * would silently relocate a section the user typed by hand.
+   */
+  it('leaves a heading the app never named where it already is', () => {
+    expect(scopeForSection('Recipes I like')).toBe('workspace');
+  });
+
+  it('keeps an always-injected layer out of the always-only reading', () => {
+    // The two axes are independent: a project rule rides along whole *and* lives
+    // in the folder, and collapsing them would put one repo's conventions in
+    // every other repo's prompt.
+    const environment = CANONICAL_SECTIONS.find(
+      (section) => section.name === 'Environment and conventions',
+    );
+    expect(environment?.always).toBe(true);
+    expect(environment?.scope).toBe('workspace');
   });
 });
 

@@ -62,6 +62,15 @@ import {RepeatedToolCallPlugin} from './tool-loop-plugin.js';
 
 export interface AgentHostOptions {
   sessionsDir: string;
+  /**
+   * Where the person-level half of memory lives — one folder per profile.
+   *
+   * Absent means both halves share the workspace file, which is what this app did
+   * before they were split. The desktop app and the headless runner both pass the
+   * same resolved directory, so a scheduled job and the window remember the same
+   * person.
+   */
+  personMemoryDir?: string;
   config: AgentConfig;
   appName?: string;
   userId?: string;
@@ -314,10 +323,14 @@ export class AgentHost {
     this.appName = options.appName ?? AgentHost.APP_NAME;
     this.userId = options.userId ?? AgentHost.USER_ID;
     this.config = options.config;
-    // Memory follows both the folder and the agent profile: pointing the app at
-    // another project, or switching to another agent, must not carry facts over.
+    // Memory follows the folder and the agent profile, and now also splits by
+    // layer: pointing the app at another project must not carry this project's
+    // conventions over, while a fact about the person has to survive the move.
     this.memory = new MemoryStore({
       workspaceRoot: options.config.workspaceRoot,
+      ...(options.personMemoryDir !== undefined
+        ? {personMemoryRoot: options.personMemoryDir}
+        : {}),
       ...(options.config.profileId !== undefined
         ? {profileId: options.config.profileId}
         : {}),

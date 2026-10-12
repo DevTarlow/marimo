@@ -1,24 +1,39 @@
 /**
  * File-backed long-term memory.
  *
- * The agent's memory is one markdown file per agent profile, kept in an
- * app-owned folder *inside* the workspace so it travels with the project and a
- * second profile is a second folder rather than a second mechanism:
+ * The agent's memory is markdown, kept in two places, because the two kinds of
+ * fact a buddy holds age differently:
  *
- *   <workspaceRoot>/.marimo/<profileId>/memory.md
+ *   <personMemoryRoot>/<profileId>/memory.md   who the user is, how they want to
+ *                                              be talked to, what they forbid
+ *   <workspaceRoot>/.marimo/<profileId>/memory.md  this project, its paths, its
+ *                                              conventions, its pointers
+ *
+ * The split is deliberate and it is the point of the whole thing: a fact about
+ * the person is true in every conversation, while a repo rule is only true
+ * inside the repo. Kept in one file, whichever folder happened to be loaded when
+ * they mentioned their dog decided whether it was ever remembered again.
+ *
+ * `personMemoryRoot` is **optional**, and its absence is exactly the old
+ * behaviour — one workspace file. That is what a caller with no user-data
+ * directory gets (a test, a command that only reads conversations), and it is why
+ * the split could be added without rewriting every existing path.
  *
  * The format is deliberately plain: an optional `#` title, then `##` sections of
- * `-` bullets. A user can read and edit it by hand, and the merge logic below
- * works on lines rather than a parser, so nothing is lost to a round trip.
+ * `-` bullets. A user can read and edit either file by hand, and the merge logic
+ * below works on lines rather than a parser, so nothing is lost to a round trip.
+ * Which section belongs in which file is `scopeForSection` in `sections.ts`, and
+ * a heading the app never named stays where it already is.
  *
  * Writes go through one queue and land by `rename`, so an interrupted write
- * cannot leave a half-written memory behind. `prune` keeps the previous file as
+ * cannot leave a half-written memory behind. `prune` keeps each previous file as
  * `memory.md.bak` because it replaces the whole document.
  */
 import {randomUUID} from 'node:crypto';
 import {copyFile, mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 
+import {scopeForSection} from './sections.js';
 import {MEMORY_SOFT_LIMIT_BYTES} from './size.js';
 
 /** Folder, inside the workspace, that holds agent state. */
@@ -56,9 +71,18 @@ export class MemoryTooLargeError extends Error {
 }
 
 export interface MemoryStoreOptions {
-  /** Workspace the memory folder lives in; follows the user's workspace. */
+  /** Workspace the workspace-level memory lives in; follows the user's folder. */
   workspaceRoot: string;
   profileId?: string;
+  /**
+   * Where person-level memory lives — one folder per profile, under user data.
+   *
+   * Absent means the two layers share the workspace file, which is what the app
+   * did before they were split. Every caller that has a user-data directory
+   * passes it; a caller that does not (a test, a read-only command) keeps working
+   * rather than writing a second file somewhere nobody expects.
+   */
+  personMemoryRoot?: string;
   /** Overrides where the tools start suggesting a prune. */
   softLimitBytes?: number;
 }
@@ -69,6 +93,14 @@ export interface MemoryUpdate {
   content: string;
   /** `append` (default) adds bullets; `replace` rewrites the section. */
   mode?: 'append' | 'replace';
+  /**
+   * Which file the fact belongs in, when the section name does not say.
+   *
+   * Absent resolves through `scopeForSection`, which is right for every canonical
+   * layer and puts a heading the app never named in the workspace file — where it
+   * already is. Passed explicitly only for a new layer the model is inventing.
+   */
+  scope?: MemoryScope;
   /**
    * An existing bullet in that section, or a leading substring of one, to
    * remove before the new fact is added.
@@ -98,6 +130,7 @@ export interface SupersedeReport {
 
 /** What `update` wrote, and what it did with the bullet it was told to replace. */
 export interface UpdateReport {
+  /** The whole memory as it now stands, both files merged. */
   content: string;
   supersede: SupersedeReport;
 }
@@ -107,6 +140,23 @@ export interface MemoryPruneRequest {
   content: string;
   /** Why the prune happened, echoed back to the model. */
   reason?: string;
+}
+
+/** What a prune did, and the one thing it refused to do. */
+export interface PruneReport {
+  /** The whole memory as it now stands, both files merged. */
+  content: string;
+  /**
+   * Person-level memory was left alone because the rewrite did not speak for it.
+   *
+   * True when `personMemoryRoot` is set and the incoming document names no
+   * person-level canonical section at all. The alternative — treating "the model
+   * did not mention the person" as "the model wants the person deleted" — is a
+   * whole layer of memory lost to an omission, and the model cannot see the two
+   * files to know it omitted one. Reported so the tool can say so and the model
+   * can send a document that does speak for it.
+   */
+  personUntouched: boolean;
 }
 
 /** A profile id has to be one path segment, so it cannot escape the workspace. */
@@ -132,10 +182,36 @@ export function resolveMemoryFile(
   return join(resolveAgentDataDir(workspaceRoot, profileId), MEMORY_FILE_NAME);
 }
 
+/**
+ * Where person-level memory lives for one profile.
+ *
+ * A folder per profile under user data, with the same file name as the workspace
+ * one, so both are "memory.md" and a `.bak` beside either means the same thing.
+ * Under user data rather than in a folder because that is what makes it survive
+ * switching projects — the whole point of the split.
+ */
+export function resolvePersonMemoryFile(
+  personMemoryRoot: string,
+  profileId?: string,
+): string {
+  return join(personMemoryRoot, safeProfileId(profileId), MEMORY_FILE_NAME);
+}
+
 export class MemoryStore {
   private root: string;
   private profileId: string;
+  private readonly personRoot: string | undefined;
   private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * The one-time move of person-level sections out of the workspace file.
+   *
+   * Memoised as a promise rather than a boolean so two reads arriving before the
+   * first finishes wait for the same move instead of one of them reading the
+   * half-state. Resolved-and-forgotten on failure: a move that could not happen
+   * is retried on the next process, and the merged read de-duplicates in the
+   * meantime, so the transient copy is invisible rather than doubled.
+   */
+  private adoption: Promise<void> | undefined;
   /**
    * The size past which the tools warn.
    *
@@ -150,6 +226,7 @@ export class MemoryStore {
   constructor(options: MemoryStoreOptions) {
     this.root = options.workspaceRoot;
     this.profileId = safeProfileId(options.profileId);
+    this.personRoot = options.personMemoryRoot;
     if (options.softLimitBytes !== undefined) {
       this.softLimit = options.softLimitBytes;
     }
@@ -169,11 +246,12 @@ export class MemoryStore {
     return this.softLimit;
   }
 
-  /** How many bytes the file is, for a size readout that is not a read. */
+  /** How many bytes the whole memory is, for a size readout that is not a read. */
   async bytes(): Promise<number> {
     return Buffer.byteLength(await this.read(), 'utf8');
   }
 
+  /** The workspace-level file: this project's facts. */
   get file(): string {
     return join(
       resolveAgentDataDir(this.root, this.profileId),
@@ -181,33 +259,56 @@ export class MemoryStore {
     );
   }
 
+  /** The person-level file, when this store has a place for one. */
+  get personFile(): string | undefined {
+    return this.personRoot === undefined
+      ? undefined
+      : resolvePersonMemoryFile(this.personRoot, this.profileId);
+  }
+
+  /**
+   * Both files as one path-shaped phrase, for a result line the model reads.
+   *
+   * One string rather than two fields because every message that names memory
+   * wants the same thing — "where is this" — and a tool that had to decide
+   * whether to name one path or two would be a second place the split shows
+   * through.
+   */
+  get location(): string {
+    const person = this.personFile;
+    return person === undefined ? this.file : `${person} and ${this.file}`;
+  }
+
   /**
    * Re-points memory at another agent profile.
    *
    * Switching profile must switch the memory file, not just the prompt: an agent
    * that inherits the previous agent's remembered facts is not a different agent,
-   * and facts one profile was told are private would leak into another.
+   * and facts one profile was told are private would leak into another. Both
+   * files follow, because both are per-profile — the person file's path is
+   * derived from the id rather than stored.
    */
   setProfileId(profileId: string | undefined): void {
     this.profileId = safeProfileId(profileId);
   }
 
-  /** Raw contents, or `''` when the file does not exist yet. */
+  /**
+   * The whole memory, merged, or `''` when neither file exists yet.
+   *
+   * Person-level blocks first: the identity says their world is the point, and a
+   * rule about how to talk to them is read before the quirks of whichever repo
+   * happens to be open. Bullets that appear in both files are rendered once —
+   * see {@link dedupeBullets}.
+   */
   async read(): Promise<string> {
-    try {
-      return await readFile(this.file, 'utf8');
-    } catch (error) {
-      if (isNotFound(error)) {
-        return '';
-      }
-      throw error;
-    }
+    await this.ensureAdopted();
+    return await this.readMerged();
   }
 
   /**
    * The form injected into the system prompt. This never throws: an unreadable
-   * memory file must not break every turn, so the problem is reported to the
-   * model (and through it, the user) instead.
+   * memory must not break every turn, so the problem is reported to the model
+   * (and through it, the user) instead.
    */
   async readForPrompt(): Promise<string> {
     try {
@@ -220,7 +321,7 @@ export class MemoryStore {
       }
       return (
         `${text.slice(0, MAX_PROMPT_CHARS)}\n\n` +
-        `[memory.md truncated at ${MAX_PROMPT_CHARS} characters; ` +
+        `[memory truncated at ${MAX_PROMPT_CHARS} characters; ` +
         'use prune_memory to shrink it]'
       );
     } catch (error) {
@@ -228,36 +329,137 @@ export class MemoryStore {
     }
   }
 
-  /** Replaces the whole document. Callers should prefer `update`. */
+  /**
+   * Replaces the whole document, routing each section to the file it belongs in.
+   *
+   * Callers should prefer `update`. This is the blunt instrument `prune_memory`
+   * and the tests use, and it deliberately will not delete person-level memory
+   * that the incoming document does not mention — see {@link PruneReport}.
+   */
   async write(content: string): Promise<void> {
-    return await this.withLock(() => this.writeNow(content));
+    await this.ensureAdopted();
+    await this.withLock(() => this.writeDocument(content, {backup: false}));
   }
 
   /** Merges facts into the document, creating the section when needed. */
   async update(update: MemoryUpdate): Promise<UpdateReport> {
+    await this.ensureAdopted();
     return await this.withLock(async () => {
-      const current = await this.readOrEmpty();
+      const target = this.fileFor(update);
+      const current = await this.readFileAt(target);
       const report = applyUpdateWithReport(current, update);
-      await this.writeNow(report.content);
-      return report;
+      await this.writeFileAt(target, report.content);
+      /*
+       * The report answers with the *whole* memory rather than the file that was
+       * written, because every caller of it is asking a question about memory:
+       * how big it is, how many bullets the index now holds behind. A per-file
+       * answer to a whole-memory question is how a size warning comes to quote
+       * half the number.
+       */
+      return {content: await this.readMerged(), supersede: report.supersede};
     });
   }
 
-  /** Replaces the document, keeping the previous one as `memory.md.bak`. */
-  async prune(request: MemoryPruneRequest): Promise<string> {
+  /** Replaces the document, keeping each previous file as `memory.md.bak`. */
+  async prune(request: MemoryPruneRequest): Promise<PruneReport> {
+    await this.ensureAdopted();
     return await this.withLock(async () => {
-      const current = await this.readOrEmpty();
-      if (current.trim().length > 0) {
-        await copyFile(this.file, `${this.file}.bak`);
-      }
-      await this.writeNow(request.content);
-      return request.content;
+      const personUntouched = await this.writeDocument(request.content, {
+        backup: true,
+      });
+      return {content: await this.readMerged(), personUntouched};
     });
   }
 
-  private async readOrEmpty(): Promise<string> {
+  /**
+   * Writes one document across both files, by section scope.
+   *
+   * Each canonical section goes to its own file; the preamble and any heading the
+   * app never named go to the workspace file, which is where an unknown heading
+   * already is. The person file is rewritten only when the document contains at
+   * least one person-level canonical heading, and the boolean that comes back says
+   * whether that condition held — the caller turns it into a sentence so a missing
+   * layer is reported rather than silently kept.
+   *
+   * Writes the person file first. A crash between the two leaves the facts in both
+   * files rather than neither, and {@link dedupeBullets} makes that transient
+   * state invisible to the prompt.
+   */
+  private async writeDocument(
+    content: string,
+    options: {backup: boolean},
+  ): Promise<boolean> {
+    const blocks = splitMemory(content);
+    const personBlocks = blocks.filter(
+      (block) =>
+        block.heading !== undefined && scopeForSection(block.heading) === 'person',
+    );
+    const workspaceBlocks = blocks.filter(
+      (block) =>
+        !(block.heading !== undefined && scopeForSection(block.heading) === 'person'),
+    );
+
+    const person = this.personFile;
+    const personUntouched = person !== undefined && personBlocks.length === 0;
+
+    if (person !== undefined && !personUntouched) {
+      if (options.backup) {
+        await this.backup(person);
+      }
+      await this.writeFileAt(person, renderMemory(personBlocks));
+    }
+
+    await this.backupThenWrite(this.file, renderMemory(workspaceBlocks), options);
+
+    /*
+     * A document with person-level sections and no workspace-level ones is a
+     * prune that says "this is all about the person now", and the workspace file
+     * is emptied to say so. That is a real statement and not the omission this
+     * guard is for: the omission is the person file, which cannot be reconstructed
+     * from anywhere, while a project section can be written again from the
+     * conversation it came from.
+     */
+    return personUntouched;
+  }
+
+  private async backupThenWrite(
+    file: string,
+    content: string,
+    options: {backup: boolean},
+  ): Promise<void> {
+    if (options.backup) {
+      await this.backup(file);
+    }
+    await this.writeFileAt(file, content);
+  }
+
+  private async backup(file: string): Promise<void> {
+    const current = await this.readFileAt(file);
+    if (current.trim().length > 0) {
+      await copyFile(file, `${file}.bak`);
+    }
+  }
+
+  /** The merged document, with no adoption attempt of its own. */
+  private async readMerged(): Promise<string> {
+    const person = this.personFile;
+    const personText = person === undefined ? '' : await this.readFileAt(person);
+    const workspaceText = await this.readFileAt(this.file);
+    if (personText.trim().length === 0) {
+      return workspaceText;
+    }
+    if (workspaceText.trim().length === 0) {
+      return personText;
+    }
+    return renderMemory(
+      dedupeBullets([...splitMemory(personText), ...splitMemory(workspaceText)]),
+    );
+  }
+
+  /** Raw contents of one file, or `''` when it does not exist yet. */
+  private async readFileAt(file: string): Promise<string> {
     try {
-      return await this.read();
+      return await readFile(file, 'utf8');
     } catch (error) {
       if (isNotFound(error)) {
         return '';
@@ -266,15 +468,83 @@ export class MemoryStore {
     }
   }
 
-  private async writeNow(content: string): Promise<void> {
+  /** The file one update belongs in. */
+  private fileFor(update: MemoryUpdate): string {
+    const heading = (update.section ?? DEFAULT_SECTION).trim() || DEFAULT_SECTION;
+    const scope = update.scope ?? scopeForSection(heading);
+    const person = this.personFile;
+    return scope === 'person' && person !== undefined ? person : this.file;
+  }
+
+  /**
+   * Moves person-level sections out of the workspace file, once.
+   *
+   * Runs on the first read after an upgrade rather than in a migration, for the
+   * reason the folders had: a migration is a pure function of one document and
+   * this moves data between two. The trigger is the workspace file still holding
+   * a person-level canonical section, not the person file being absent — a crash
+   * between the two writes leaves it present *and* still holding them, and
+   * "destination exists" would then mean the copy is never cleaned up.
+   *
+   * Idempotent by construction: a workspace file with no person-level section
+   * does nothing and writes nothing, which is the steady state and therefore the
+   * cost on every later read.
+   *
+   * A write on a read path is the thing to be suspicious of, so: the two
+   * processes that can hold a memory store never hold it at once. The headless
+   * runner returns without doing anything while the app's lock file is held and
+   * takes that lock itself before it runs a job (`run-due.ts`), so this is a
+   * read-modify-write with no other writer to interleave with. Within a process
+   * the memo means it happens once, and the merge de-duplicates in the meantime.
+   */
+  private async ensureAdopted(): Promise<void> {
+    this.adoption ??= this.adoptOnce().catch(() => undefined);
+    return await this.adoption;
+  }
+
+  private async adoptOnce(): Promise<void> {
+    const person = this.personFile;
+    if (person === undefined) {
+      return;
+    }
+    let workspaceText: string;
+    try {
+      workspaceText = await this.readFileAt(this.file);
+    } catch {
+      // Unreadable: leave both files exactly where they are. The prompt reports
+      // the problem, and a move is not the way to fix it.
+      return;
+    }
+    const blocks = splitMemory(workspaceText);
+    const adopted = blocks.filter(
+      (block) =>
+        block.heading !== undefined && scopeForSection(block.heading) === 'person',
+    );
+    if (adopted.length === 0) {
+      return;
+    }
+
+    const personBlocks = splitMemory(await this.readFileAt(person));
+    for (const block of adopted) {
+      mergeBlock(personBlocks, block);
+    }
+
+    // Person first. The other order loses the facts outright if this throws
+    // between the two writes.
+    await this.writeFileAt(person, renderMemory(personBlocks));
+    const remaining = blocks.filter((block) => !adopted.includes(block));
+    await this.writeFileAt(this.file, renderMemory(remaining));
+  }
+
+  private async writeFileAt(file: string, content: string): Promise<void> {
     const bytes = Buffer.byteLength(content, 'utf8');
     if (bytes > MAX_MEMORY_BYTES) {
       throw new MemoryTooLargeError(bytes);
     }
-    await mkdir(dirname(this.file), {recursive: true});
-    const temporary = `${this.file}.${randomUUID()}.tmp`;
+    await mkdir(dirname(file), {recursive: true});
+    const temporary = `${file}.${randomUUID()}.tmp`;
     await writeFile(temporary, content, 'utf8');
-    await rename(temporary, this.file);
+    await rename(temporary, file);
   }
 
   /** Serializes every mutation, so two tool calls in one turn cannot interleave. */
@@ -288,6 +558,9 @@ export class MemoryStore {
     return await run;
   }
 }
+
+/** Which file a layer belongs in. */
+export type MemoryScope = 'person' | 'workspace';
 
 interface Block {
   /** A `##` heading, or the preamble before the first one. */
@@ -325,6 +598,73 @@ function renderMemory(blocks: Block[]): string {
     parts.push([`## ${block.heading}`, ...lines].join('\n'));
   }
   return parts.length === 0 ? '' : `${parts.join('\n\n')}\n`;
+}
+
+/**
+ * The first copy of every bullet, and every other line untouched.
+ *
+ * The one state this exists for is the instant between the adoption's two writes,
+ * where a person-level fact is legitimately in both files. Rendering it twice
+ * would put the same sentence in the prompt twice, which reads as emphasis rather
+ * than as a duplicate — and the model has no way to know which copy is real.
+ *
+ * Only bullet lines are compared. A heading, a blank line or a sentence someone
+ * typed by hand passes through, because those are structure rather than facts and
+ * dropping one silently would edit a file the user wrote.
+ */
+function dedupeBullets(blocks: readonly Block[]): Block[] {
+  const seen = new Set<string>();
+  return blocks.map((block) => ({
+    ...(block.heading === undefined ? {} : {heading: block.heading}),
+    lines: block.lines.filter((line) => {
+      const match = /^\s*[-*]\s+(.*)$/u.exec(line);
+      if (match === null) {
+        return true;
+      }
+      const key = collapse(match[1] ?? '');
+      if (key.length === 0 || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    }),
+  }));
+}
+
+/**
+ * Adds one block's lines into the matching section, creating it when absent.
+ *
+ * Used by the adoption, where the destination file already has some of the
+ * layer's bullets — the user may have written one there by hand, or a crash may
+ * have left the move half done. Matching is on the bullet's collapsed text, the
+ * same rule the append path uses, so a fact already present is not added twice.
+ */
+function mergeBlock(target: Block[], block: Block): void {
+  const lines = trimBlankEdges(block.lines);
+  const heading = block.heading;
+  if (heading === undefined) {
+    // A preamble has no section to merge into; it stays where it was.
+    return;
+  }
+  const existing = target.find(
+    (candidate) =>
+      candidate.heading !== undefined &&
+      comparable(candidate.heading) === comparable(heading),
+  );
+  if (existing === undefined) {
+    target.push({heading, lines});
+    return;
+  }
+  const seen = new Set(existing.lines.map(collapse));
+  const additions = lines.filter((line) => {
+    const key = collapse(line);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+  existing.lines = [...trimBlankEdges(existing.lines), ...additions];
 }
 
 /** Turns free text into bullet lines, one per non-empty input line. */

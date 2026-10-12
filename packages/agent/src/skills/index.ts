@@ -98,7 +98,7 @@ export interface ComposeInstructionOptions {
 }
 
 const EMPTY_MEMORY =
-  '(no memory yet — use update_memory to record facts worth keeping across sessions)';
+  '(nothing remembered yet — use update_memory to record facts worth keeping across sessions)';
 
 /** Renders skills as `## name` blocks, in the order given. */
 export function renderSkills(skills: readonly Skill[]): string {
@@ -145,7 +145,12 @@ export function composeInstruction({
     // set of facts from a system this profile was told to ignore, and an
     // instruction to use tools it may not have. It follows the memory skill,
     // which follows the memory tools.
-    memory ? `# Long-term memory (memory.md)\n\n${memoryBody}` : '',
+    //
+    // One heading for both files, because the model reads memory rather than a
+    // filesystem: which layer belongs in which file is the memory skill's job to
+    // say, and a second heading here would be the same fact in two places with
+    // two chances to disagree.
+    memory ? `# Long-term memory\n\n${memoryBody}` : '',
     // Last, and after everything else that has an opinion: this is the surface
     // the question was asked at, and it is the most specific instruction in the
     // prompt.

@@ -51,6 +51,14 @@ export interface RecallHostOptions {
   /** Where the user-data directory is, so the model and the pid file agree. */
   userData: string;
   /**
+   * Where the person-level half of memory lives.
+   *
+   * Declared here even though the caller spreads the whole `AppPaths` in, so the
+   * one field the index needs is a name this file can be checked against rather
+   * than a property that happens to be present.
+   */
+  personMemoryDir: string;
+  /**
    * The settings, read per call.
    *
    * A function rather than a value for the same reason the tier is one: the user
@@ -230,6 +238,14 @@ export class RecallHost {
     const memory = new MemoryStore({
       workspaceRoot: root ?? this.options.userData,
       profileId,
+      /*
+       * Both halves, because the index is over "what the agent remembers" rather
+       * than over one file — and `read()` is the merged view. Without this, a
+       * fact about the person would be indexed only when a folder happened to be
+       * loaded whose memory file still held it, which is the bug the split
+       * exists to fix.
+       */
+      personMemoryRoot: this.options.personMemoryDir,
     });
     const watermark = new ConversationWatermarkStore({
       file: join(indexDir, 'conversations.json'),

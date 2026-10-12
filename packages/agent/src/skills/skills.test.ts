@@ -48,7 +48,7 @@ describe('composeInstruction', () => {
 
   it('says so when there is no memory yet', () => {
     const text = composeInstruction({base: 'base', memory: '   '});
-    expect(text).toContain('(no memory yet');
+    expect(text).toContain('(nothing remembered yet');
   });
 
   it('leaves no placeholder behind', () => {
@@ -179,7 +179,7 @@ describe('composeInstruction', () => {
         tools: MEMORY_TOOLS,
       });
       expect(text).toContain('## memory');
-      expect(text).toContain('# Long-term memory (memory.md)');
+      expect(text).toContain('# Long-term memory');
       expect(text).toContain('- prefers pnpm');
     });
 
@@ -190,7 +190,7 @@ describe('composeInstruction', () => {
         tools: ['read_file', 'list_dir'],
       });
       expect(text).not.toContain('## memory');
-      expect(text).not.toContain('# Long-term memory (memory.md)');
+      expect(text).not.toContain('# Long-term memory');
       // The fact itself must not leak in either: an agent that was not given
       // memory is not handed facts from a system its profile switched off.
       expect(text).not.toContain('prefers pnpm');

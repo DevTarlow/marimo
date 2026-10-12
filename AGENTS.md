@@ -468,13 +468,17 @@ writes the runner's path into a systemd unit. Check `pnpm --filter
 - Tests that touch the filesystem use `mkdtemp` under the working directory
   (`.marimo-*`, gitignored) rather than `/tmp`, so a sandbox that only permits
   writes inside the repository still runs them.
-- **One test loads the real embedding model, and it is skipped unless asked for.**
-  `packages/runtime/src/recall/memory-retrieval.live.test.ts` asserts that a
-  question actually retrieves the memory bullet that answers it, through the
-  pinned model, revision, prefixes and pooling — the one thing a fake embedder
-  cannot check, because a regression there returns a plausible result list rather
-  than an error. Run it by hand when you touch `prefixes.ts`, the scoring floor,
-  the pooling, or the model pins:
+- **Two tests load the real embedding model, and both are skipped unless asked
+  for.** One is `packages/runtime/src/recall/memory-retrieval.live.test.ts`, which
+  asserts that a question actually retrieves the memory bullet that answers it,
+  through the pinned model, revision, prefixes and pooling — the one thing a fake
+  embedder cannot check, because a regression there returns a plausible result
+  list rather than an error. The other is
+  `packages/runtime/src/recall/same-fact.live.test.ts`, which *measures* the
+  threshold `update_memory` uses to call two bullets the same fact: that number
+  ships conservative and unmeasured, and this is what says which way to move it.
+  Run both by hand when you touch `prefixes.ts`, the scoring floor, the pooling,
+  the model pins, or `SAME_FACT_SCORE`:
 
   ```bash
   # a directory holding the weights, the pinned engine in engine/, and nothing else

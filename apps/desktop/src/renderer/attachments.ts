@@ -14,6 +14,7 @@
  * themselves in terms of and what does not put the user's home directory into
  * every conversation that ever mentioned a file.
  */
+import {ATTACHED_FILES_HEADING} from '@marimo/protocol';
 import type {PickedFile, SkippedFile} from '@marimo/protocol';
 
 /**
@@ -22,8 +23,12 @@ import type {PickedFile, SkippedFile} from '@marimo/protocol';
  * Written out rather than left as a bare list: a message that is only file names
  * reads as a question about them, and the agent has no way to tell whether the
  * user wants them read, edited or ignored. This says what they are.
+ *
+ * The string itself lives in the protocol, because the runtime reads this block
+ * back out of the message to tell the model what was attached — two literals
+ * would be a block that stops being recognised the day one of them is reworded.
  */
-export const ATTACHED_HEADING = 'Attached files:';
+export const ATTACHED_HEADING = ATTACHED_FILES_HEADING;
 
 /**
  * The message to send: what was typed, then what was attached.

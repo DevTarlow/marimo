@@ -33,7 +33,7 @@ import {MAIN_AGENT_NAME} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
-import {selectMemory} from '../memory/select.js';
+import {DEFAULT_MAX_CHARS, selectMemory} from '../memory/select.js';
 import type {RecalledBullet} from '../memory/select.js';
 import type {RecallLookup} from '../tools/recall-tools.js';
 import {MEMORY_SOFT_LIMIT_BYTES} from '../memory/size.js';
@@ -784,6 +784,36 @@ export class AgentHost {
     return await this.sessionService.listEvents(sessionId);
   }
 
+  /**
+   * Whether this is the first thing said here, and when the last thing was.
+   *
+   * Read *before* a turn rather than during it, because ADK appends the user's
+   * message as the turn runs — reading afterwards would describe this message
+   * rather than the one before it.
+   *
+   * The session index is the source rather than the per-event timestamp, and that
+   * is a deliberate choice: `updatedAt` is a stored ISO string the sidebar
+   * already sorts on, so it exists for every conversation, while a per-event
+   * timestamp is a field the provider may or may not populate. A context block
+   * that silently lost its second line on some installs would be worse than one
+   * that never had it.
+   *
+   * Total: an index entry that cannot be read answers "first exchange", which
+   * says less rather than something wrong.
+   */
+  async sessionActivity(
+    sessionId: string,
+  ): Promise<{firstExchange: boolean; lastActivity?: Date}> {
+    const entry = await this.sessionService.getIndexEntry(sessionId);
+    if (entry === undefined || entry.messageCount === 0) {
+      return {firstExchange: true};
+    }
+    const at = new Date(entry.updatedAt);
+    return Number.isNaN(at.getTime())
+      ? {firstExchange: false}
+      : {firstExchange: false, lastActivity: at};
+  }
+
   /** What the agent currently remembers, as it would be injected. */
   async memoryText(): Promise<string> {
     return await this.memory.readForPrompt();
@@ -807,7 +837,16 @@ export class AgentHost {
     if (
       recall === undefined ||
       query.length < MIN_RETRIEVAL_QUERY_CHARS ||
-      !recall.scopes().includes('memory')
+      !recall.scopes().includes('memory') ||
+      /*
+       * A file no larger than the recalled block cannot be narrowed, only
+       * shortened: retrieval could drop bullets and could not add one. Skipping
+       * it is not an optimisation of the result — the result is identical to the
+       * best case — and it takes a query embed, an index pass and up to
+       * `RETRIEVAL_DEADLINE_MS` off the first token of every turn on a young
+       * install, which is most of them.
+       */
+      whole.length <= DEFAULT_MAX_CHARS
     ) {
       return whole;
     }

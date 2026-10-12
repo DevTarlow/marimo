@@ -1508,6 +1508,17 @@ export interface SkippedFile {
   reason: string;
 }
 
+/**
+ * The line attached paths sit under, as the message spells it.
+ *
+ * Here rather than beside the composer that writes it, because two readers now
+ * depend on the same spelling: the renderer that composes the message, and the
+ * runtime that reads the block back out of it to say so in the turn's own
+ * context. A second literal in the second reader is a block that silently stops
+ * being recognised the day somebody rewords the first.
+ */
+export const ATTACHED_FILES_HEADING = 'Attached files:';
+
 /* -------------------------------------------------------------------------- */
 /* Jobs                                                                        */
 /* -------------------------------------------------------------------------- */

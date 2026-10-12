@@ -70,6 +70,7 @@ import {SkillStore} from '../skills.js';
 import {WorkspaceStore, workspaceRootFor} from '../workspaces.js';
 import {resolveAgentConfig} from './resolve.js';
 import {turnInstruction} from './pet-turn.js';
+import {turnContext} from './turn-context.js';
 
 /** The services the app has that the agent's tools can use, if any. */
 export interface RuntimeServices {
@@ -957,9 +958,24 @@ export class AgentRuntime {
       yield refusal(sessionId, result.problem);
       return;
     }
+    /*
+     * Read before the turn, not after: ADK appends the user's message as the
+     * turn runs, so a read afterwards would answer "how long since the message
+     * you are about to answer" rather than "how long since they last spoke".
+     */
+    const activity = await result.host.sessionActivity(sessionId);
     const instruction = turnInstruction(
       origin,
       (await this.settingsStore.load()).companion.answerLength,
+      turnContext({
+        now: new Date(),
+        origin,
+        ...(activity.lastActivity === undefined
+          ? {}
+          : {lastActivity: activity.lastActivity}),
+        firstExchange: activity.firstExchange,
+        text,
+      }),
     );
     yield* result.host.run(sessionId, text, instruction, profileId);
   }
@@ -1046,6 +1062,27 @@ export class AgentRuntime {
     // Its own engine, and gigabytes of nobody's business if it is left behind —
     // 400 MB of weights and a fan with no window to explain them.
     await this.options.recall?.stop();
+  }
+
+  /**
+   * Starts the model before anybody has asked anything.
+   *
+   * The first turn of a session would otherwise pay for loading the weights, and
+   * on a 2.7 GB model that is the longest silence in the app — longer than the
+   * answer, on a short question. This moves the wait to the moment a window is
+   * shown, where the user can see the app is up and has not yet typed.
+   *
+   * Deliberately silent. There is nothing to tell the user: a warm-up that fails
+   * — no model installed, no usable device, a supervisor that threw — is a fact
+   * the first turn will report properly, and reporting it twice, once before
+   * they asked, is noise. Called best-effort by the process that owns a window.
+   */
+  async warmEngine(): Promise<void> {
+    try {
+      await this.startEngine();
+    } catch {
+      // See above: the first turn is where this becomes an answer.
+    }
   }
 
   /**

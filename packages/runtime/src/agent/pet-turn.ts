@@ -61,10 +61,26 @@ const LENGTHS: Record<CompanionAnswerLength, string> = {
  *
  * `origin` is optional so every existing caller — a job, a Discord mention, a
  * test — keeps getting exactly the instruction it got before.
+ *
+ * `context` is the turn's own facts about the moment (see `turn-context.ts`),
+ * and it is a separate argument rather than more text in this file because the
+ * two have different reasons to exist: the length block is about *which surface
+ * asked*, and the context block is about *when*. It is appended after the length
+ * block because it ends by saying that none of it is a request, and a model
+ * reads the last instruction it was given most literally.
+ *
+ * It is also why a window turn can now answer with something rather than
+ * `undefined`: the window has no length preference to state, but it is still a
+ * person typing at a particular time of day.
  */
 export function turnInstruction(
   origin: 'window' | 'pet' | undefined,
   answerLength: CompanionAnswerLength,
+  context?: string,
 ): string | undefined {
-  return origin === 'pet' ? LENGTHS[answerLength] : undefined;
+  const length = origin === 'pet' ? LENGTHS[answerLength] : undefined;
+  const parts = [length, context?.trim()].filter(
+    (part): part is string => part !== undefined && part.length > 0,
+  );
+  return parts.length === 0 ? undefined : parts.join('\n\n');
 }

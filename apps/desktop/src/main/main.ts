@@ -159,6 +159,14 @@ async function createWindow(): Promise<BrowserWindow> {
   if (!offscreen) {
     window.once('ready-to-show', () => {
       window.show();
+      /*
+       * And start the model, because a window on screen is the app's only signal
+       * that somebody is about to ask something. Best-effort and not awaited: a
+       * warm-up that fails reports nothing, and the first turn reports properly.
+       * An offscreen window is excluded by the branch we are already inside,
+       * which is right — nothing is on screen, so nothing is about to be typed.
+       */
+      void agent?.warmModel();
     });
   }
 

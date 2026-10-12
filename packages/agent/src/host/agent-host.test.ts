@@ -1770,6 +1770,21 @@ describe('AgentHost', () => {
       await host.remember('Boundaries', 'Never force-push');
     }
 
+    /*
+     * Enough memory that narrowing is a real decision.
+     *
+     * A file smaller than the recalled-block budget cannot be narrowed at all, so
+     * every test about retrieval has to get past that first — otherwise the
+     * fallback path is what is being asserted and the test says so nowhere. The
+     * bullets are individually under `MAX_ENTRY_CHARS` and distinct, so they are
+     * three entries rather than one rejected line.
+     */
+    async function padMemory(host: AgentHost): Promise<void> {
+      for (let index = 0; index < 3; index += 1) {
+        await host.remember('Notes', `Scratch note ${index} ${'z'.repeat(1_600)}`);
+      }
+    }
+
     it('injects the whole file when there is no recall service', async () => {
       const {host, session} = await start(undefined, () => textChunks('ok'));
       await seedMemory(host);
@@ -1783,12 +1798,48 @@ describe('AgentHost', () => {
       expect(instruction).not.toContain('Recalled for this question');
     });
 
+    /*
+     * Retrieval on a file it cannot narrow is latency for nothing: the recalled
+     * block is capped at 4096 characters, so a file no larger than that can only
+     * be shortened, never added to. The answer is identical either way, which is
+     * why this is asserted on the *ask* and not only on the prompt.
+     */
+    it('does not retrieve while the file fits in the recalled block', async () => {
+      const {service, asked} = lookup({
+        hits: [bullet('About the user', 'Lives in Berlin')],
+      });
+      const {host, session} = await start(service, () => textChunks('ok'));
+      await seedMemory(host);
+
+      await collect(host.run(session, 'where does the retry logic live'));
+
+      expect(asked).toEqual([]);
+      const instruction = instructionOf();
+      expect(instruction).toContain('Has a dog called Sunshine');
+      expect(instruction).not.toContain('Recalled for this question');
+    });
+
+    it('retrieves once the file is larger than the recalled block', async () => {
+      const {service, asked} = lookup({
+        hits: [bullet('About the user', 'Lives in Berlin')],
+      });
+      const {host, session} = await start(service, () => textChunks('ok'));
+      await seedMemory(host);
+      await padMemory(host);
+
+      await collect(host.run(session, 'where does the retry logic live'));
+
+      expect(asked).toEqual(['where does the retry logic live']);
+      expect(instructionOf()).toContain('Recalled for this question');
+    });
+
     it('keeps the rules whole and recalls the rest', async () => {
       const {service, asked} = lookup({
         hits: [bullet('About the user', 'Lives in Berlin')],
       });
       const {host, session} = await start(service, () => textChunks('ok'));
       await seedMemory(host);
+      await padMemory(host);
 
       await collect(host.run(session, 'where does the retry logic live'));
 
@@ -1801,7 +1852,7 @@ describe('AgentHost', () => {
       expect(instruction).not.toContain('Has a dog called Sunshine');
       // And the model is told it is looking at part of memory rather than all of
       // it, in the words `selectMemory` writes.
-      expect(instruction).toContain('1 of 3 bullets');
+      expect(instruction).toContain('1 of 6 bullets');
       expect(instruction).toContain('read_memory');
     });
 
@@ -1820,6 +1871,10 @@ describe('AgentHost', () => {
       };
       const {host, session} = await start(failing, () => textChunks('ok'));
       await seedMemory(host);
+      // Padded, so the failure is reached: on a file retrieval cannot narrow the
+      // guard returns before `search` is ever called, and this test would pass
+      // without the fallback existing at all.
+      await padMemory(host);
 
       await collect(host.run(session, 'where does the retry logic live'));
 
@@ -1858,6 +1913,9 @@ describe('AgentHost', () => {
       };
       const {host, session} = await start(hanging, () => textChunks('ok'));
       await seedMemory(host);
+      // Padded for the same reason as the failure test above: a file retrieval
+      // cannot narrow returns before the hanging `search` is ever reached.
+      await padMemory(host);
 
       const events = await collect(host.run(session, 'where does the retry logic live'));
 
@@ -1880,6 +1938,64 @@ describe('AgentHost', () => {
 
       expect(names).toContain('recall');
       expect(names?.indexOf('recall')).toBe(names.indexOf('search_knowledge_base') + 1);
+    });
+  });
+
+  /*
+   * What the turn-context block is built from.
+   *
+   * The block itself is tested where it lives; this is the half that reads the
+   * app's own state, and the property that matters is *when* it is read: before
+   * the turn, because ADK appends the user's message as the turn runs and a read
+   * afterwards would describe the message being answered.
+   */
+  describe('session activity', () => {
+    it('calls a brand-new conversation a first exchange', async () => {
+      fake = await startFakeDeepSeek(() => textChunks('ok'));
+      const host = new AgentHost({
+        sessionsDir: join(workDir, 'sessions'),
+        config: createConfig(fake.baseUrl),
+      });
+      host.init();
+      openHosts.push(host);
+      const session = await host.createSession();
+
+      const activity = await host.sessionActivity(session.id);
+
+      expect(activity.firstExchange).toBe(true);
+      expect(activity.lastActivity).toBeUndefined();
+    });
+
+    it('answers with when the conversation last had activity, before this turn', async () => {
+      fake = await startFakeDeepSeek(() => textChunks('ok'));
+      const host = new AgentHost({
+        sessionsDir: join(workDir, 'sessions'),
+        config: createConfig(fake.baseUrl),
+      });
+      host.init();
+      openHosts.push(host);
+      const session = await host.createSession();
+      await collect(host.run(session.id, 'first question'));
+
+      const activity = await host.sessionActivity(session.id);
+
+      expect(activity.firstExchange).toBe(false);
+      expect(activity.lastActivity).toBeInstanceOf(Date);
+      expect(Number.isNaN(activity.lastActivity?.getTime() ?? Number.NaN)).toBe(false);
+    });
+
+    it('says first exchange rather than throwing for an unknown session', async () => {
+      fake = await startFakeDeepSeek(() => textChunks('ok'));
+      const host = new AgentHost({
+        sessionsDir: join(workDir, 'sessions'),
+        config: createConfig(fake.baseUrl),
+      });
+      host.init();
+      openHosts.push(host);
+
+      const activity = await host.sessionActivity('no-such-session');
+
+      expect(activity).toEqual({firstExchange: true});
     });
   });
 });

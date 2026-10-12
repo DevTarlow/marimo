@@ -856,6 +856,19 @@ export class AgentService {
     return await this.runtime.reviewMemory(profileId, sessionId);
   }
 
+  /**
+   * Starts the model, so the first question is not the one that pays for it.
+   *
+   * Called when a window is shown rather than at boot, and the distinction is the
+   * whole reason this exists. The app is tray-resident, so "the process started"
+   * and "somebody is about to type" are different events — warming at boot would
+   * load gigabytes of weights for a user who never opened a window. A shown
+   * window is the closest thing to a signal that a question is coming.
+   */
+  async warmModel(): Promise<void> {
+    await this.runtime.warmEngine();
+  }
+
   mcpStatuses(): Record<string, McpStatus> {
     return this.mcp.statuses();
   }

@@ -24,8 +24,12 @@ import {isAlwaysInjected} from './sections.js';
  * enough that a bad rank order costs prompt space rather than the answer. The
  * sections injected whole are deliberately outside this, because a rule the user
  * wrote is not a budget item.
+ *
+ * Exported because the host reads the same number from the other side: a memory
+ * file no larger than this cannot be narrowed by retrieval at all, and paying a
+ * retrieval pass to produce the whole file is latency for nothing.
  */
-const DEFAULT_MAX_CHARS = 4096;
+export const DEFAULT_MAX_CHARS = 4096;
 
 /**
  * How to reach the bullets a narrowed prompt left out.

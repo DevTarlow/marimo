@@ -355,6 +355,12 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       }
       if (params.visible) {
         await window.show();
+        /*
+         * Showing the moss is the other signal that somebody is about to ask
+         * something — and the only one there is when the app is running from the
+         * tray with the main window closed. Best-effort, like the window's.
+         */
+        void dependencies.agent()?.warmModel();
       } else {
         window.hide();
       }

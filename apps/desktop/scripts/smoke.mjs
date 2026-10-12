@@ -539,7 +539,6 @@ async function main() {
         'read_file',
         'write_file',
         'run_shell',
-        'spawn_agent',
         'create_job',
       ];
       const missing = needed.filter(
@@ -650,7 +649,7 @@ async function main() {
          * main window, from the stores, or from any unit test: the pet's calls all
          * work, and only the answers were missing.
          *
-         * A fresh install has no API key, so the honest expectation is not an
+         * A fresh install has no weights yet, so the honest expectation is not an
          * answer — it is a reaction. Sending from the pet must produce *something*
          * in the pet, and on this install that something is the refusal. Either
          * outcome passes; silence does not.

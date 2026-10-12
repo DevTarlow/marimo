@@ -1285,26 +1285,15 @@ export type TranscriptRole = 'user' | 'assistant';
  * The name the main agent is built under, and therefore the `author` on its
  * events.
  *
- * One value in one place because two things depend on it agreeing with itself:
- * the agent is constructed under this name, and the transcript decides whether a
- * message came from a helper by asking whether its author is *not* this. A
- * second literal would not fail; it would silently attribute the agent's own
- * words to a helper called "marimo".
+ * One value in one place because the agent is constructed under this name and
+ * the transcript's stored events carry it as their author; a second literal
+ * would not fail, it would quietly stop matching what the agent was built as.
  */
 export const MAIN_AGENT_NAME = 'marimo';
 
 export interface TranscriptMessage {
   id: string;
   role: TranscriptRole;
-  /**
-   * The helper agent that wrote this, when one did.
-   *
-   * A sub-agent runs in the parent's conversation — it has to, because that is
-   * where its approval requests have to be visible — so without this its words
-   * and the parent's would merge into one bubble and read as a single answer
-   * from one mind.
-   */
-  subagent?: string;
   text: string;
   reasoning?: string;
   toolCalls?: ToolCallRecord[];
@@ -1985,40 +1974,7 @@ export type AgentUiEvent =
    * happens a window with no event to draw it looks exactly like a review that
    * never ran.
    */
-  | {type: 'memory.reviewed'; events: number; found: number}
-  /*
-   * A helper agent, while it runs.
-   *
-   * Three events rather than a nested `AgentUiEvent`, deliberately. A child's
-   * work is a *tool call* from the parent's point of view, and the window draws
-   * it as one: a labelled group that opens, streams what the helper is saying,
-   * and closes with how it went. Nesting a whole event union inside another
-   * would mean every future variant being legal in two places, and the window
-   * having to be right about both.
-   */
-  | {
-      type: 'subagent.started';
-      sessionId: string;
-      callId: string;
-      name: string;
-      task: string;
-    }
-  | {
-      type: 'subagent.event';
-      sessionId: string;
-      callId: string;
-      name: string;
-      text: string;
-    }
-  | {
-      type: 'subagent.finished';
-      sessionId: string;
-      callId: string;
-      name: string;
-      ok: boolean;
-      ms: number;
-      error?: string;
-    };
+  | {type: 'memory.reviewed'; events: number; found: number};
 
 export const IPC_CALL_CHANNEL = 'marimo:call';
 export const IPC_EVENT_CHANNEL = 'marimo:event';

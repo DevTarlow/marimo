@@ -1,11 +1,11 @@
 /**
  * The Electron half of secret storage: the cipher.
  *
- * `@marimo/runtime`'s `FileSecretStore` owns the file format, the refusal to
- * write a readable secret without permission, and the three-valued read. All
- * this file supplies is the encryption itself, which only Electron has. The
- * headless runner constructs the same store with no cipher at all, which is why
- * a scheduled job that runs while the app is closed needs the plain-text opt-in.
+ * `@marimo/runtime`'s `FileSecretStore` owns the file format and the
+ * three-valued read. All this file supplies is the encryption itself, which only
+ * Electron has. There is no plain-text fallback for the headless runner to opt
+ * into — that path was removed with the model key it existed for — and the
+ * runner needs no secret at all, because a scheduled turn dials no connectors.
  */
 import {safeStorage} from 'electron';
 

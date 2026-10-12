@@ -47,8 +47,6 @@ import {
 import {createRecallTool} from './recall-tools.js';
 import type {RecallLookup} from './recall-tools.js';
 import {createShellTool} from './shell-tool.js';
-import {createSpawnAgentTool} from './subagent-tool.js';
-import type {SubagentDeps} from './subagent-tool.js';
 import {createSaveSkillTool} from './skill-tools.js';
 import type {SkillService} from './skill-tools.js';
 import {createHttpFetchTool} from './web-tools.js';
@@ -67,8 +65,8 @@ import type {McpServer} from '@marimo/protocol';
  * here can change the machine or act in the world. Reading a file, listing a
  * directory, remembering something and searching the web are all things a person
  * asking a question would expect an assistant to be able to do; writing,
- * running a command, fetching an arbitrary URL and spawning a helper are all
- * things they would expect to be asked about first.
+ * running a command and fetching an arbitrary URL are all things they would
+ * expect to be asked about first.
  *
  * `http_fetch` is the one worth arguing about, since `web_search` also reaches
  * the network. The difference is the destination: a search goes to one known
@@ -142,7 +140,6 @@ export const CAPABILITY_PRESETS: readonly CapabilityPreset[] = [
       'add_note',
       'update_note',
       'remove_note',
-      'spawn_agent',
       'save_skill',
     ],
     recommended: false,
@@ -185,7 +182,6 @@ export function describeTools(options: {
   workspaceRoot: string;
   model: string;
   webSearch?: WebSearchProvider;
-  subagent?: boolean;
   /**
    * Which of the app's services are wired.
    *
@@ -221,11 +217,6 @@ export function describeTools(options: {
       memory: new MemoryStore({workspaceRoot: options.workspaceRoot}),
       model: options.model,
       ...(options.webSearch ? {webSearch: options.webSearch} : {}),
-      // Present when the host offers helpers at all; the profile decides whether
-      // this profile may use them, which is what the pick-list is for.
-      ...(options.subagent === true
-        ? {subagent: {build: () => ({}) as never}}
-        : {}),
       /*
        * Stand-ins. Nothing here is executed — a description is a property of the
        * tool — so the services only need to exist, not to work.
@@ -307,9 +298,6 @@ const TOOL_BLURBS: Record<string, string> = {
   prune_memory:
     'Tidy those notes up when they get repetitive or out of date, keeping a copy ' +
     'of the previous version.',
-  spawn_agent:
-    'Hand a piece of work to a helper with the same abilities, and get its answer ' +
-    'back. Helpers cannot see your conversation and cannot ask you anything.',
   list_jobs: 'See what it has been asked to do on a schedule.',
   create_job:
     'Set up something to run on its own later — a summary every morning, a check ' +
@@ -374,14 +362,6 @@ export interface ToolDependencies {
    * retry. This function only decides what the model is offered.
    */
   mcpServers?: readonly McpToolsetSource[];
-  /**
-   * How to build a helper agent, when the host offers them at all.
-   *
-   * Absent means the tool is absent — not "present and discouraged". A helper
-   * the profile has switched off must not be something the model can be talked
-   * into trying.
-   */
-  subagent?: SubagentDeps;
 }
 
 /** One connected MCP server and what it said it can do. */
@@ -487,25 +467,6 @@ function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
     tools.push(...discordTools({discord: deps.discordService}));
   }
 
-  /*
-   * The helper tool, with the rest and therefore *before* the profile's
-   * selection.
-   *
-   * It used to be appended afterwards, which meant it was never filtered: a
-   * profile that had switched helpers off — or allowed nothing at all — was
-   * still offered `spawn_agent`, while the settings screen drew a checkbox for
-   * it and the catalogue listed it as grantable. The checkbox did nothing, and
-   * the README's claim that a tool which is off is not offered was false for
-   * this one tool.
-   *
-   * Depth is still one by construction: `deps.subagent.build` builds an agent
-   * from this same function without this dependency, so a helper has no way to
-   * ask for one of its own.
-   */
-  if (deps.subagent) {
-    tools.push(createSpawnAgentTool(deps.subagent));
-  }
-
   const granted = filterTools(tools, config.enabledTools);
 
   /*
@@ -540,13 +501,13 @@ function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
    */
   /*
    * Every built-in name this build can produce — computed from the tools that
-   * were *built*, before the profile filter, and including the two that are
+   * were *built*, before the profile filter, and including `save_skill`, which is
    * added after it.
    *
-   * `tools` covers everything up to and including the helper tool. `save_skill`
-   * is not in it, because that one is pushed into `granted` below. Both have to
-   * be here: a name the profile has switched off still belongs to the built-in
-   * that owns it, because the profile can change between turns.
+   * `tools` covers everything pushed above. `save_skill` is not in it, because
+   * that one is pushed into `granted` below. Both have to be here: a name the
+   * profile has switched off still belongs to the built-in that owns it, because
+   * the profile can change between turns.
    */
   const reserved = new Set([...tools.map((tool) => tool.name), 'save_skill']);
   for (const source of deps.mcpServers ?? []) {
@@ -582,9 +543,3 @@ function filterTools(
 }
 
 export {resolveInsideWorkspace, PathOutsideWorkspaceError} from './paths.js';
-export {
-  createSpawnAgentTool,
-  DEFAULT_SUBAGENT_LIMITS,
-  SUBAGENT_NAME_PATTERN,
-} from './subagent-tool.js';
-export type {SubagentDeps, SubagentLimits} from './subagent-tool.js';

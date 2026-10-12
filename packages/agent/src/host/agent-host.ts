@@ -45,11 +45,7 @@ import type {
 } from '../sessions/file-session-service.js';
 import {composeInstruction} from '../skills/index.js';
 import {createTools} from '../tools/index.js';
-import type {
-  McpToolsetSource,
-  SubagentDeps,
-  SubagentLimits,
-} from '../tools/index.js';
+import type {McpToolsetSource} from '../tools/index.js';
 import type {DeskService} from '../tools/desk-tools.js';
 import type {SkillService} from '../tools/skill-tools.js';
 import type {DiscordService} from '../tools/discord-tools.js';
@@ -124,16 +120,6 @@ export interface AgentHostOptions {
    * owns both resolves one from the other here.
    */
   onSessionsDeleted?: (sessionIds: readonly string[]) => void | Promise<void>;
-  /**
-   * Where a helper agent's words go while it runs.
-   *
-   * Out of band rather than through the turn's generator, because a tool call
-   * cannot yield into the stream that is awaiting it. The same channel the MCP
-   * status events use, for the same reason.
-   */
-  onSubagentEvent?: (event: AgentUiEvent) => void;
-  /** Ceilings on a helper: steps, time, and the size of what it hands back. */
-  subagentLimits?: Partial<SubagentLimits>;
 }
 
 export interface ApproveParams {
@@ -293,8 +279,6 @@ export class AgentHost {
   private memoryBlockCache:
     | {query: string; memory: string; text: string}
     | undefined;
-  private readonly onSubagentEvent: ((event: AgentUiEvent) => void) | undefined;
-  private readonly subagentLimits: Partial<SubagentLimits> | undefined;
   private config: AgentConfig;
   /**
    * The cached runner, keyed by model.
@@ -349,8 +333,6 @@ export class AgentHost {
     this.mcpServers = options.mcpServers ?? [];
     this.recallService = options.recallService;
     this.onSessionsDeleted = options.onSessionsDeleted;
-    this.onSubagentEvent = options.onSubagentEvent;
-    this.subagentLimits = options.subagentLimits;
   }
 
   /** Prepares the runner cache. There is nothing to build until a turn runs. */
@@ -1124,7 +1106,6 @@ export class AgentHost {
         ...(this.deskService ? {deskService: this.deskService} : {}),
         ...(this.skillService ? {skillService: this.skillService} : {}),
         ...(this.mcpServers.length > 0 ? {mcpServers: this.mcpServers} : {}),
-        subagent: this.subagentDeps(),
       }),
     });
 
@@ -1132,65 +1113,10 @@ export class AgentHost {
       appName: this.appName,
       agent,
       sessionService: this.sessionService,
-      /*
-       * A plugin rather than an agent callback, because it has to see the calls
-       * of a helper agent too: a subagent that loops burns the same turn's
-       * context, and the caller waiting on it has no way to notice.
-       */
       plugins: [new RepeatedToolCallPlugin()],
     });
     this.runners.set(model, runner);
     return runner;
-  }
-
-  /**
-   * How a helper agent is built, when the profile allows one.
-   *
-   * The child is built by this same function's tools, minus this dependency —
-   * which is what makes depth one, rather than a number to compare. It gets the
-   * same model, the same tools and the same approval rules, and it cannot see
-   * the conversation it was called from.
-   */
-  private subagentDeps(): SubagentDeps {
-    return {
-      build: ({name, task}) => {
-        const tools = createTools(this.config, {
-          memory: this.memory,
-          model: this.config.model,
-          ...(this.webSearch ? {webSearch: this.webSearch} : {}),
-          /*
-           * Deliberately *not* the job, Discord or desk services. A helper is a
-           * short-lived thing answering one question; giving it the ability to
-           * schedule jobs or post to a chat server is reach it was not asked
-           * for, and the user has no way to see it coming.
-           */
-        });
-        return new LlmAgent({
-          name,
-          description: `A helper agent doing: ${task}`,
-          model: new OpenAiCompatLlm({
-            model: this.config.model,
-            baseUrl: this.config.baseUrl,
-            temperature: this.config.temperature,
-            ...(this.config.maxOutputTokens !== undefined
-              ? {maxOutputTokens: this.config.maxOutputTokens}
-              : {}),
-          }),
-          instruction:
-            'You are a helper agent. You cannot see the conversation that asked ' +
-            'for you and you cannot ask questions back, so work only from the ' +
-            'task you were given and say plainly if it is not enough. Answer ' +
-            'with the result itself, not with a description of what you did.',
-          tools,
-        });
-      },
-      ...(this.onSubagentEvent === undefined
-        ? {}
-        : {onEvent: this.onSubagentEvent}),
-      ...(this.subagentLimits === undefined
-        ? {}
-        : {limits: this.subagentLimits}),
-    };
   }
 
   private async *drive(

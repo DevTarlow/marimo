@@ -206,7 +206,6 @@ describe('what is worth interrupting somebody for', () => {
   it('says nothing about a turn that simply finished', () => {
     expect(noticeFor({type: 'turn.completed', sessionId: 's1'})).toBeUndefined();
     expect(noticeFor({type: 'text.delta', sessionId: 's1'})).toBeUndefined();
-    expect(noticeFor({type: 'subagent.finished', sessionId: 's1'})).toBeUndefined();
   });
 
   /*

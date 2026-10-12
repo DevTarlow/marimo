@@ -11,6 +11,7 @@ import {describe, expect, it} from 'vitest';
 import {
   isNewProposal,
   MAX_PROPOSALS,
+  MAX_REVIEW_CHARS,
   parseProposals,
   renderConversation,
   reviewPrompt,
@@ -271,9 +272,12 @@ function said(
 
 describe('rendering a conversation for the reviewer', () => {
   it('marks who said what', () => {
-    expect(
-      renderConversation([said('user', 'hello'), said('marimo', 'hi')]),
-    ).toBe('USER: hello\n\nAGENT: hi');
+    const stretch = renderConversation([
+      said('user', 'hello'),
+      said('marimo', 'hi'),
+    ]);
+    expect(stretch.text).toBe('USER: hello\n\nAGENT: hi');
+    expect(stretch.used).toBe(2);
   });
 
   /*
@@ -291,37 +295,54 @@ describe('rendering a conversation for the reviewer', () => {
         ],
       },
     };
-    expect(renderConversation([withThought])).toBe('AGENT: Noted.');
+    expect(renderConversation([withThought]).text).toBe('AGENT: Noted.');
   });
 
-  it('leaves out events with no words', () => {
-    expect(
-      renderConversation([
-        {author: 'marimo', content: {parts: []}},
-        said('user', 'hi'),
-      ]),
-    ).toBe('USER: hi');
+  it('leaves out events with no words, and still counts them read', () => {
+    const stretch = renderConversation([
+      {author: 'marimo', content: {parts: []}},
+      said('user', 'hi'),
+    ]);
+    expect(stretch.text).toBe('USER: hi');
+    expect(stretch.used).toBe(2);
   });
 
   it('is empty for a conversation with nothing in it', () => {
-    expect(renderConversation([])).toBe('');
+    expect(renderConversation([])).toEqual({text: '', used: 0});
   });
 
   /*
-   * The recent part of a long conversation is where anything worth remembering
-   * was said, and the cap is what stops a review costing as much as the
-   * conversation did.
+   * The cap exists because a review must not cost as much as the conversation
+   * did. Which end it takes is the part that has to be right: a stretch from the
+   * *earliest* unreviewed event can be followed by the next one, so a long
+   * conversation is read in full over several looks. Taking the tail and then
+   * advancing the watermark past the whole slice is how the beginning of a
+   * conversation is marked read without ever reaching a prompt.
    */
-  it('keeps the tail of a very long conversation, and says it did', () => {
+  it('takes a stretch from the earliest event, and reports how far it reached', () => {
     const long = Array.from({length: 400}, (_, index) =>
       said('user', `message number ${String(index)} ${'x'.repeat(200)}`),
     );
-    const rendered = renderConversation(long);
+    const stretch = renderConversation(long);
 
-    expect(rendered).toContain('earlier conversation omitted');
-    expect(rendered.length).toBeLessThan(26_000);
-    // The last thing said is what survives.
-    expect(rendered).toContain('message number 399');
+    expect(stretch.text.length).toBeLessThan(MAX_REVIEW_CHARS + 300);
+    expect(stretch.text).toContain('message number 0 ');
+    expect(stretch.used).toBeGreaterThan(0);
+    expect(stretch.used).toBeLessThan(long.length);
+    // Everything the count covers is in the text, and the next event is not.
+    expect(stretch.text).toContain(
+      `message number ${String(stretch.used - 1)} `,
+    );
+    expect(stretch.text).not.toContain(`message number ${String(stretch.used)} `);
+  });
+
+  it('always makes progress, even when one message is over the cap', () => {
+    const huge = said('user', 'x'.repeat(MAX_REVIEW_CHARS + 5_000));
+    const stretch = renderConversation([huge, said('user', 'after')]);
+
+    expect(stretch.used).toBe(1);
+    expect(stretch.text).toContain('x');
+    expect(stretch.text).not.toContain('after');
   });
 });
 
@@ -329,7 +350,7 @@ describe('running a review', () => {
   const events = [said('user', 'I always use pnpm, never npm.')];
 
   it('asks the model and returns what it proposed', async () => {
-    const proposals = await runReview({
+    const {proposals} = await runReview({
       events,
       memory: '',
       ask: async (prompt) => {
@@ -350,7 +371,7 @@ describe('running a review', () => {
   });
 
   it('drops what the memory already holds', async () => {
-    const proposals = await runReview({
+    const {proposals} = await runReview({
       events,
       memory: '- Uses pnpm, not npm.',
       ask: async () =>
@@ -372,7 +393,7 @@ describe('running a review', () => {
    * tell the user, because nothing happened.
    */
   it('answers nothing when the model fails', async () => {
-    const proposals = await runReview({
+    const {proposals} = await runReview({
       events,
       memory: '',
       ask: async () => {
@@ -385,7 +406,7 @@ describe('running a review', () => {
 
   it('does not ask at all about an empty conversation', async () => {
     let asked = false;
-    const proposals = await runReview({
+    const {proposals} = await runReview({
       events: [],
       memory: '',
       ask: async () => {
@@ -425,7 +446,7 @@ describe('facts the user refused', () => {
   });
 
   it('drops a proposal the user already refused', async () => {
-    const proposals = await runReview({
+    const {proposals} = await runReview({
       events: said('I scan receipts.'),
       memory: '',
       refused,
@@ -448,7 +469,7 @@ describe('facts the user refused', () => {
    * case-insensitive — the same comparison the store dedupes with.
    */
   it('recognises a refusal that was re-worded in spacing or case', async () => {
-    const proposals = await runReview({
+    const {proposals} = await runReview({
       events: said('I scan receipts.'),
       memory: '',
       refused,
@@ -471,7 +492,7 @@ describe('facts the user refused', () => {
    * it was turned down.
    */
   it('still proposes a different fact that happens to share a word', async () => {
-    const proposals = await runReview({
+    const {proposals} = await runReview({
       events: said('Receipts are a chore.'),
       memory: '',
       refused,
@@ -489,7 +510,7 @@ describe('facts the user refused', () => {
   });
 
   it('applies the memory filter and the refusal filter together', async () => {
-    const proposals = await runReview({
+    const {proposals} = await runReview({
       events: said('lots of things'),
       memory: '- Works in Rust.',
       refused,

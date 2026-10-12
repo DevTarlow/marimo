@@ -161,9 +161,6 @@ export function Pet(): React.JSX.Element {
           <div
             key={message.id}
             className={`pet-bubble pet-${message.role}`}
-            {...(message.subagent === undefined
-              ? {}
-              : {'data-subagent': message.subagent})}
           >
             {message.role === 'assistant' ? (
               <Markdown text={message.text} />

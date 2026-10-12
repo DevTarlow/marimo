@@ -48,7 +48,7 @@ export const INDEX_FILE = 'index.json';
  *
  * A bound rather than a target, and it exists because of what a search does with
  * the file: the whole vector array is read into memory and scored, on a machine
- * already holding a 4.7B model. At 768 dimensions a record is 3 KB, so this is
+ * already holding the chat model. At 768 dimensions a record is 3 KB, so this is
  * about 150 MB at the ceiling — past which the answer is not "a bigger index" but
  * "this folder is not the one to index whole".
  *

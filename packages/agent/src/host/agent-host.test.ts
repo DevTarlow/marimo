@@ -324,12 +324,6 @@ describe('AgentHost', () => {
       'prune_memory',
       'http_fetch',
       'run_shell',
-      /*
-       * Built like every other tool and then filtered by the profile, so a
-       * profile that has not granted it does not offer it. That is invariant 9
-       * for helpers too: absent, not discouraged.
-       */
-      'spawn_agent',
     ]);
     expect(tools[1]?.function.parameters).toMatchObject({type: 'object'});
 

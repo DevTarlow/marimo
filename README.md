@@ -11,7 +11,7 @@ it answers — and nothing you type leaves the computer.
 Two things make it different from a chat window with a plugin folder. **Nothing
 is on until you turn it on** — a fresh install can read your files and search the
 web, and everything with reach (writing, running commands, fetching an arbitrary
-URL, spawning a helper) is granted deliberately, per agent. And **it keeps
+URL) is granted deliberately, per agent. And **it keeps
 working when the window is closed**: scheduled jobs run from a background service
 whether or not the app is open.
 
@@ -28,10 +28,9 @@ different app.
 | ✅  | The model: Qwen3.5-4B run by a llama.cpp engine the app owns, on loopback, with no account and no key. Two sizes — Q4_K_M on a 4 GB card, Q8_0 on a 6 GB one — chosen from what the GPU reports, and downloaded on first run |
 | ✅  | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a workspace rail with the conversations filed under the folder they work in, light and dark following the OS or chosen                       |
 | ✅  | Two sizes of app: a simple screen and a power screen, with one switch between them                                                                                                                                                     |
-| ✅  | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming client over one backend, ~30 built-in tools of which the app offers the ones its services can carry out, skills, `memory.md`, JSONL conversations        |
+| ✅  | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming client over one backend, ~28 built-in tools of which the app offers the ones its services can carry out, skills, `memory.md`, JSONL conversations        |
 | ✅  | Approvals that survive a restart, because a pending call is derived from the stored conversation rather than held in memory                                                                                                            |
 | ✅  | MCP connectors: add one by pasting a command, test it from the same form, and choose whether to trust it — untrusted servers ask before every call                                                                                     |
-| ✅  | Helper agents: `spawn_agent` hands a separable piece of work to a sub-agent that shares the conversation, so its approvals are visible and its words are labelled                                                                      |
 | ✅  | Per-agent capabilities: every tool is a switch, and a tool that is off is not offered to the model at all                                                                                                                              |
 | ✅  | The stores: jobs, profiles, settings, skills, memory proposals — with format versioning that refuses to overwrite a document it cannot read                                                                                            |
 | ✅  | Secrets in the OS keychain: connector tokens, encrypted at rest, with a machine that has no keychain told so rather than written to in the clear                                                                                       |

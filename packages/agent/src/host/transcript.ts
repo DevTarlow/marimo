@@ -15,7 +15,6 @@
  */
 import {isCompactedEvent, REQUEST_CONFIRMATION_FUNCTION_CALL_NAME} from '@google/adk';
 
-import {MAIN_AGENT_NAME} from '@marimo/protocol';
 import type {TranscriptMessage, ToolCallRecord} from '@marimo/protocol';
 
 import type {AdkEvent} from '../sessions/file-session-service.js';
@@ -70,13 +69,6 @@ export function projectTranscript(events: AdkEvent[]): TranscriptMessage[] {
 function project(events: readonly AdkEvent[]): TranscriptMessage[] {
   const messages: TranscriptMessage[] = [];
   let assistant: TranscriptMessage | undefined;
-  /*
-   * Which agent the open bubble belongs to — the parent, or a helper it
-   * spawned. A change of author closes the bubble, because two agents' words in
-   * one bubble read as one answer from one mind, and the user has no way to tell
-   * which of them said the thing they are looking at.
-   */
-  let author: string | undefined;
 
   for (const event of events) {
     const parts = event.content?.parts ?? [];
@@ -94,7 +86,6 @@ function project(events: readonly AdkEvent[]): TranscriptMessage[] {
         // The next agent-authored event opens a fresh assistant bubble rather
         // than appending to the previous one.
         assistant = undefined;
-        author = undefined;
       }
       continue;
     }
@@ -103,28 +94,13 @@ function project(events: readonly AdkEvent[]): TranscriptMessage[] {
       continue;
     }
 
-    /*
-     * Who wrote this, where the main agent is `undefined`. The agent's own name
-     * is not useful here — everything that is not a helper is the agent the user
-     * is talking to.
-     */
-    const from = helperName(event.author);
-
-    /*
-     * A bubble belongs to one speaker, so a change of speaker starts a new one.
-     * That is the whole of the attribution: without it a helper's words and the
-     * agent's merge, and the user reads one answer from one mind where there
-     * were two.
-     */
-    if (assistant === undefined || from !== author) {
+    if (assistant === undefined) {
       assistant = {
         id: event.id || `event-${messages.length}`,
         role: 'assistant',
-        ...(from === undefined ? {} : {subagent: from}),
         text: '',
         createdAt: timestampOf(event),
       };
-      author = from;
       if (messages[messages.length - 1] !== assistant) {
         messages.push(assistant);
       }
@@ -299,21 +275,4 @@ function truncate(value: string): string {
   return value.length > MAX_RECORDED_RESULT
     ? `${value.slice(0, MAX_RECORDED_RESULT)}\n… [truncated]`
     : value;
-}
-
-/**
- * The helper an event came from, or `undefined` for the main agent.
- *
- * `author` is the ADK agent's name, and the main agent is built under one fixed
- * name — so anything else in this conversation is a helper. Matching on "is it
- * the main agent" rather than on a list of helper names means a helper that was
- * spawned under a name nobody recorded is still attributed correctly, which is
- * the case that matters: the alternative is a stranger's words in the agent's
- * voice.
- */
-function helperName(author: string | undefined): string | undefined {
-  if (author === undefined || author === MAIN_AGENT_NAME) {
-    return undefined;
-  }
-  return author;
 }

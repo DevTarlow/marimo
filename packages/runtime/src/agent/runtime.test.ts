@@ -15,7 +15,8 @@ import {dirname, join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {MAX_MEMORY_BYTES, resolveMemoryFile} from '@marimo/agent';
+import {FileSessionService, MAX_MEMORY_BYTES, resolveMemoryFile} from '@marimo/agent';
+import type {AdkEvent} from '@marimo/agent';
 import {
   DEFAULT_AGENT_IDENTITY,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
@@ -247,6 +248,79 @@ describe('AgentRuntime', () => {
       await expect(runtime().dispose()).resolves.toBeUndefined();
     });
   });
+
+  /*
+   * A conversation longer than one look is read in stretches, and the watermark
+   * may only move past what a look actually read.
+   *
+   * It used to jump to the total event count, so the beginning of a backlog was
+   * marked reviewed without ever reaching a prompt: the reviewer could not see
+   * it, and no later look would ask about it again. The failure is silent — the
+   * first thing said in a long conversation is simply never remembered.
+   */
+  it('reads a long conversation in stretches instead of marking it all read', async () => {
+    const agent = runtime({localModel: engine()});
+    const summary = await agent.createSession(profileId);
+    const sessionId = summary?.id ?? '';
+
+    /*
+     * Events go in through the same store the host reads, because there is no
+     * model here to produce them. The watermark is the subject, not the turn
+     * that would normally have written the conversation.
+     */
+    const store = new FileSessionService({rootDir: paths.sessions});
+    const session = await store.getSession({
+      appName: 'marimo',
+      userId: 'local',
+      sessionId,
+    });
+    if (session === undefined) {
+      throw new Error('the session was not created');
+    }
+
+    const events = 10;
+    for (let index = 0; index < events; index += 1) {
+      await store.appendEvent({
+        session,
+        event: {
+          id: `event-${String(index)}`,
+          author: 'user',
+          content: {
+            role: 'user',
+            parts: [{text: `fact ${String(index)} ${'x'.repeat(5_000)}`}],
+          },
+        } as unknown as AdkEvent,
+      });
+    }
+
+    const before = await agent.reviewProgress(profileId, sessionId);
+    expect(before).toEqual({reviewed: 0, total: events});
+
+    /*
+     * The model is not running, so the look finds nothing to propose. That is
+     * the point: the watermark is about what was *read*, not about what was
+     * found, and an ask that failed still moved it — otherwise a failing prompt
+     * would be re-sent on every idle moment.
+     */
+    await agent.reviewMemory(profileId, sessionId);
+    let progress = await agent.reviewProgress(profileId, sessionId);
+    expect(progress.reviewed).toBeGreaterThan(0);
+    // The cap did not mark the rest of the conversation read.
+    expect(progress.reviewed).toBeLessThan(before.total);
+
+    // Successive looks continue where the last stopped, until nothing is left.
+    for (
+      let guard = 0;
+      guard < 10 && progress.reviewed < progress.total;
+      guard += 1
+    ) {
+      const was = progress.reviewed;
+      await agent.reviewMemory(profileId, sessionId);
+      progress = await agent.reviewProgress(profileId, sessionId);
+      expect(progress.reviewed).toBeGreaterThan(was);
+    }
+    expect(progress.reviewed).toBe(progress.total);
+  });
 });
 
 /*
@@ -288,7 +362,7 @@ describe('the catalogue', () => {
     const names = catalog.tools.map((tool) => tool.name);
 
     expect(names).toContain('read_file');
-    expect(names).toContain('spawn_agent');
+    expect(names).toContain('write_file');
     // Every entry has to carry a description, or the settings screen offers a
     // checkbox with nothing beside it.
     expect(catalog.tools.every((tool) => tool.description.length > 10)).toBe(

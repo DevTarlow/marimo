@@ -313,39 +313,57 @@ export interface ReviewRequest {
 }
 
 /**
+ * What one review produced, and how far into the conversation it read.
+ *
+ * `used` travels with the proposals because the caller owns the watermark: only
+ * it knows where this stretch started, and only the pair of numbers together say
+ * where the next look should resume.
+ */
+export interface ReviewResult {
+  proposals: MemoryProposal[];
+  /** How many of the events handed in this look covered. */
+  used: number;
+}
+
+/**
  * Reads a conversation and proposes what is worth remembering.
  *
  * The orchestration is here rather than in the host so the whole thing — the
  * transcript rendering, the prompt, the parse, the filter against memory — can be
  * tested with a function instead of a provider.
  *
- * A failure from the model answers `[]`. A review is something that happens on
- * its own while nobody is watching, so an exception would surface as an
- * unhandled rejection at an idle moment; and there is nothing to tell the user,
- * because nothing happened.
+ * A failure from the model answers no proposals. A review is something that
+ * happens on its own while nobody is watching, so an exception would surface as
+ * an unhandled rejection at an idle moment; and there is nothing to tell the
+ * user, because nothing happened. The stretch still counts as read, because it
+ * was handed to the model — advancing only on success would re-send a failing
+ * prompt on every idle moment.
  */
 export async function runReview(
   request: ReviewRequest,
-): Promise<MemoryProposal[]> {
-  const conversation = renderConversation(request.events);
-  if (conversation.trim().length === 0) {
-    return [];
+): Promise<ReviewResult> {
+  const stretch = renderConversation(request.events);
+  if (stretch.text.trim().length === 0) {
+    return {proposals: [], used: stretch.used};
   }
 
   let answer: string;
   try {
     answer = await request.ask(
-      reviewPrompt(conversation, request.refused ?? []),
+      reviewPrompt(stretch.text, request.refused ?? []),
     );
   } catch {
-    return [];
+    return {proposals: [], used: stretch.used};
   }
 
-  return parseProposals(answer).filter(
-    (proposal) =>
-      isNewProposal(proposal, request.memory) &&
-      !wasRefused(proposal, request.refused ?? []),
-  );
+  return {
+    proposals: parseProposals(answer).filter(
+      (proposal) =>
+        isNewProposal(proposal, request.memory) &&
+        !wasRefused(proposal, request.refused ?? []),
+    ),
+    used: stretch.used,
+  };
 }
 
 /**
@@ -377,6 +395,23 @@ export function wasRefused(
 }
 
 /**
+ * One look's worth of a conversation: the text, and how far it reached.
+ *
+ * `used` is the point of the pair. A review reads a fixed number of characters,
+ * and a conversation longer than that has to be read over several looks — so the
+ * caller needs to know which events this look actually covered, because the
+ * watermark may only move past those. Rendering the tail and then advancing past
+ * the whole slice is how the beginning of a long conversation is marked read
+ * without ever having been sent anywhere.
+ */
+export interface ReviewStretch {
+  /** The conversation text for one look, at most {@link MAX_REVIEW_CHARS}. */
+  text: string;
+  /** How many of the events handed in are covered by `text`. */
+  used: number;
+}
+
+/**
  * The conversation as text for the reviewer.
  *
  * Reasoning parts are left out: they are the model's working, not what was said,
@@ -384,13 +419,23 @@ export function wasRefused(
  * tool calls are left out for the same reason — "the agent read a file" is not a
  * fact about the user.
  *
- * Capped at the tail, because the recent part of a long conversation is where
- * anything worth remembering was said.
+ * Capped at a stretch taken from the *earliest* event it was handed, which is
+ * the earliest not yet reviewed. Taking the tail instead would prefer the most
+ * recent exchange when a backlog is large, and it cannot be made to cover the
+ * conversation: the events it dropped are in front of the watermark, so the next
+ * look would either send them again forever or step over them. A look that
+ * starts where the last one stopped loses nothing, and the calls that drain a
+ * long backlog are spaced by the review cadence rather than run back to back.
  */
-export function renderConversation(events: readonly ReviewEvent[]): string {
+export function renderConversation(
+  events: readonly ReviewEvent[],
+): ReviewStretch {
   const lines: string[] = [];
+  let length = 0;
+  let used = 0;
 
   for (const event of events) {
+    used += 1;
     const text = (event.content?.parts ?? [])
       .filter((part) => part.thought !== true)
       .map((part) => part.text ?? '')
@@ -398,15 +443,25 @@ export function renderConversation(events: readonly ReviewEvent[]): string {
       .join('')
       .trim();
     if (text.length === 0) {
+      // Nothing to review, and nothing for the next look to carry.
       continue;
     }
     const who = event.author === 'user' ? 'USER' : 'AGENT';
-    lines.push(`${who}: ${text}`);
+    const line = `${who}: ${text}`;
+    const added = lines.length === 0 ? line.length : line.length + 2;
+    if (lines.length > 0 && length + added > MAX_REVIEW_CHARS) {
+      /*
+       * The event belongs to the next look, and `used` must not count it or the
+       * watermark would step over text no prompt ever carried. The first line is
+       * taken whatever its size, so a single enormous message still makes
+       * progress instead of being retried forever.
+       */
+      used -= 1;
+      break;
+    }
+    lines.push(line);
+    length += added;
   }
 
-  const joined = lines.join('\n\n');
-  if (joined.length <= MAX_REVIEW_CHARS) {
-    return joined;
-  }
-  return `[earlier conversation omitted]\n\n${joined.slice(joined.length - MAX_REVIEW_CHARS)}`;
+  return {text: lines.join('\n\n'), used};
 }

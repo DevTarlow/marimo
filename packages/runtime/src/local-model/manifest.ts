@@ -16,8 +16,8 @@
  *
  * - **Every engine asset is a GPU build.** There is no CPU asset to choose
  *   between, because this app runs its model on a GPU or reports that it cannot.
- *   A 4.7B model on a CPU is a wait rather than an answer, and shipping the option
- *   would mean shipping a configuration nobody should be in.
+ *   A model this size on a CPU is a wait rather than an answer, and shipping the
+ *   option would mean shipping a configuration nobody should be in.
  * - **A tier is a quantization of one model, not a different model.** Both tiers
  *   share the repository, the revision and the tool-call template; only the file,
  *   the size and the context target differ. That is what makes auto-selection a

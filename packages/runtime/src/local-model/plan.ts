@@ -159,8 +159,8 @@ export function planTier(input: TierPlanInput): TierPlan {
       runnable: false,
       problem:
         'No usable GPU was found. This app runs its model on a graphics card — ' +
-        `${backendName ?? 'a GPU backend'} on this platform — and a 4.7B model on ` +
-        'a processor is a wait rather than an answer.',
+        `${backendName ?? 'a GPU backend'} on this platform — and a model this ` +
+        'size on a processor is a wait rather than an answer.',
     };
   }
 

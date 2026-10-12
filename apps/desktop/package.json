@@ -86,11 +86,7 @@
         "dmg"
       ],
       "category": "public.app-category.utilities",
-      "icon": "assets/marimo-logo.png",
-      "//binaries": "The engine is a native executable inside the bundle, and a hardened runtime refuses to exec one that is not signed. electron-builder signs what this lists, so the model runs from a released build rather than only from a build made on the machine that made it.",
-      "binaries": [
-        "Contents/Resources/local-model/engine/llama-server"
-      ]
+      "icon": "assets/marimo-logo.png"
     }
   },
   "//": "asar is off deliberately. The job runner is this same binary started with ELECTRON_RUN_AS_NODE=1, and in that mode Electron does not patch `fs` to read inside an asar archive \u2014 reading one fails with \"Invalid package\". So a packaged app with asar on has a runner that cannot start, which is the whole of \"jobs run while the app is closed\" broken in every release and working perfectly in development."

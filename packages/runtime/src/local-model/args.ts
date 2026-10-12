@@ -38,9 +38,9 @@ export interface EngineSpec {
  *
  * All of them, always, and there is no CPU value: the app ships GPU engine builds
  * only, and it refuses to start rather than fall back to a processor. A number
- * that could be zero would be a configuration nobody should be in — a 4.7B model
- * on a CPU is a wait rather than an answer — so it is a constant rather than a
- * setting with a wrong default.
+ * that could be zero would be a configuration nobody should be in — a model this
+ * size on a CPU is a wait rather than an answer — so it is a constant rather than
+ * a setting with a wrong default.
  */
 const GPU_LAYERS = 99;
 

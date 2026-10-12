@@ -14,46 +14,7 @@ import type {PendingGate, TranscriptMessage} from '@marimo/protocol';
 import {shouldFollow, shouldOfferJump} from '../scroll.js';
 import {Copy, Markdown} from './Markdown.js';
 
-import type {LiveSubagent, LiveToolCall, LiveTurn} from '../hooks/useAgent.js';
-
-/**
- * A helper agent's work, folded into one group.
- *
- * Closed by default once it has finished, open while it runs: a helper exists to
- * keep detail *out* of the conversation, so unfolding it after the fact would
- * undo the reason it was spawned. While it is working the opposite is true —
- * something that shows nothing for thirty seconds reads as a hang.
- */
-function SubagentGroup({
-  helper,
-  live,
-}: {
-  helper: LiveSubagent;
-  live: boolean;
-}): React.JSX.Element {
-  const running = helper.ok === undefined;
-  const failed = helper.ok === false;
-
-  return (
-    <details
-      className="helper"
-      open={live || failed}
-      data-state={running ? 'running' : failed ? 'failed' : 'ok'}
-    >
-      <summary className="helper-head">
-        <span className="helper-mark" aria-hidden="true">
-          {running ? '…' : failed ? '✕' : '✓'}
-        </span>
-        <span className="helper-name">{helper.name}</span>
-        <span className="helper-task">{helper.task}</span>
-      </summary>
-      {helper.text.length > 0 && <div className="helper-text">{helper.text}</div>}
-      {helper.error !== undefined && (
-        <p className="helper-error">{helper.error}</p>
-      )}
-    </details>
-  );
-}
+import type {LiveToolCall, LiveTurn} from '../hooks/useAgent.js';
 
 /** A call, collapsed to one line, with its result folded away behind it. */
 function ToolCall({call}: {call: LiveToolCall}): React.JSX.Element {
@@ -159,24 +120,7 @@ function Message({message}: {message: TranscriptMessage}): React.JSX.Element {
   }
 
   return (
-    <article
-      className={`message message-${message.role}`}
-      /*
-       * A helper's words are kept visually apart from the agent's. They are in
-       * one conversation because an approval asked by a helper has to be visible
-       * here, and without a mark the summary that follows reads as if the helper
-       * wrote it.
-       */
-      data-subagent={message.subagent ?? undefined}
-    >
-      {message.subagent !== undefined && (
-        <div className="helper-label">
-          <span className="helper-mark" aria-hidden="true">
-            ⤷
-          </span>
-          {message.subagent}
-        </div>
-      )}
+    <article className={`message message-${message.role}`}>
       {message.toolCalls !== undefined && message.toolCalls.length > 0 && (
         <div className="calls">
           {message.toolCalls.map((call) => (
@@ -323,9 +267,6 @@ export function Transcript({
               ))}
             </div>
           )}
-          {live.subagents.map((helper) => (
-            <SubagentGroup key={helper.callId} helper={helper} live={live.running} />
-          ))}
           {live.text.length > 0 && (
             <div className="bubble bubble-answer">
               <Markdown text={live.text} />

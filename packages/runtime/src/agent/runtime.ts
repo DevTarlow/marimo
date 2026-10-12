@@ -136,14 +136,6 @@ export interface AgentRuntimeOptions {
    * what was reachable when the runtime was built.
    */
   mcpServers?: () => readonly McpToolsetSource[];
-  /**
-   * Where a helper agent's words go while it runs.
-   *
-   * Out of band, because a tool call cannot yield into the stream that is
-   * awaiting it. The window draws them as a labelled group inside the turn; the
-   * headless runner passes nothing and simply does not have this view.
-   */
-  onEvent?: (event: AgentUiEvent) => void;
   appName?: string;
   /**
    * The engine the app carries.
@@ -290,11 +282,6 @@ export class AgentRuntime {
        */
       ...(settings.recall.enabled ? {recall: true} : {}),
       /*
-       * The host always builds the helper tool; the profile decides whether
-       * this agent may use it, which is what the pick-list is for.
-       */
-      subagent: true,
-      /*
        * And every service this app wires, named explicitly. A tool the host
        * builds but the catalogue omits can never be granted — the switch for
        * it does not exist — so the two have to be kept in step, and the test
@@ -407,10 +394,16 @@ export class AgentRuntime {
     }
     const host = resolved.host;
 
-    const events = await host.eventsFor(sessionId);
-    const reviewed = events.filter((event) => event.partial !== true).length;
+    /*
+     * The watermark counts final events, so the slice has to be taken from the
+     * same list it was counted against — not from the raw log, where an event
+     * still being written would shift every index after it.
+     */
+    const reviewable = (await host.eventsFor(sessionId)).filter(
+      (event) => event.partial !== true,
+    );
     const from = await this.proposals.reviewedUpTo(sessionId);
-    if (reviewed <= from) {
+    if (reviewable.length <= from) {
       // Nothing new since last time. Not asking is the common case and the
       // reason the watermark exists.
       return [];
@@ -426,9 +419,14 @@ export class AgentRuntime {
     const refused = (await this.proposals.load()).dismissed
       .filter((entry) => entry.profileId === profileId)
       .map((entry) => ({text: entry.text}));
+    /*
+     * Only what has not been read before, and only as much of it as one look
+     * covers. `used` is what the look actually reached, which is what the
+     * watermark may move past: a conversation longer than the cap drains over
+     * successive looks instead of having its beginning marked read unread.
+     */
     const found = await runReview({
-      // Only what has not been read before.
-      events: events.slice(from),
+      events: reviewable.slice(from),
       memory,
       refused,
       ask: async (prompt) => await host.ask(prompt),
@@ -436,8 +434,8 @@ export class AgentRuntime {
 
     const recorded = await this.proposals.record(
       sessionId,
-      reviewed,
-      found.map((proposal) => ({
+      from + found.used,
+      found.proposals.map((proposal) => ({
         sessionId,
         profileId,
         section: proposal.section,
@@ -447,7 +445,7 @@ export class AgentRuntime {
     );
 
     // The ids the store assigned, so the window can act on them.
-    const added = new Set(found.map((proposal) => proposal.text));
+    const added = new Set(found.proposals.map((proposal) => proposal.text));
     return recorded.proposals.filter((proposal) => added.has(proposal.text));
   }
 
@@ -1151,9 +1149,6 @@ export class AgentRuntime {
       ...(services.discordService
         ? {discordService: services.discordService}
         : {}),
-      ...(this.options.onEvent === undefined
-        ? {}
-        : {onSubagentEvent: this.options.onEvent}),
       /*
        * The deletion sync, resolved lazily because the folder to purge from is
        * the one the *service* would have indexed into — and a service is built

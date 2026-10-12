@@ -907,6 +907,46 @@ describe('folders and filing', () => {
   });
 
   /*
+   * An accepted correction either removes the old bullet or says that it could
+   * not. The second half is the one that is invisible without this: the write
+   * succeeds, the new fact is in memory, and the old one is still there too —
+   * which is a contradiction the user believes they just resolved.
+   */
+  it('reports that a correction did remove the old bullet', async () => {
+    const agent = runtime();
+    const session = await agent.createSession(profileId);
+    const proposals = new MemoryProposalStore({file: paths.memoryProposals});
+    const recorded = await proposals.record(session?.id ?? '', 1, [
+      {
+        sessionId: session?.id ?? null,
+        profileId,
+        section: 'About the user',
+        text: 'Their dog is called Sunshine.',
+        reason: 'They corrected the name.',
+        replaces: 'Their dog is called Shadow.',
+      },
+    ]);
+    // The fact being corrected is already in memory, the way the reviewer saw it.
+    await mkdir(join(paths.personMemoryDir, profileId), {recursive: true});
+    await writeFile(
+      join(paths.personMemoryDir, profileId, 'memory.md'),
+      '## About the user\n- Their dog is called Shadow.\n',
+      'utf8',
+    );
+
+    const result = await agent.resolveMemoryProposal(
+      recorded.proposals[0]?.id ?? '',
+      true,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.supersede).toEqual({
+      outcome: 'removed',
+      removed: '- Their dog is called Shadow.',
+    });
+  });
+
+  /*
    * A refusal is remembered, and the memory is not written.
    *
    * Both halves matter and they fail in opposite directions: a refusal that was

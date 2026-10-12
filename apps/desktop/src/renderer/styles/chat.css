@@ -1800,6 +1800,23 @@
   color: var(--text-faint);
 }
 
+/*
+ * The fact a correction would take out.
+ *
+ * Struck through rather than merely quoted, because it is going away if the user
+ * says yes — and the decision they are making is "is that the old wording?",
+ * which a sentence in the same style as the new one does not help them answer.
+ */
+.memory-replaces {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.memory-replaces span {
+  text-decoration: line-through;
+  user-select: text;
+}
+
 .memory-why summary {
   cursor: pointer;
 }

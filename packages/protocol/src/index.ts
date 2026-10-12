@@ -1673,12 +1673,47 @@ export const memoryProposalSchema = z.object({
   text: z.string().trim().min(3).max(400),
   /** Why the model thought it worth keeping, for the user to judge by. */
   reason: z.string().max(200),
+  /**
+   * The existing bullet this fact supersedes, when the reviewer noticed one.
+   *
+   * Optional, and deliberately **not** a version bump. An older build reading
+   * this file treats it as current, strips the field it does not know, and keeps
+   * the proposal — which degrades to appending the fact rather than replacing
+   * the bullet it corrects. Bumping the version instead would make that build
+   * treat the whole file as unreadable and quarantine every proposal the user had
+   * not answered yet, which is a worse trade for the one case of a downgrade.
+   */
+  replaces: z.string().trim().max(400).optional(),
   /** The agent it would be remembered by. */
   profileId: z.string().min(1),
   createdAt: z.string().min(1),
 });
 
 export type MemoryProposal = z.infer<typeof memoryProposalSchema>;
+
+/**
+ * What happened to the bullet an accepted proposal meant to replace.
+ *
+ * Reported rather than assumed, because the failure it names is invisible
+ * otherwise: a proposal carrying `replaces` that matched nothing leaves the old
+ * bullet exactly where it was, so accepting a correction can *add* a contradicting
+ * fact while the user believes the old one is gone. Only the store knows which of
+ * the four outcomes happened, and the window is the only place the person can be
+ * told.
+ *
+ * Not derived from the agent package's own report type even though the two are
+ * the same shape today — the dependency runs one way, and a shared type living in
+ * the wrong package is worse than two fields that a test pins together.
+ */
+export const memorySupersedeSchema = z.object({
+  outcome: z.enum(['none', 'removed', 'absent', 'ambiguous']),
+  /** The bullet that was removed, when one was. */
+  removed: z.string().optional(),
+  /** How many bullets a target matched, when it was not unique. */
+  matches: z.number().int().nonnegative().optional(),
+});
+
+export type MemorySupersede = z.infer<typeof memorySupersedeSchema>;
 
 /**
  * How full an agent's `memory.md` is, and the two sizes that give that meaning.
@@ -2461,7 +2496,18 @@ export interface AgentCallResults {
   };
   'memory.forgetDismissals': {dismissed: DismissedMemory[]};
   'memory.usage': MemoryUsage;
-  'memory.resolve': {ok: boolean; problem?: string};
+  'memory.resolve': {
+    ok: boolean;
+    problem?: string;
+    /**
+     * What became of the bullet the proposal meant to replace.
+     *
+     * Present only when the proposal carried a `replaces` and the write actually
+     * happened — an `absent` or `ambiguous` answer here is the one thing the
+     * person needs, because it means the correction did not take.
+     */
+    supersede?: MemorySupersede;
+  };
   'companion.status': {visible: boolean};
   'companion.setVisible': {visible: boolean};
   'companion.pointer': {ok: boolean};

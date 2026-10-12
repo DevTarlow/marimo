@@ -99,6 +99,8 @@ export interface NewProposal {
   section: string;
   text: string;
   reason: string;
+  /** The existing bullet this fact corrects, when the reviewer noticed one. */
+  replaces?: string;
 }
 
 export class MemoryProposalStore {

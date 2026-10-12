@@ -33,6 +33,7 @@ import {MAIN_AGENT_NAME} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
+import type {SupersedeReport} from '../memory/index.js';
 import {DEFAULT_MAX_CHARS, selectMemory} from '../memory/select.js';
 import type {RecalledBullet} from '../memory/select.js';
 import type {RecallLookup} from '../tools/recall-tools.js';
@@ -905,12 +906,34 @@ export class AgentHost {
     return await this.memory.bytes();
   }
 
-  /** Adds a fact to memory, as if the agent had called `update_memory`. */
-  async remember(section: string, text: string): Promise<void> {
-    // `append` is the default and the right one here: accepting a proposal adds
-    // a line, and a mode that could rewrite a section would let one accepted
-    // suggestion quietly replace everything the agent had learned before it.
-    await this.memory.update({section, content: text, mode: 'append'});
+  /**
+   * Adds a fact to memory, as if the agent had called `update_memory`.
+   *
+   * `append` is still the mode, and deliberately: a mode that could rewrite a
+   * section would let one accepted suggestion quietly replace everything the
+   * agent had learned before it. `replaces` is not that — it names one bullet to
+   * remove, is checked against the section it is in, and reports back whether it
+   * matched anything, so an accepted correction either takes the old fact out or
+   * says that it could not.
+   *
+   * The report is returned rather than swallowed for the same reason: the user
+   * pressed a button believing a fact would be corrected, and "the bullet you
+   * meant was not found" is the only evidence they will get.
+   */
+  async remember(
+    section: string,
+    text: string,
+    replaces?: string,
+  ): Promise<SupersedeReport> {
+    const report = await this.memory.update({
+      section,
+      content: text,
+      mode: 'append',
+      ...(replaces === undefined || replaces.trim().length === 0
+        ? {}
+        : {replaces}),
+    });
+    return report.supersede;
   }
 
   /**

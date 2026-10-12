@@ -112,6 +112,24 @@ export function Memory({
        */
       if (!result.ok) {
         setProblem(result.problem ?? 'That suggestion could not be saved.');
+      } else if (result.supersede?.outcome === 'absent') {
+        /*
+         * The write happened and the correction did not. Said out loud, in the
+         * slot the panel uses for things that need reading, because the person
+         * pressed "Remember" believing a fact would be replaced — and both
+         * versions are now in memory until they go and look.
+         */
+        setProblem(
+          'Remembered, but the fact this was meant to replace was not found, ' +
+            'so the old wording may still be there. Check it and correct it by ' +
+            'hand if so.',
+        );
+      } else if (result.supersede?.outcome === 'ambiguous') {
+        setProblem(
+          `Remembered, but the fact this was meant to replace matched ${
+            result.supersede.matches ?? 0
+          } entries, so none was removed.`,
+        );
       }
       await load();
       onChange?.();
@@ -321,6 +339,18 @@ export function Memory({
         proposals.map((proposal) => (
           <div className="memory-item" key={proposal.id}>
             <p className="memory-text">{proposal.text}</p>
+            {/*
+             * A correction is a different decision from an addition, and it has
+             * to look like one: accepting this removes a fact as well as adding
+             * one, and the person is the only one who knows whether the old
+             * wording is really what they meant.
+             */}
+            {proposal.replaces !== undefined && (
+              <p className="settings-muted memory-replaces">
+                {/* eslint-disable-next-line react/no-unescaped-entities */}
+                This replaces: <span>{proposal.replaces}</span>
+              </p>
+            )}
             {proposal.reason.length > 0 && (
               <details className="memory-why">
                 <summary>Why it suggested this</summary>

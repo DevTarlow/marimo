@@ -49,6 +49,7 @@ import type {
   CompactResult,
   DismissedMemory,
   MemoryProposal,
+  MemorySupersede,
   MemoryUsage,
   TranscriptMessage,
   ProfileCatalog,
@@ -442,6 +443,9 @@ export class AgentRuntime {
         section: proposal.section,
         text: proposal.text,
         reason: proposal.reason,
+        ...(proposal.replaces === undefined
+          ? {}
+          : {replaces: proposal.replaces}),
       })),
     );
 
@@ -522,13 +526,14 @@ export class AgentRuntime {
   async resolveMemoryProposal(
     proposalId: string,
     accept: boolean,
-  ): Promise<{ok: boolean; problem?: string}> {
+  ): Promise<{ok: boolean; problem?: string; supersede?: MemorySupersede}> {
     const file = await this.proposals.load();
     const proposal = file.proposals.find((entry) => entry.id === proposalId);
     if (proposal === undefined) {
       return {ok: false, problem: 'That suggestion is no longer waiting.'};
     }
 
+    let supersede: MemorySupersede | undefined;
     if (accept) {
       /*
        * Built for the conversation that proposed it rather than for whichever
@@ -547,7 +552,18 @@ export class AgentRuntime {
          */
         return {ok: false, problem: result.problem};
       }
-      await result.host.remember(proposal.section, proposal.text);
+      /*
+       * The outcome travels back to the window, and that is not a nicety. A
+       * proposal that carries a correction and matches no existing bullet leaves
+       * the old fact exactly where it was, so the one thing the person needs told
+       * is that the correction did not take — and nothing downstream of this call
+       * can work it out for itself.
+       */
+      supersede = await result.host.remember(
+        proposal.section,
+        proposal.text,
+        proposal.replaces,
+      );
     }
 
     /*
@@ -560,7 +576,7 @@ export class AgentRuntime {
       proposalId,
       accept ? undefined : {profileId: proposal.profileId, text: proposal.text},
     );
-    return {ok: true};
+    return supersede === undefined ? {ok: true} : {ok: true, supersede};
   }
 
   /**

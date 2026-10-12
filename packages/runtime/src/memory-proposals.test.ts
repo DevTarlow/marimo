@@ -65,6 +65,66 @@ describe('the proposal store', () => {
     expect(reopened.proposals).toHaveLength(1);
   });
 
+  /*
+   * `replaces` is what carries a correction from the reviewer all the way to the
+   * moment the user accepts it — the only point at which the old bullet can be
+   * removed. Dropping it in storage would turn every correction into a duplicate
+   * fact, silently, on the next restart.
+   */
+  it('carries the bullet a correction replaces, across a restart', async () => {
+    await store.record('session-1', 4, [
+      proposal({text: 'Uses pnpm now.', replaces: 'Uses npm.'}),
+    ]);
+
+    const reopened = await new MemoryProposalStore({file}).load();
+    expect(reopened.proposals[0]?.replaces).toBe('Uses npm.');
+  });
+
+  it('carries no replaces for an ordinary proposal', async () => {
+    await store.record('session-1', 4, [proposal()]);
+
+    const reopened = await new MemoryProposalStore({file}).load();
+    expect(reopened.proposals[0]).not.toHaveProperty('replaces');
+  });
+
+  /*
+   * The downgrade case, and the reason this document stays at version 2. An older
+   * build parses the file as current, strips the field it does not know, and
+   * keeps the proposal — which degrades to appending rather than replacing. The
+   * alternative, a version bump, would make that build treat the whole file as
+   * unreadable and quarantine everything the user had not answered yet.
+   */
+  it('loads a version 2 file whose proposals have no replaces', async () => {
+    await writeFile(
+      file,
+      `${JSON.stringify(
+        {
+          version: 2,
+          proposals: [
+            {
+              id: 'p1',
+              sessionId: null,
+              section: 'Notes',
+              text: 'Prefers tabs.',
+              reason: 'they said so',
+              profileId: 'profile-1',
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+          reviewed: {},
+          dismissed: [],
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+
+    const loaded = await new MemoryProposalStore({file}).load();
+    expect(loaded.proposals).toHaveLength(1);
+    expect(loaded.proposals[0]?.text).toBe('Prefers tabs.');
+  });
+
   describe('the watermark', () => {
     it('starts at zero for a conversation nobody has reviewed', async () => {
       expect(await store.reviewedUpTo('session-9')).toBe(0);

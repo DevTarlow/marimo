@@ -29,6 +29,7 @@
  */
 import {z} from 'zod';
 
+import {splitMemory} from './memory-store.js';
 import {CANONICAL_SECTIONS, renderSectionGuide} from './sections.js';
 
 /** One thing the agent would remember, if the user agrees. */
@@ -39,6 +40,17 @@ export interface MemoryProposal {
   text: string;
   /** Why it is worth keeping, in the model's words, for the user to judge by. */
   reason: string;
+  /**
+   * The existing bullet this one supersedes, when it is a correction.
+   *
+   * Absent for the ordinary case, which is a new fact. Present when the
+   * reviewer recognised that what it is proposing replaces something already
+   * remembered — and it is worth carrying all the way to the moment the user
+   * accepts, because that is the only point at which the old bullet can be
+   * removed cleanly. Appending instead leaves both versions in memory, which is
+   * the state the memory skill spends a paragraph warning against.
+   */
+  replaces?: string;
 }
 
 /** The most proposals one review may produce. */
@@ -46,6 +58,19 @@ export const MAX_PROPOSALS = 5;
 
 /** How much of a conversation one review may read. */
 export const MAX_REVIEW_CHARS = 24_000;
+
+/**
+ * How many bullets of existing memory the reviewer is shown.
+ *
+ * Not the whole file: memory has a 64 KiB cap and the reviewer's job is
+ * recognition, not recall. Forty is more than one conversation is likely to
+ * touch, and the count is reported so the prompt does not read as if it were
+ * everything.
+ */
+export const MAX_EXISTING_BULLETS = 40;
+
+/** How many characters of existing bullets the reviewer is shown. */
+export const MAX_EXISTING_CHARS = 3_000;
 
 /**
  * The longest section name a proposal may carry.
@@ -83,6 +108,15 @@ const proposalSchema = z.object({
   section: z.string().trim().min(1).max(MAX_SECTION_CHARS),
   text: z.string().trim().min(3).max(400),
   reason: z.string().trim().max(200),
+  /*
+   * The existing bullet to replace, when this is a correction.
+   *
+   * Optional rather than required-with-an-empty-default, because the common case
+   * is a new fact and a required field would make every proposal carry a
+   * meaningless empty string into the queue — where a reader cannot tell "no
+   * correction" from "a correction whose target was lost".
+   */
+  replaces: z.string().trim().max(400).optional(),
 });
 
 const answerSchema = z.object({
@@ -105,7 +139,9 @@ const answerSchema = z.object({
 export function reviewPrompt(
   conversation: string,
   refused: readonly RefusedFact[] = [],
+  memory = '',
 ): string {
+  const existing = existingMemoryList(memory);
   return [
     'You are reviewing a conversation between a user and their desktop agent,',
     "to find facts worth keeping in the agent's long-term memory.",
@@ -121,15 +157,7 @@ export function reviewPrompt(
     '- something they asked the agent to always or never do',
     '',
     'Do not propose:',
-    /*
-     * "what the user already knows" rather than "the memory below", which is what
-     * this said and was not true: the memory file is never put in this prompt.
-     * The filter against it is code (`isNewProposal`), and the prompt names the
-     * rule only because a model told what *not* to send produces less to filter.
-     * A sentence pointing at a section that is not there is the kind of small lie
-     * that makes a model invent an answer to match it.
-     */
-    '- anything the user already knows, or that is already in the agent memory',
+    '- anything the user already knows, or that is already in the memory below',
     '- the content of the task itself, or what the agent did to complete it',
     '- pleasantries, or that the conversation happened at all',
     '- anything you inferred rather than were told',
@@ -148,6 +176,29 @@ export function reviewPrompt(
           'again, and do not propose the same fact in different words:',
           ...refused.map((entry) => `- ${entry.text}`),
         ]),
+    ...(existing.text.length === 0
+      ? []
+      : [
+          '',
+          /*
+           * The list is here so a *correction* can be recognised as one. The
+           * filter that stops a repeat is code (`isNewProposal`), and the prompt
+           * names the rule only because a model told what not to send produces
+           * less to filter — but no substring test can tell that "we use pnpm
+           * now" supersedes "we use npm", and only the model can. Saying how many
+           * were left out matters: a model told it is looking at all of memory
+           * would conclude a fact it cannot see does not exist.
+           */
+          'Memory already holds the bullets below. Do not propose any of them',
+          'again. If what you are proposing *replaces* one of them — a preference',
+          'they changed, a fact they corrected — set "replaces" to that bullet',
+          'exactly as it appears here, and leave "replaces" as "" for a new fact.' +
+            (existing.hidden > 0
+              ? ` (${String(existing.hidden)} further bullets are not shown; if none` +
+                ' of the ones above is the fact you mean, propose yours as new.)'
+              : ''),
+          existing.text,
+        ]),
     '',
     'Put each proposal in the layer it belongs in:',
     renderSectionGuide(),
@@ -158,13 +209,62 @@ export function reviewPrompt(
     'Answer with JSON only, no prose around it:',
     '{"proposals":[{"section":"' +
       PROPOSAL_EXAMPLE_SECTION +
-      '","text":"...","reason":"..."}]}',
+      '","text":"...","reason":"...","replaces":""}]}',
     '',
     'At most 5. An empty list is the right answer for most conversations.',
     '',
     '--- conversation ---',
     conversation,
   ].join('\n');
+}
+
+/**
+ * The bullets memory holds, as prompt text, with what was left out.
+ *
+ * Reads the same document the store writes — the merged one — so a fact the user
+ * can see in `read_memory` is a fact the reviewer can be told about. When the cap
+ * bites, the count travels with the text rather than being dropped: a model that
+ * believes it has seen all of memory concludes that a fact it cannot find is not
+ * there, and proposes the duplicate this whole block exists to prevent.
+ */
+export function existingMemoryList(memory: string): {
+  text: string;
+  shown: number;
+  hidden: number;
+} {
+  const bullets: Array<{section: string; text: string}> = [];
+  for (const block of splitMemory(memory)) {
+    const section = block.heading ?? '';
+    for (const line of block.lines) {
+      const match = /^\s*[-*]\s+(.+?)\s*$/u.exec(line);
+      const text = match?.[1] ?? '';
+      if (text.length > 0) {
+        bullets.push({section, text});
+      }
+    }
+  }
+  if (bullets.length === 0) {
+    return {text: '', shown: 0, hidden: 0};
+  }
+
+  const lines: string[] = [];
+  let used = 0;
+  for (const bullet of bullets.slice(0, MAX_EXISTING_BULLETS)) {
+    const line = bullet.section.length > 0
+      ? `- [${bullet.section}] ${bullet.text}`
+      : `- ${bullet.text}`;
+    if (used + line.length + 1 > MAX_EXISTING_CHARS) {
+      break;
+    }
+    used += line.length + 1;
+    lines.push(line);
+  }
+
+  return {
+    text: lines.join('\n'),
+    shown: lines.length,
+    hidden: bullets.length - lines.length,
+  };
 }
 
 /**
@@ -192,7 +292,29 @@ export function parseProposals(answer: string): MemoryProposal[] {
   }
 
   const result = answerSchema.safeParse(parsed);
-  return result.success ? result.data.proposals : [];
+  return result.success ? result.data.proposals.map(withoutEmptyReplaces) : [];
+}
+
+/**
+ * Drops a `replaces` the model left as an empty string.
+ *
+ * The JSON example shows the key with `""` because the alternative is an example
+ * that omits it, and a model copies the shape of the example — so the empty
+ * string is what "no correction" looks like on the wire. Downstream it has to be
+ * absence rather than emptiness: `undefined` is "this is a new fact", and `''`
+ * would reach `removeTarget` and be reported as a correction that matched
+ * nothing, which is a different sentence to the user.
+ */
+function withoutEmptyReplaces(proposal: {
+  section: string;
+  text: string;
+  reason: string;
+  replaces?: string | undefined;
+}): MemoryProposal {
+  const {replaces, ...rest} = proposal;
+  return replaces === undefined || replaces.length === 0
+    ? rest
+    : {...rest, replaces};
 }
 
 /**
@@ -261,6 +383,20 @@ export function isNewProposal(
   const target = normalise(proposal.text);
   if (target.length === 0) {
     return false;
+  }
+  /*
+   * A correction is not a repeat. The bullet it resembles is the one it removes
+   * when the user accepts, so filtering it here would silently turn "we use pnpm
+   * now, not npm" into no proposal at all — and the contradiction the user was
+   * correcting would stay in memory forever.
+   *
+   * The cost is that a model could name a `replaces` to dodge this filter. That
+   * is visible rather than silent: the accept path reports whether the target was
+   * actually found, and a target that matches nothing means the old bullet is
+   * still there, which is the sentence the user reads.
+   */
+  if ((proposal.replaces ?? '').trim().length > 0) {
+    return true;
   }
   const haystack = normalise(existing);
   if (haystack.includes(target)) {
@@ -350,7 +486,7 @@ export async function runReview(
   let answer: string;
   try {
     answer = await request.ask(
-      reviewPrompt(stretch.text, request.refused ?? []),
+      reviewPrompt(stretch.text, request.refused ?? [], request.memory),
     );
   } catch {
     return {proposals: [], used: stretch.used};

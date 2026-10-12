@@ -9,7 +9,9 @@
 import {describe, expect, it} from 'vitest';
 
 import {
+  existingMemoryList,
   isNewProposal,
+  MAX_EXISTING_BULLETS,
   MAX_PROPOSALS,
   MAX_REVIEW_CHARS,
   parseProposals,
@@ -23,11 +25,70 @@ function answer(proposals: unknown): string {
   return JSON.stringify({proposals});
 }
 
+/** Memory in the shape the store writes it. */
+function memoryText(): string {
+  return [
+    '## About the user',
+    '- Has a dog',
+    '',
+    '## Preferences and tone',
+    '- We use npm',
+    '',
+  ].join('\n');
+}
+
 describe('the prompt', () => {
   it('carries the conversation', () => {
     expect(reviewPrompt('USER: I prefer tabs')).toContain(
       'USER: I prefer tabs',
     );
+  });
+
+  /*
+   * The reviewer is shown what memory already holds so a *correction* can be
+   * recognised as one. No substring test can tell that "we use pnpm now"
+   * supersedes "we use npm" — only the model can, and only if it can see the
+   * bullet it is superseding.
+   */
+  it('shows the reviewer the bullets memory already holds', () => {
+    const prompt = reviewPrompt('USER: we use pnpm now', [], memoryText());
+
+    expect(prompt).toContain('- [Preferences and tone] We use npm');
+    expect(prompt).toContain('- [About the user] Has a dog');
+    expect(prompt).toContain('set "replaces" to that bullet');
+  });
+
+  it('says nothing about existing bullets when memory is empty', () => {
+    const prompt = reviewPrompt('anything');
+
+    expect(prompt).not.toContain('Memory already holds');
+    expect(prompt).not.toContain('further bullets are not shown');
+  });
+
+  /*
+   * The count matters more than the list. A model told it is looking at all of
+   * memory concludes that a fact it cannot see is not there, and proposes the
+   * duplicate the block exists to prevent.
+   */
+  it('says how many bullets it is not showing', () => {
+    const many = Array.from(
+      {length: MAX_EXISTING_BULLETS + 3},
+      (_value, index) => `- fact number ${String(index)}`,
+    ).join('\n');
+    const prompt = reviewPrompt('anything', [], `## Notes\n${many}\n`);
+
+    expect(prompt).toContain('3 further bullets are not shown');
+  });
+
+  it('bounds how much of memory it puts in the prompt', () => {
+    const many = Array.from(
+      {length: 200},
+      (_value, index) => `- ${String(index)} ${'x'.repeat(200)}`,
+    ).join('\n');
+    const prompt = reviewPrompt('anything', [], `## Notes\n${many}\n`);
+
+    expect(prompt.length).toBeLessThan(MAX_REVIEW_CHARS + 8_000);
+    expect(prompt).toContain('further bullets are not shown');
   });
 
   /*
@@ -71,8 +132,63 @@ describe('the prompt', () => {
   });
 });
 
-describe('reading the answer', () => {
-  it('reads a plain answer', () => {
+/*
+ * What the reviewer is shown of memory, as data.
+ *
+ * The arithmetic is the part worth pinning rather than the wording: `hidden` is
+ * what stops the prompt reading as if it were all of memory, and an off-by-one
+ * there is a model confidently proposing a duplicate of the one bullet it could
+ * not see.
+ */
+describe('the bullets the reviewer is shown', () => {
+  it('is empty for memory with no bullets', () => {
+    expect(existingMemoryList('')).toEqual({text: '', shown: 0, hidden: 0});
+    expect(existingMemoryList('# Title\n\n## Notes\n')).toEqual({
+      text: '',
+      shown: 0,
+      hidden: 0,
+    });
+  });
+
+  it('names the layer each bullet is in', () => {
+    const list = existingMemoryList(memoryText());
+    expect(list.text).toBe(
+      '- [About the user] Has a dog\n- [Preferences and tone] We use npm',
+    );
+    expect(list.shown).toBe(2);
+    expect(list.hidden).toBe(0);
+  });
+
+  it('counts what it did not show', () => {
+    const many = Array.from(
+      {length: MAX_EXISTING_BULLETS + 2},
+      (_value, index) => `- fact ${String(index)}`,
+    ).join('\n');
+    const list = existingMemoryList(`## Notes\n${many}\n`);
+
+    expect(list.shown).toBe(MAX_EXISTING_BULLETS);
+    expect(list.hidden).toBe(2);
+  });
+
+  it('stops on the character budget as well as the count', () => {
+    const long = Array.from(
+      {length: 40},
+      () => `- ${'x'.repeat(400)}`,
+    ).join('\n');
+    const list = existingMemoryList(`## Notes\n${long}\n`);
+
+    expect(list.shown).toBeGreaterThan(0);
+    expect(list.shown).toBeLessThan(MAX_EXISTING_BULLETS);
+    expect(list.hidden).toBe(40 - list.shown);
+  });
+
+  it('counts a bullet under a heading the app never named', () => {
+    const list = existingMemoryList('## Recipes I like\n- Miso soup\n');
+    expect(list.text).toBe('- [Recipes I like] Miso soup');
+  });
+});
+
+describe('reading the answer', () => {  it('reads a plain answer', () => {
     const proposals = parseProposals(
       answer([
         {section: 'Notes', text: 'Prefers tabs.', reason: 'they said so'},
@@ -81,6 +197,52 @@ describe('reading the answer', () => {
     expect(proposals).toEqual([
       {section: 'Notes', text: 'Prefers tabs.', reason: 'they said so'},
     ]);
+  });
+
+  it('reads a correction, and keeps what it replaces', () => {
+    const proposals = parseProposals(
+      answer([
+        {
+          section: 'Preferences and tone',
+          text: 'They use pnpm now.',
+          reason: 'they corrected it',
+          replaces: 'They use npm.',
+        },
+      ]),
+    );
+
+    expect(proposals).toEqual([
+      {
+        section: 'Preferences and tone',
+        text: 'They use pnpm now.',
+        reason: 'they corrected it',
+        replaces: 'They use npm.',
+      },
+    ]);
+  });
+
+  /*
+   * The example in the prompt shows `"replaces":""`, so that is what a model
+   * copies for an ordinary fact. Downstream it has to be *absence*: an empty
+   * string would reach the store as a correction whose target is nothing, and be
+   * reported to the user as one that matched nothing.
+   */
+  it('turns an empty replaces into no replaces at all', () => {
+    const proposals = parseProposals(
+      answer([
+        {
+          section: 'Notes',
+          text: 'Prefers tabs.',
+          reason: 'they said so',
+          replaces: '',
+        },
+      ]),
+    );
+
+    expect(proposals).toEqual([
+      {section: 'Notes', text: 'Prefers tabs.', reason: 'they said so'},
+    ]);
+    expect(proposals[0]).not.toHaveProperty('replaces');
   });
 
   it('reads an empty list', () => {
@@ -204,6 +366,37 @@ describe('whether a fact is already known', () => {
 
   it('is new against empty memory', () => {
     expect(isNewProposal(proposal, '')).toBe(true);
+  });
+
+  /*
+   * The correction path, and the reason `isNewProposal` had to learn about it:
+   * "we use pnpm now" is textually nothing like "we use npm", so the substring
+   * filter would let it through anyway — but a correction that *is* worded
+   * closely, like "we use npm, not yarn" against "we use npm", would be filtered
+   * as a repeat, and the correction would silently never be proposed.
+   */
+  it('is new when it is a correction, even of a fact memory already holds', () => {
+    const correction = {
+      section: 'Preferences and tone',
+      text: 'We use npm',
+      reason: 'they corrected it',
+      replaces: 'We use npm',
+    };
+
+    expect(isNewProposal(correction, '- We use npm')).toBe(true);
+  });
+
+  it('treats an empty replaces as no correction at all', () => {
+    // The prompt's JSON example shows `"replaces":""`, and a model that copies
+    // it must not be read as claiming a correction with no target.
+    const echoed = {
+      section: 'Preferences and tone',
+      text: 'Prefers tabs over spaces.',
+      reason: 'stated',
+      replaces: '   ',
+    };
+
+    expect(isNewProposal(echoed, '- Prefers tabs over spaces.')).toBe(false);
   });
 
   it('is not new when the memory already says it', () => {

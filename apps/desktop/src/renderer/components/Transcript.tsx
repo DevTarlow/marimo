@@ -90,7 +90,28 @@ function ApprovalCard({
   );
 }
 
-function Message({message}: {message: TranscriptMessage}): React.JSX.Element {
+function Message({
+  message,
+  onFeedback,
+}: {
+  message: TranscriptMessage;
+  onFeedback?: (
+    messageId: string,
+    excerpt: string,
+    correction?: string,
+  ) => Promise<boolean>;
+}): React.JSX.Element {
+  /**
+   * Whether the correction box is open, and what has been typed into it.
+   *
+   * Local to the message rather than lifted: two answers on screen can be judged
+   * at once in principle, and a single piece of state in the transcript would
+   * make opening the second close the first.
+   */
+  const [correcting, setCorrecting] = useState(false);
+  const [correction, setCorrection] = useState('');
+  const [noted, setNoted] = useState(false);
+
   /*
    * What a compaction wrote, in place of the messages it replaced. Drawn as its
    * own thing rather than as a user's bubble — the words are the model's, and the
@@ -134,7 +155,76 @@ function Message({message}: {message: TranscriptMessage}): React.JSX.Element {
             <Markdown text={message.text} />
             <div className="bubble-actions">
               <Copy text={message.text} what="answer" />
+              {/*
+               * The one place the user can say an answer was wrong. Offered only
+               * on a stored message and never on the live one: a turn still
+               * arriving is not one to judge, and the live bubble carries a
+               * turn id rather than the message id this records against.
+               */}
+              {onFeedback !== undefined && !noted && (
+                <button
+                  type="button"
+                  className="button button-quiet bubble-note"
+                  onClick={() => {
+                    setCorrecting((open) => !open);
+                  }}
+                >
+                  Not quite
+                </button>
+              )}
+              {noted && (
+                <span className="bubble-noted" role="status">
+                  Noted
+                </span>
+              )}
             </div>
+            {correcting && onFeedback !== undefined && (
+              <form
+                className="bubble-correction"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void onFeedback(
+                    message.id,
+                    message.text,
+                    correction,
+                  ).then((ok) => {
+                    if (ok) {
+                      setNoted(true);
+                      setCorrecting(false);
+                      setCorrection('');
+                    }
+                  });
+                }}
+              >
+                <label htmlFor={`correction-${message.id}`}>
+                  What was wrong, or what is right instead?
+                </label>
+                <div className="bubble-correction-row">
+                  <input
+                    id={`correction-${message.id}`}
+                    type="text"
+                    value={correction}
+                    maxLength={400}
+                    placeholder="Optional — the agent will read this next time"
+                    onChange={(event) => {
+                      setCorrection(event.target.value);
+                    }}
+                  />
+                  <button type="submit" className="button button-primary button-small">
+                    Send
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-quiet button-small"
+                    onClick={() => {
+                      setCorrecting(false);
+                    }}
+                  >
+                    Never mind
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         ) : (
           <div className="bubble">{message.text}</div>
@@ -153,6 +243,7 @@ export function Transcript({
   live,
   pending,
   onDecide,
+  onFeedback,
   busy,
 }: {
   messages: TranscriptMessage[];
@@ -165,6 +256,18 @@ export function Transcript({
   live: LiveTurn | null;
   pending: PendingGate[];
   onDecide: (callId: string, confirmed: boolean) => void;
+  /**
+   * Records that an answer was wrong. Absent in a caller with nowhere to put it.
+   *
+   * Optional rather than required because the transcript is also drawn in tests
+   * and in states where the agent is not answering — and a prop the component
+   * cannot do without would make every one of those carry a stub.
+   */
+  onFeedback?: (
+    messageId: string,
+    excerpt: string,
+    correction?: string,
+  ) => Promise<boolean>;
   busy: boolean;
 }): React.JSX.Element {
   const empty =
@@ -249,7 +352,11 @@ export function Transcript({
       )}
 
       {messages.map((message) => (
-        <Message key={message.id} message={message} />
+        <Message
+          key={message.id}
+          message={message}
+          {...(onFeedback === undefined ? {} : {onFeedback})}
+        />
       ))}
 
       {outbox !== null && (

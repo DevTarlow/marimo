@@ -48,6 +48,7 @@ import type {
   CatalogEntry,
   CompactResult,
   DismissedMemory,
+  FeedbackEntry,
   MemoryProposal,
   MemorySupersede,
   MemoryUsage,
@@ -65,6 +66,7 @@ import {reviewDelay} from '@marimo/agent';
 
 import type {AppPaths} from '../paths.js';
 import {ProfileStore} from '../profiles.js';
+import {FeedbackStore} from '../feedback.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
 import {SettingsStore} from '../settings.js';
 import {SkillStore} from '../skills.js';
@@ -178,6 +180,8 @@ export class AgentRuntime {
   private readonly skillStore: SkillStore;
   /** The agent's suggestions, waiting for an answer. */
   private readonly proposals: MemoryProposalStore;
+  /** What the user said about the agent's own answers. */
+  private readonly feedbackStore: FeedbackStore;
   private readonly hosts = new Map<string, AgentHost>();
   /** The configuration each host was last built with, so changes are noticed. */
   private readonly applied = new Map<string, string>();
@@ -245,6 +249,7 @@ export class AgentRuntime {
     this.proposals = new MemoryProposalStore({
       file: options.paths.memoryProposals,
     });
+    this.feedbackStore = new FeedbackStore({file: options.paths.feedback});
   }
 
   /** The settings as they are on disk right now. */
@@ -422,6 +427,14 @@ export class AgentRuntime {
       .filter((entry) => entry.profileId === profileId)
       .map((entry) => ({text: entry.text}));
     /*
+     * And what the user said about the agent's own answers. Newest last, and read
+     * from this profile's entries only: one agent being told it was wrong about a
+     * deployment is not a fact about the other one.
+     */
+    const corrections = (await this.feedbackStore.forProfile(profileId)).map(
+      (entry) => ({excerpt: entry.excerpt, text: entry.correction}),
+    );
+    /*
      * Only what has not been read before, and only as much of it as one look
      * covers. `used` is what the look actually reached, which is what the
      * watermark may move past: a conversation longer than the cap drains over
@@ -431,6 +444,7 @@ export class AgentRuntime {
       events: reviewable.slice(from),
       memory,
       refused,
+      corrections,
       ask: async (prompt) => await host.ask(prompt),
     });
 
@@ -586,14 +600,62 @@ export class AgentRuntime {
    * the whole list and lets the caller group it: the dialog shows how many
    * judgements are being carried, and that is a number about the app's behaviour
    * rather than about one agent.
-   */
-  async dismissedMemory(): Promise<DismissedMemory[]> {
+   */  async dismissedMemory(): Promise<DismissedMemory[]> {
     return (await this.proposals.load()).dismissed;
   }
 
   /** Forgets every refusal, so the reviewer may propose them again. */
   async forgetDismissedMemory(): Promise<DismissedMemory[]> {
     return (await this.proposals.clearDismissed()).dismissed;
+  }
+
+  /**
+   * Records that an answer was wrong, and what was right instead.
+   *
+   * Nothing is written to memory here and nothing is said back to the model: the
+   * transcript is left exactly as it was, because a correction is a note *about*
+   * a conversation rather than a turn in it. What it changes is the next review,
+   * which reads it — and the review still only proposes, so the fact reaches
+   * memory through the same human answer as everything else.
+   *
+   * The profile is the *active* one rather than the conversation's owner, and the
+   * window is what resolves that: the correction is made from an open
+   * conversation in the window's current agent, and a caller that could not name
+   * one would be guessing.
+   */
+  async recordFeedback(params: {
+    sessionId: string;
+    messageId: string;
+    excerpt: string;
+    correction?: string;
+  }): Promise<FeedbackEntry> {
+    const profile = await this.profileStore.activeProfile();
+    const file = await this.feedbackStore.record({
+      profileId: profile.id,
+      sessionId: params.sessionId,
+      messageId: params.messageId,
+      excerpt: params.excerpt,
+      ...(params.correction === undefined
+        ? {}
+        : {correction: params.correction}),
+    });
+    // The entry just written, newest last, so the caller can acknowledge one
+    // rather than the whole document.
+    const last = file.entries[file.entries.length - 1];
+    if (last === undefined) {
+      throw new Error('The correction was not stored.');
+    }
+    return last;
+  }
+
+  /** Every correction on record, newest last. */
+  async feedback(): Promise<FeedbackEntry[]> {
+    return (await this.feedbackStore.load()).entries;
+  }
+
+  /** Forgets them all, so the reviewer stops being told about them. */
+  async clearFeedback(): Promise<FeedbackEntry[]> {
+    return (await this.feedbackStore.clear()).entries;
   }
 
   /**

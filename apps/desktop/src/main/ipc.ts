@@ -328,6 +328,41 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     'memory.resolve': async (params) =>
       await agent().resolveMemoryProposal(params.proposalId, params.accept),
 
+    'memory.feedback': async (params) => {
+      try {
+        await agent().recordFeedback({
+          sessionId: params.sessionId,
+          messageId: params.messageId,
+          excerpt: params.excerpt,
+          ...(params.correction === undefined
+            ? {}
+            : {correction: params.correction}),
+        });
+        return {ok: true};
+      } catch (error) {
+        /*
+         * Reported rather than thrown. This runs when somebody presses a button
+         * on a message, and an unhandled rejection there is a click that does
+         * nothing with no explanation anywhere the user can see.
+         */
+        return {
+          ok: false,
+          problem:
+            error instanceof Error
+              ? error.message
+              : 'That could not be recorded.',
+        };
+      }
+    },
+
+    'memory.feedback.list': async () => ({
+      entries: await agent().feedback(),
+    }),
+
+    'memory.feedback.clear': async () => ({
+      entries: await agent().clearFeedback(),
+    }),
+
     'mcp.setSecret': async (params) => {
       await agent().setMcpSecret(
         params.serverId,

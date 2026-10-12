@@ -1716,6 +1716,49 @@ export const memorySupersedeSchema = z.object({
 export type MemorySupersede = z.infer<typeof memorySupersedeSchema>;
 
 /**
+ * One answer the user said was wrong.
+ *
+ * The one thing in this app that is neither a preference nor a suggested fact:
+ * it is a judgement about something the agent *said*, and until this existed
+ * there was nowhere for it to go. A memory proposal's refusal is a judgement
+ * about a suggestion and deliberately does not silence the agent's own
+ * `update_memory`; "How to talk to me" is the user writing rules for themselves.
+ * Neither of them records that an answer was wrong.
+ *
+ * The excerpt is bounded because it ends up in a prompt, and a stored answer can
+ * be arbitrarily long.
+ */
+export const feedbackEntrySchema = z.object({
+  id: z.string().min(1),
+  profileId: z.string().min(1),
+  /** The conversation it was said in, so a reader can go and look. */
+  sessionId: z.string().min(1),
+  /** The message that was wrong, for a reference the user can recognise. */
+  messageId: z.string().min(1),
+  /** What the agent said, capped: enough to recognise, not enough to re-read. */
+  excerpt: z.string().max(400),
+  /** What the user said was right instead, when they said anything. */
+  correction: z.string().max(400),
+  createdAt: z.string().min(1),
+});
+
+export type FeedbackEntry = z.infer<typeof feedbackEntrySchema>;
+
+/** How many corrections are kept, newest last. */
+export const MAX_FEEDBACK_ENTRIES = 200;
+
+export const feedbackFileSchema = z.object({
+  version: z.literal(1),
+  entries: z.array(feedbackEntrySchema),
+});
+
+export type FeedbackFile = z.infer<typeof feedbackFileSchema>;
+
+export function emptyFeedbackFile(): FeedbackFile {
+  return {version: 1, entries: []};
+}
+
+/**
  * How full an agent's `memory.md` is, and the two sizes that give that meaning.
  *
  * All three numbers travel together because none of them is useful alone: a byte
@@ -2368,6 +2411,26 @@ export const agentCallSchemas = {
     proposalId: z.string().min(1),
     accept: z.boolean(),
   }),
+  /*
+   * "That answer was wrong."
+   *
+   * Its own call rather than a field on a chat message, because it is not part of
+   * the conversation: nothing is written to the transcript, nothing is said back,
+   * and the agent is not interrupted. It is a note the user leaves about an
+   * answer, and the next review reads it.
+   */
+  'memory.feedback': z.object({
+    sessionId: z.string().min(1),
+    messageId: z.string().min(1),
+    /** What the agent said, as the window has it on screen. */
+    excerpt: z.string().max(400),
+    /** What was right instead, when they typed anything. */
+    correction: z.string().max(400).optional(),
+  }),
+  /** Every correction on record, newest last. */
+  'memory.feedback.list': z.object({}),
+  /** Forgets them all, so the reviewer stops being told about them. */
+  'memory.feedback.clear': z.object({}),
 
   /* Whether jobs run while the app is closed. */
   'service.status': z.object({}),
@@ -2508,6 +2571,9 @@ export interface AgentCallResults {
      */
     supersede?: MemorySupersede;
   };
+  'memory.feedback': {ok: boolean; problem?: string};
+  'memory.feedback.list': {entries: FeedbackEntry[]};
+  'memory.feedback.clear': {entries: FeedbackEntry[]};
   'companion.status': {visible: boolean};
   'companion.setVisible': {visible: boolean};
   'companion.pointer': {ok: boolean};

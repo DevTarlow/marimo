@@ -846,6 +846,26 @@ export class AgentService {
     return await this.runtime.dismissedMemory();
   }
 
+  /** Records that an answer was wrong, and what was right instead. */
+  async recordFeedback(params: {
+    sessionId: string;
+    messageId: string;
+    excerpt: string;
+    correction?: string;
+  }) {
+    return await this.runtime.recordFeedback(params);
+  }
+
+  /** Every correction on record, newest last. */
+  async feedback() {
+    return await this.runtime.feedback();
+  }
+
+  /** Forgets them all, so the reviewer stops being told about them. */
+  async clearFeedback() {
+    return await this.runtime.clearFeedback();
+  }
+
   /** Forgets every refusal, so the reviewer may propose them again. */
   async forgetDismissedMemory() {
     return await this.runtime.forgetDismissedMemory();

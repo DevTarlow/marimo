@@ -61,6 +61,15 @@ export interface AppPaths {
    */
   personMemoryDir: string;
   /**
+   * What the user told the app about its own answers.
+   *
+   * "That was wrong" has nowhere else to go: a memory proposal's refusal is a
+   * judgement about a *suggestion*, and it deliberately does not silence the
+   * agent's own `update_memory`. This is the record of the answers themselves,
+   * which is what the next review reads so it stops heading the same way.
+   */
+  feedback: string;
+  /**
    * Where a running app says so.
    *
    * The headless runner reads it to answer one question: is the app already
@@ -102,6 +111,7 @@ export function resolveAppPaths(userData: string): AppPaths {
     jobs: join(userData, 'jobs.json'),
     memoryProposals: join(userData, 'memory-proposals.json'),
     personMemoryDir: join(userData, 'memory'),
+    feedback: join(userData, 'feedback.json'),
     appLock: join(userData, 'app.lock'),
     skills: join(userData, 'skills.json'),
     defaultWorkspace: homedir(),

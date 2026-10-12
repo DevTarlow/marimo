@@ -321,6 +321,57 @@ describe('AgentRuntime', () => {
     }
     expect(progress.reviewed).toBe(progress.total);
   });
+
+  /*
+   * "That answer was wrong", the one judgement that had nowhere to go.
+   *
+   * The two properties that matter are that it persists — the whole point is
+   * that the *next* review reads it, which may be in another process after a
+   * restart — and that it is scoped to the agent that gave the answer.
+   */
+  describe('what the user said about an answer', () => {
+    it('records one against the active agent, and lists it', async () => {
+      const agent = runtime();
+      const session = await agent.createSession(profileId);
+
+      const entry = await agent.recordFeedback({
+        sessionId: session?.id ?? '',
+        messageId: 'message-1',
+        excerpt: 'The parser lives in alpha.',
+        correction: 'No, it moved to beta.',
+      });
+
+      expect(entry.profileId).toBe(profileId);
+      expect(entry.correction).toBe('No, it moved to beta.');
+      expect(await agent.feedback()).toHaveLength(1);
+    });
+
+    it('survives a restart, which is the whole point of storing it', async () => {
+      const session = await runtime().createSession(profileId);
+      await runtime().recordFeedback({
+        sessionId: session?.id ?? '',
+        messageId: 'message-1',
+        excerpt: 'Something wrong.',
+      });
+
+      const reopened = await runtime().feedback();
+      expect(reopened).toHaveLength(1);
+      expect(reopened[0]?.excerpt).toBe('Something wrong.');
+    });
+
+    it('forgets them all on request', async () => {
+      const agent = runtime();
+      const session = await agent.createSession(profileId);
+      await agent.recordFeedback({
+        sessionId: session?.id ?? '',
+        messageId: 'message-1',
+        excerpt: 'Something wrong.',
+      });
+
+      expect(await agent.clearFeedback()).toEqual([]);
+      expect(await agent.feedback()).toEqual([]);
+    });
+  });
 });
 
 /*

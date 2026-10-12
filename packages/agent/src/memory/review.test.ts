@@ -188,6 +188,62 @@ describe('the bullets the reviewer is shown', () => {
   });
 });
 
+/*
+ * What the user said about the agent's own answers.
+ *
+ * This is the strongest evidence the prompt ever gets — the person has already
+ * done the work of saying what is true — and it is a different judgement from a
+ * refusal, which is why it is a block of its own rather than more refusals.
+ */
+describe('corrections the user made', () => {
+  it('names what was said and what was right instead', () => {
+    const prompt = reviewPrompt('USER: anything', [], '', [
+      {excerpt: 'The parser lives in alpha.', text: 'No, it moved to beta.'},
+    ]);
+
+    expect(prompt).toContain('marked these answers as wrong');
+    expect(prompt).toContain('they said: "No, it moved to beta."');
+    expect(prompt).toContain('about this answer: "The parser lives in alpha."');
+  });
+
+  /*
+   * "That was wrong" on its own is worth recording, and the prompt has to read
+   * sensibly when there are no words to quote — otherwise a model is shown an
+   * empty quotation and invents a fact to fill it.
+   */
+  it('reads sensibly when the user typed nothing', () => {
+    const prompt = reviewPrompt('USER: anything', [], '', [
+      {excerpt: 'The parser lives in alpha.', text: ''},
+    ]);
+
+    expect(prompt).toContain('no correction given');
+    expect(prompt).not.toContain('they said: ""');
+  });
+
+  it('says nothing about corrections when there are none', () => {
+    expect(reviewPrompt('anything')).not.toContain('marked these answers');
+  });
+
+  it('carries them through a review', async () => {
+    let asked = '';
+    const found = await runReview({
+      events: [
+        {author: 'user', content: {parts: [{text: 'where is the parser'}]}},
+        {author: 'agent', content: {parts: [{text: 'In alpha.'}]}},
+      ],
+      memory: '',
+      corrections: [{excerpt: 'In alpha.', text: 'It is in beta now.'}],
+      ask: async (prompt) => {
+        asked = prompt;
+        return answer([]);
+      },
+    });
+
+    expect(found.proposals).toEqual([]);
+    expect(asked).toContain('It is in beta now.');
+  });
+});
+
 describe('reading the answer', () => {  it('reads a plain answer', () => {
     const proposals = parseProposals(
       answer([

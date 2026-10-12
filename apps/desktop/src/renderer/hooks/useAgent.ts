@@ -107,6 +107,18 @@ export interface AgentController {
   send: (text: string, origin?: 'window' | 'pet') => Promise<boolean>;
   decide: (callId: string, confirmed: boolean) => Promise<void>;
   stop: () => Promise<void>;
+  /**
+   * Records that an answer was wrong, and what was right instead.
+   *
+   * Answers whether it was stored, because the button that calls it says "Noted"
+   * and a button that says that about something which was not recorded is worse
+   * than one that did nothing.
+   */
+  noteCorrection: (
+    messageId: string,
+    excerpt: string,
+    correction?: string,
+  ) => Promise<boolean>;
   open: (sessionId: string) => Promise<void>;
   /**
    * Re-reads the open conversation.
@@ -593,6 +605,40 @@ export function useAgent(): AgentController {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const noteCorrection = useCallback(
+    async (
+      messageId: string,
+      excerpt: string,
+      correction?: string,
+    ): Promise<boolean> => {
+      const sessionId = openSession.current;
+      if (sessionId === null) {
+        return false;
+      }
+      try {
+        const result = await window.marimo.call('memory.feedback', {
+          sessionId,
+          messageId,
+          // Capped here as well as in the schema: the answer can be arbitrarily
+          // long and only the opening of it is needed to recognise it later.
+          excerpt: excerpt.slice(0, 400),
+          ...(correction === undefined || correction.trim().length === 0
+            ? {}
+            : {correction: correction.trim().slice(0, 400)}),
+        });
+        if (!result.ok) {
+          setError(result.problem ?? 'That could not be recorded.');
+          return false;
+        }
+        return true;
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+        return false;
+      }
+    },
+    [],
+  );
+
   const send = useCallback(
     async (
       text: string,
@@ -832,6 +878,7 @@ export function useAgent(): AgentController {
     send,
     decide,
     stop,
+    noteCorrection,
     open,
     refresh,
     openSettings,

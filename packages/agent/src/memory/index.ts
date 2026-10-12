@@ -30,6 +30,7 @@ export {
   isNewProposal,
   MAX_PROPOSALS,
   MAX_REVIEW_CHARS,
+  existingMemoryList,
   MAX_SECTION_CHARS,
   PROPOSAL_EXAMPLE_SECTION,
   parseProposals,
@@ -38,7 +39,12 @@ export {
   runReview,
   wasRefused,
 } from './review.js';
-export type {RefusedFact, ReviewEvent, ReviewRequest} from './review.js';
+export type {
+  Correction,
+  RefusedFact,
+  ReviewEvent,
+  ReviewRequest,
+} from './review.js';
 
 export {
   CANONICAL_SECTIONS,

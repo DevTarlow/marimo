@@ -448,6 +448,7 @@ export function App(): React.JSX.Element {
             onDecide={(callId, confirmed) => {
               void agent.decide(callId, confirmed);
             }}
+            onFeedback={agent.noteCorrection}
             busy={busy}
           />
         )}

@@ -140,6 +140,7 @@ export function reviewPrompt(
   conversation: string,
   refused: readonly RefusedFact[] = [],
   memory = '',
+  corrections: readonly Correction[] = [],
 ): string {
   const existing = existingMemoryList(memory);
   return [
@@ -198,6 +199,27 @@ export function reviewPrompt(
                 ' of the ones above is the fact you mean, propose yours as new.)'
               : ''),
           existing.text,
+        ]),
+    ...(corrections.length === 0
+      ? []
+      : [
+          '',
+          /*
+           * The strongest evidence this prompt gets. A correction is the user
+           * having already done the work of saying what is true — where the rest
+           * of the conversation has to be read for hints, this is stated. It is
+           * also the only place the agent learns that an *answer* was wrong
+           * rather than that a fact was unwanted, which is why it is a block of
+           * its own rather than more refusals.
+           */
+          'The user marked these answers as wrong. Where they said what was',
+          'right, that is a fact to propose — stated by them, in their words, and',
+          'the reason it belongs in memory:',
+          ...corrections.map((entry) =>
+            entry.text.length > 0
+              ? `- they said: "${entry.text}" (about this answer: "${entry.excerpt}")`
+              : `- (no correction given, about this answer: "${entry.excerpt}")`,
+          ),
         ]),
     '',
     'Put each proposal in the layer it belongs in:',
@@ -444,8 +466,32 @@ export interface ReviewRequest {
    * would have the reviewer arguing with the memory file.
    */
   refused?: readonly RefusedFact[];
+  /**
+   * Answers the user marked as wrong, newest last.
+   *
+   * A different judgement from a refusal, and it reaches the reviewer for a
+   * different reason. A refusal says "do not remember that"; a correction says
+   * "that answer was wrong, and here is what is right" — which is the strongest
+   * evidence this prompt ever gets that something belongs in memory, because the
+   * user has already done the work of stating it.
+   */
+  corrections?: readonly Correction[];
   /** Asks the model. Injected, so the whole review is testable without one. */
   ask: (prompt: string) => Promise<string>;
+}
+
+/**
+ * One answer the user said was wrong.
+ *
+ * Carries what was said as well as what was right, because the correction alone
+ * is often a fragment — "no, it is pnpm" — and a reviewer that cannot see what it
+ * is a correction *of* has to guess at the sentence it completes.
+ */
+export interface Correction {
+  /** What the agent said, capped by the caller. */
+  excerpt: string;
+  /** What the user typed, when they typed anything. */
+  text: string;
 }
 
 /**
@@ -486,7 +532,12 @@ export async function runReview(
   let answer: string;
   try {
     answer = await request.ask(
-      reviewPrompt(stretch.text, request.refused ?? [], request.memory),
+      reviewPrompt(
+        stretch.text,
+        request.refused ?? [],
+        request.memory,
+        request.corrections ?? [],
+      ),
     );
   } catch {
     return {proposals: [], used: stretch.used};

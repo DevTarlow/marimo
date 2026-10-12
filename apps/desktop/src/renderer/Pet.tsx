@@ -239,6 +239,26 @@ export function Pet(): React.JSX.Element {
         <img src="./marimo-logo.png" alt="Marimo" draggable={false} />
         <div className="pet-hover-actions">
           <Copy text={lastAnswer(shown, agent.live?.text)} what="last answer" />
+          {/*
+            The same note the window offers, for the same reason it is worth
+            having at all — and offered only once the answer has stopped
+            arriving. A turn still streaming has no stored message to record
+            against, and an answer halfway written is not one to judge.
+          */}
+          {!busy && lastStoredAnswer(shown) !== undefined && (
+            <button
+              type="button"
+              className="pet-note"
+              onClick={() => {
+                const answer = lastStoredAnswer(shown);
+                if (answer !== undefined) {
+                  void agent.noteCorrection(answer.id, answer.text);
+                }
+              }}
+            >
+              Not quite
+            </button>
+          )}
         </div>
       </div>
 
@@ -311,6 +331,25 @@ export function Pet(): React.JSX.Element {
       </div>
     </div>
   );
+}
+
+/**
+ * The most recent answer the agent *finished*, for the correction button.
+ *
+ * Separate from `lastAnswer` because the two want different things: Copy should
+ * offer whatever is on screen, including a half-written answer, while a
+ * correction has to be recorded against a stored message with an id.
+ */
+function lastStoredAnswer(
+  messages: readonly TranscriptMessage[],
+): TranscriptMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === 'assistant' && message.text.length > 0) {
+      return message;
+    }
+  }
+  return undefined;
 }
 
 /** The most recent thing the agent said, for the copy button. */

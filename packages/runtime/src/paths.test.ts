@@ -16,6 +16,7 @@ describe('resolveAppPaths', () => {
       paths.jobs,
       paths.skills,
       paths.personMemoryDir,
+      paths.feedback,
     ]) {
       expect(isAbsolute(value)).toBe(true);
       expect(relative(paths.userData, value).startsWith('..')).toBe(false);
@@ -30,6 +31,10 @@ describe('resolveAppPaths', () => {
    */
   it('puts the person-level memory under user data, not in a folder', () => {
     expect(paths.personMemoryDir).toBe(join('/data/marimo-agent', 'memory'));
+  });
+
+  it('keeps what the user said about an answer beside the rest of the state', () => {
+    expect(paths.feedback).toBe(join('/data/marimo-agent', 'feedback.json'));
   });
 
   it('resolves from the argument rather than from the environment', () => {

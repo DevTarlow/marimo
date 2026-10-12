@@ -334,3 +334,23 @@ body.companion-body {
 .pet-hover-actions:focus-within {
   opacity: 1;
 }
+
+.pet-hover-actions {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.pet-note {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0 var(--space-1);
+  cursor: pointer;
+}
+
+.pet-note:hover {
+  color: var(--text);
+}

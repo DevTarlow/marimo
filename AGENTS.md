@@ -1,8 +1,9 @@
 # AGENTS.md — Marimo Agent
 
 Working notes for anyone — human or agent — changing this repository. The
-project's design decisions live in `README.md`; this file is the shorter, blunter
-list of things that are easy to get wrong and expensive to discover.
+project's design decisions live in `TECHNICAL.md`, and the guide for people using
+the app is `README.md`; this file is the shorter, blunter list of things that are
+easy to get wrong and expensive to discover.
 
 ## What this is
 

@@ -28,9 +28,9 @@ different app.
 | ✅  | The model: Qwen3.5-4B run by a llama.cpp engine the app owns, on loopback, with no account and no key. Two sizes — Q4_K_M on a 4 GB card, Q8_0 on a 6 GB one — chosen from what the GPU reports, and downloaded on first run |
 | ✅  | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a workspace rail with the conversations filed under the folder they work in, light and dark following the OS or chosen                       |
 | ✅  | Two sizes of app: a simple screen and a power screen, with one switch between them                                                                                                                                                     |
-| ✅  | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming client over one backend, ~30 tools, skills, `memory.md`, JSONL conversations                                                                             |
+| ✅  | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming client over one backend, ~30 built-in tools of which the app offers the ones its services can carry out, skills, `memory.md`, JSONL conversations        |
 | ✅  | Approvals that survive a restart, because a pending call is derived from the stored conversation rather than held in memory                                                                                                            |
-| ✅  | MCP connectors: add one by pasting a command, test it before saving, and choose whether to trust it — untrusted servers ask before every call                                                                                          |
+| ✅  | MCP connectors: add one by pasting a command, test it from the same form, and choose whether to trust it — untrusted servers ask before every call                                                                                     |
 | ✅  | Helper agents: `spawn_agent` hands a separable piece of work to a sub-agent that shares the conversation, so its approvals are visible and its words are labelled                                                                      |
 | ✅  | Per-agent capabilities: every tool is a switch, and a tool that is off is not offered to the model at all                                                                                                                              |
 | ✅  | The stores: jobs, profiles, settings, skills, memory proposals — with format versioning that refuses to overwrite a document it cannot read                                                                                            |
@@ -39,6 +39,7 @@ different app.
 | ✅  | The desktop companion: a frameless, transparent, click-through moss ball that answers in bubbles above itself, with its own chat bar underneath and its own settings for how long it answers, how much it shows, and whether it floats |
 | ✅  | A first run that downloads the model it needs, with progress and a resumed download, instead of showing a chat that refuses                                                                                                            |
 | ✅  | A memory review: after a conversation goes quiet the agent proposes what is worth remembering and asks before writing it — reading a long session in stretches rather than only once it ends, and remembering the facts you turned down |
+| ✅  | Recall: find things by what they mean rather than by the words they use, across the folder you loaded, memory, your own conversations and — with one more download — images, audio and video, from a search box or the agent's own tool |
 | 🚧  | Windows and macOS installers (the config is written and both package; the installers are unbuilt — see [Building a release](#building-a-release))                                                                                      |
 
 ## Quick start
@@ -69,8 +70,9 @@ pnpm --filter @marimo/desktop smoke
 Without it the app looks in its own user-data directory, finds nothing, and opens
 on the screen that offers to download a model — which is a state it has to handle
 anyway, and exactly what the smoke check exercises, since a check that needed a
-gigabyte of download would not run in CI. `model:fetch` prints the line above when
-it finishes; `model:fetch high` fetches the larger tier instead.
+gigabyte of download would not run in CI. `model:fetch` prints a ready-to-paste
+`MARIMO_MODEL_DIR=... pnpm --filter @marimo/desktop dev` line when it finishes;
+`model:fetch high` fetches the larger tier instead.
 
 Two environment quirks are worth knowing about up front, both covered in
 [AGENTS.md](./AGENTS.md):
@@ -97,7 +99,8 @@ matching and the abort returns.
 
 `@marimo/protocol` is the typed contract — every IPC call, every event, the
 profile and job documents. `@marimo/agent` is the agent itself. `@marimo/runtime`
-is where files live and how documents are versioned.
+is where files live, how documents are versioned, and where the model and recall
+engines are supervised.
 
 None of them import Electron, and that is load-bearing rather than tidy. The
 background service that keeps scheduled jobs running while the app is closed is
@@ -115,11 +118,11 @@ why the service definition bakes that path in.
 
 ### The model the app downloads
 
-There is one model, Qwen3.5-4B, run by a llama.cpp `llama-server` the app starts
-and supervises on loopback. No account, no key, no address to type, and nothing
-typed into the chat leaves the machine. There is no provider catalogue, no
-address to edit and no model list to fetch — a menu of services was three ways of
-describing a choice this app does not offer.
+There is one model the app answers with, Qwen3.5-4B, run by a llama.cpp
+`llama-server` the app starts and supervises on loopback. No account, no key, no
+address to type, and nothing typed into the chat leaves the machine. There is no
+provider catalogue, no address to edit and no model list to fetch — a menu of
+services was three ways of describing a choice this app does not offer.
 
 **It comes in two sizes and the app picks one.** `low` is the model at Q4_K_M
 (2.7 GB, a 16K window) and `high` is the same weights at Q8_0 (4.5 GB, 32K). Both
@@ -136,13 +139,16 @@ weights and no engine, because an installer with a gigabyte inside it is a
 gigabyte in every release and every rebuild. The first run downloads a 32 MB
 engine and then the tier the machine can use, verifying each against a pinned
 sha256 and resuming an interrupted download rather than starting it again. That is
-the one moment this app needs the network, and the screen says so.
+the one moment this app needs the network before it can answer, and the screen says
+so; the only download after it belongs to recall, and that one happens only if the
+user asks for the feature.
 
 **There is no CPU path.** Every engine asset is a GPU build — Vulkan on Linux and
 Windows, Metal on macOS — and a machine with no usable device is refused with a
-sentence rather than quietly run on a processor. A 4.7B model on a CPU is a wait
-rather than an answer, and shipping the option would mean shipping a configuration
-nobody should be in.
+sentence rather than quietly run on a processor. A model this size on a CPU is a
+wait rather than an answer, and shipping the option would mean shipping a
+configuration nobody should be in. The deliberate exception is recall's embedding
+model below, which is small enough that the processor is the right home for it.
 
 The engine's address is the one thing here that is _not_ an answer. It comes up on
 whatever port was free, so no address is stored anywhere: the resolver takes the
@@ -167,17 +173,72 @@ end to end: a tool call arrives as a structured `tool_calls` delta with its
 arguments, the token counts arrive with it, and `enable_thinking:false` is
 honoured so thinking costs nothing on the questions that do not need it.
 
+### Recall: finding things by meaning, on the machine that has them
+
+Searching for a word finds the places that word appears. Recall finds the places a
+thing is *about*, which is the only kind of search that works when somebody
+half-remembers something — the file about retries, the preference they stated two
+weeks ago, the picture with the receipt in it. It is a second model rather than a
+second feature bolted onto the first: embeddinggemma-2, a 270M backbone at Q8_0
+(310 MB, 768 dimensions, 8K of context), served by its own pinned llama.cpp build
+on loopback. "Its own" is load-bearing, and it was learned by running the build
+rather than by reading about it: the engine the chat model runs on predates this
+model's architecture entirely (`unknown model architecture: gemma-embedding2`), so
+recall pins a newer build instead of moving the chat engine onto one whose
+template has never been verified against.
+
+**It is off until somebody asks.** Turning it on downloads 310 MB and starts a
+second process, so it is not a default; the question is asked once, on the screen
+that follows the first model download, and afterwards the switch lives in Settings
+where every other capability does. The corpora are separate switches because they
+are separate consents: the folder is the work, memory is what the agent wrote down
+*about* the user, a conversation is everything they said, and media needs a second
+555 MB download — not a preference but the image and audio encoder itself, absent
+from the process unless it is fetched. A corpus that is off is not searched and
+not offered: the tool's own scope enum is built from what exists, so a model
+cannot ask for something the service would answer "nothing" about.
+
+**The index holds no text.** It holds vectors and a digest per record, so a hit is
+read back from its source and checked before it is shown; a file that changed
+since it was indexed comes back marked changed, with no text, rather than quoted
+from a copy that is no longer there. The index refreshes when a question is asked
+rather than on a timer, in bounded slices that report what they covered. And there
+is a floor below which a nearest vector is not an answer — measured at 0.68 rather
+than chosen, because a list of the least-unrelated things in a folder reads as a
+list of answers. The window can ask for the withheld ones when the phrasing, and
+not the corpus, was the problem; a tool call cannot, and should not.
+
+**It runs on the processor, and the index lives with the folder it describes.**
+The chat tier is estimated on the engine having all the free device memory, and a
+second client holding a slice would make that estimate a lie; the embedding model
+is small enough that the slower path costs seconds. The index sits in
+`<folder>/.marimo/<agent>/recall/` beside memory, so a project that moves takes
+its index with it; an agent with no folder loaded gets one under user data
+instead.
+
+**Two ways in, one service behind them.** The window has a search box on `Ctrl+K`
+that returns the same hits, scores and staleness claims the tool does — somebody
+who half-remembers where something is should not need a model to look it up. The
+agent gets `recall` beside `search_knowledge_base`: one takes the identifier, the
+other takes the description, and a model that knows the words should not have to
+phrase them as a question. Memory is a third caller rather than a way in, and it
+is the one that changes every turn: when recall is on, the memory block is
+narrowed to the bullets that answer the question instead of the whole file, with
+the whole file as the fallback whenever retrieval did not work. The sections that
+constrain behaviour — tone, conventions, boundaries — ride along whole whatever
+was asked, because a missed rule is a wrong action and a missed fact is only a
+worse answer.
+
 ### Two sizes, and one switch between them
 
 Everything the app can do is still a switch somebody turns on. What changed is
 that there are two screens to turn it on from: a simple one with three choices in
 plain words, and the power screen with the temperature, the engine's command
 line and every individual tool. They are the same app, the same stores and the
-same grants — the
-preset a user picks writes `enabledTools`, exactly as ticking the switches would,
-and the card that is lit is _worked out_ by comparing that grant against the
-lists. There is one source of truth for what an agent may do, and it is still the
-profile.
+same grants — the preset a user picks writes `enabledTools`, exactly as ticking
+the switches would, and the card that is lit is _worked out_ by comparing that
+grant against the lists. There is one source of truth for what an agent may do,
+and it is still the profile.
 
 The line between the two screens is **tuning versus repair**. A number to adjust —
 a context window, a memory limit, a temperature — is tuning and lives in power. A
@@ -204,7 +265,7 @@ checks the two paths against each other at launch.
 
 ### Documents are versioned, and a newer one is never overwritten
 
-Every file the app owns carries a `version`. Reading is explicit about the four
+Every store the app owns carries a `version`. Reading is explicit about the five
 outcomes — absent, current, older, newer, unreadable — because the alternative is
 what the previous generation of this code did: a schema mismatch made the read
 return an empty document, the user watched their jobs disappear, and the next
@@ -236,8 +297,9 @@ conversation whose folder has been forgotten.
 Forgetting a folder only forgets it. The directory, everything in it and every
 conversation file are untouched, and the chats filed under it stay reachable
 under "Other chats" until they are moved somewhere else. Conversations the app
-started rather than the user — a Discord mention — are listed under "Social"
-instead of inside a folder that had nothing to do with them.
+started rather than the user — a Discord mention, once that connector is wired —
+are listed under "Social" instead of inside a folder that had nothing to do with
+them.
 
 ### The companion shares the conversation, not the manner
 
@@ -261,12 +323,14 @@ changing it never aborts a turn in flight.
 packages/protocol   The typed contract. No Node, no Electron, no React.
 packages/agent      The agent: ADK, the OpenAI-compatible client, tools, skills,
                     memory, sessions.
-packages/runtime    Where files live, secrets, the stores, document versions.
+packages/runtime    Where files live, secrets, the stores, document versions,
+                    the model and recall engines, the OS service plans.
 apps/desktop
-  src/main          Window, IPC, path and secret adapters, (next: tray, connectors)
+  src/main          Window, IPC, tray, the OS service, path and secret adapters,
+                    the model and recall hosts, media decoding
   src/preload       The sandboxed bridge — the window's entire reach
   src/runner        The headless job runner
-  src/renderer      The React UI
+  src/renderer      The React UI, including the search panel
   src/shared        Facts both entry points need, such as the product name
   scripts/smoke.mjs Boots a real window and proves the bridge and the UI work
 ```
@@ -278,7 +342,8 @@ Everything lives under Electron's user-data directory — on Linux,
 how development, the tests and the smoke check keep their state out of yours.
 
 ```
-secrets/                one file per secret, encrypted or plainly opted out
+secrets/                one file per secret, encrypted — a machine without a
+                        keychain is refused rather than written readable
 sessions/               one JSONL file per conversation, plus an index
 profiles.json           the agents: identity and capabilities
 workspaces.json         the folders every agent can work in, and the current one
@@ -289,19 +354,27 @@ memory-proposals.json   what the agent would remember, waiting for an answer
 window-state.json       where the main window was left
 companion-state.json    where the moss was left
 local-model.pid         the engine this process started, so a crash cannot orphan it
+recall.pid              the embedding engine, for the same reason
+recall/                 the search index, when a profile has no folder to keep it in
+app.lock                the running app, so the headless runner leaves the jobs alone
 ```
 
-The model is in there too, under `model/`: the engine, whichever tier was
+The model is in there too, under `model/`: the chat engine, whichever tier was
 downloaded, and a marker naming the engine asset it was unpacked from so a build
-that moves to a new llama.cpp re-fetches it. It is downloaded rather than bundled,
-which is why it lives beside the rest of the user's data instead of inside the
-app — and why `MARIMO_MODEL_DIR` points one process at a different copy, which is
-what a checkout does.
+that moves to a new llama.cpp re-fetches it. The recall model and its own engine
+sit beside it in `model/recall/`. It is downloaded rather than bundled, which is
+why it lives beside the rest of the user's data instead of inside the app — and why
+`MARIMO_MODEL_DIR` points one process at a different copy, which is what a checkout
+does.
 
-Each carries a `version`, and a file written by a _newer_ build is refused rather
-than overwritten — including the one holding your agents, which is the reason the
-rule exists. A file that cannot be read is moved aside rather than replaced, so a
-parse bug is never the end of your data.
+Each store document carries a `version`, and a file written by a _newer_ build is
+refused rather than overwritten — including the one holding your agents, which is
+the reason the rule exists. A file that cannot be read is moved aside rather than
+replaced, so a parse bug is never the end of your data. The exceptions are the two
+geometry files, the secret files and the search index: geometry is rewritten every
+time a window moves, a secret says in its own prefix whether it is encrypted, and
+the index is rebuilt from the folder it describes rather than being the only copy
+of anything.
 
 **The settings file is the exception that proves it.** It has never carried a
 version, so every settings file in existence looks like an older format; treating
@@ -312,9 +385,9 @@ build no longer knows are ignored, and every preference beside them survives.
 
 ## Status and next steps
 
-Everything in the M0–M8 plan is built. What is left is verification rather than
-construction — the two installers above that cannot be produced from Linux, and
-code signing, which needs certificates.
+Everything in the M0–M8 plan is built, and recall landed after it. What is left is
+verification rather than construction — the two installers above that cannot be
+produced from Linux, and code signing, which needs certificates.
 
 Known gaps, stated plainly:
 
@@ -325,6 +398,10 @@ Known gaps, stated plainly:
   the schemas are there and the settings schema still carries the fields, but
   nothing in the window configures them, so they are unreachable. They are
   scheduled for nothing — somebody should either wire them or remove them.
+- **Skills are carried but no longer authored.** `skills.json`, its schema and the
+  per-profile grant all work, and the agent loads any skill it is granted, but the
+  `save_skill` tool and the `/learn` command that wrote them are not wired into the
+  window — so a skill today is added by editing the file by hand.
 - **Vulkan is the only GPU backend shipped**, and macOS's Metal, which needs no
   choice. CUDA and ROCm exist upstream and are not pinned: Vulkan is 32 MB and
   covers NVIDIA, AMD and Intel from one asset per platform, while the Windows CUDA

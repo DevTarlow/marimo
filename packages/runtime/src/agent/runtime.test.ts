@@ -323,6 +323,50 @@ describe('AgentRuntime', () => {
   });
 
   /*
+   * What the panel's age list reads.
+   *
+   * Answered without building a host, which is the property worth pinning: the
+   * panel opens before any turn has run, and a provenance read that dialled every
+   * MCP server and started the model to draw a list would be the wrong shape
+   * entirely. A write is made first so there is a date to answer with.
+   */
+  it('reports when a remembered fact was written', async () => {
+    // The engine, because accepting builds a host: the fact has to be written by
+    // an agent, not merely proposed.
+    const agent = runtime({localModel: engine()});
+    // And a folder, because a host is built for the conversation's workspace.
+    await agent.addWorkspace(join(dir, 'alpha'));
+    const session = await agent.createSession(profileId);
+    const proposals = new MemoryProposalStore({file: paths.memoryProposals});
+    const recorded = await proposals.record(session?.id ?? '', 1, [
+      {
+        sessionId: session?.id ?? null,
+        profileId,
+        section: 'About the user',
+        text: 'Has a dog called Sunshine.',
+        reason: 'Said so.',
+      },
+    ]);
+    const accepted = await agent.resolveMemoryProposal(
+      recorded.proposals[0]?.id ?? '',
+      true,
+    );
+    expect(accepted.ok).toBe(true);
+
+    const entries = await agent.memoryProvenance(profileId);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.text).toBe('Has a dog called Sunshine.');
+    // Agreed to rather than stated, which is the difference the panel shows.
+    expect(entries[0]?.source).toBe('review');
+    expect(entries[0]?.scope).toBe('person');
+  });
+
+  it('reports nothing rather than failing for an agent that remembers nothing', async () => {
+    expect(await runtime().memoryProvenance(profileId)).toEqual([]);
+  });
+
+  /*
    * "That answer was wrong", the one judgement that had nowhere to go.
    *
    * The two properties that matter are that it persists — the whole point is

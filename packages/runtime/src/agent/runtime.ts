@@ -50,6 +50,7 @@ import type {
   DismissedMemory,
   FeedbackEntry,
   MemoryProposal,
+  MemoryProvenanceEntry,
   MemorySupersede,
   MemoryUsage,
   TranscriptMessage,
@@ -528,6 +529,33 @@ export class AgentRuntime {
       capBytes: MAX_MEMORY_BYTES,
       reviewEvents: settings.memoryReviewEvents,
     };
+  }
+
+  /**
+   * When each remembered bullet was first written.
+   *
+   * Built the same way `memoryUsage` is, and for the same reason: the panel can
+   * be opened before any turn has run, and building a host to answer a question
+   * about a file would dial every MCP server and start the model to draw a list.
+   */
+  async memoryProvenance(
+    profileId?: string,
+  ): Promise<MemoryProvenanceEntry[]> {
+    const id = profileId ?? (await this.profileStore.activeProfile()).id;
+    const host = this.hosts.get(id);
+    if (host) {
+      return await host.memoryProvenance();
+    }
+    const profile = await this.profileFor(id);
+    const workspace =
+      workspaceRootFor(await this.workspaceStore.load()) ??
+      this.options.paths.defaultWorkspace;
+    const store = new MemoryStore({
+      workspaceRoot: workspace,
+      personMemoryRoot: this.options.paths.personMemoryDir,
+      ...(profile !== undefined ? {profileId: profile.id} : {}),
+    });
+    return await store.provenance();
   }
 
   /**

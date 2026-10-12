@@ -6,6 +6,8 @@ export {
   MAX_MEMORY_BYTES,
   MAX_PROMPT_CHARS,
   MEMORY_FILE_NAME,
+  PROVENANCE_FILE_NAME,
+  PROVENANCE_VERSION,
   MemoryStore,
   MemoryTooLargeError,
   applyUpdate,
@@ -19,6 +21,7 @@ export {
 export type {
   MemoryPruneRequest,
   MemoryScope,
+  MemorySource,
   MemoryStoreOptions,
   MemoryUpdate,
   PruneReport,

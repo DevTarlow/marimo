@@ -33,6 +33,14 @@ import {randomUUID} from 'node:crypto';
 import {copyFile, mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 
+import {memoryProvenanceFileSchema} from '@marimo/protocol';
+import type {MemoryProvenanceEntry} from '@marimo/protocol';
+
+import {
+  assertWritable,
+  readVersionedDocument,
+} from './../migrations.js';
+import type {ReadVersionedOptions} from './../migrations.js';
 import {scopeForSection} from './sections.js';
 import {MEMORY_SOFT_LIMIT_BYTES} from './size.js';
 
@@ -41,6 +49,8 @@ export const AGENT_DATA_DIR = '.marimo';
 /** Profile used until the app exposes a profile picker. */
 export const DEFAULT_PROFILE_ID = 'default';
 export const MEMORY_FILE_NAME = 'memory.md';
+/** Where bullet dates are kept, beside the person-level memory. */
+export const PROVENANCE_FILE_NAME = 'provenance.json';
 
 /** Largest memory file the tools will write, in bytes. */
 export const MAX_MEMORY_BYTES = 64 * 1024;
@@ -213,6 +223,15 @@ export class MemoryStore {
    */
   private adoption: Promise<void> | undefined;
   /**
+   * The first read of the bullet dates, which is also the one that seeds them.
+   *
+   * Memoised for the same reason the adoption is, and it is the reason the panel
+   * shows dates for an install that has not written a fact since upgrades: an
+   * empty list would read as "nothing is remembered", which is the opposite of
+   * what an install with a year of memory actually holds.
+   */
+  private seededProvenance: Promise<void> | undefined;
+  /**
    * The size past which the tools warn.
    *
    * Mutable and read at call time rather than captured when the tools are built,
@@ -264,6 +283,20 @@ export class MemoryStore {
     return this.personRoot === undefined
       ? undefined
       : resolvePersonMemoryFile(this.personRoot, this.profileId);
+  }
+
+  /**
+   * Where this profile's bullet dates live, when there is a place for them.
+   *
+   * Beside the person file rather than the workspace one, because it describes
+   * *both* files and a project that moves should not lose the dates of the facts
+   * that travelled with the person. Absent whenever `personMemoryRoot` is, which
+   * is the same switch that turns the split off.
+   */
+  get provenanceFile(): string | undefined {
+    return this.personRoot === undefined
+      ? undefined
+      : join(this.personRoot, this.profileId, PROVENANCE_FILE_NAME);
   }
 
   /**
@@ -338,17 +371,32 @@ export class MemoryStore {
    */
   async write(content: string): Promise<void> {
     await this.ensureAdopted();
-    await this.withLock(() => this.writeDocument(content, {backup: false}));
+    await this.ensureProvenanceSeeded();
+    await this.withLock(async () => {
+      await this.writeDocument(content, {backup: false});
+      await this.syncProvenance('tool');
+    });
   }
 
-  /** Merges facts into the document, creating the section when needed. */
-  async update(update: MemoryUpdate): Promise<UpdateReport> {
+  /**
+   * Merges facts into the document, creating the section when needed.
+   *
+   * `source` is provenance rather than behaviour: it says whether the user asked
+   * for this fact or a background look proposed it, which is the difference a
+   * person reading their own memory later wants to know.
+   */
+  async update(
+    update: MemoryUpdate,
+    source: MemorySource = 'tool',
+  ): Promise<UpdateReport> {
     await this.ensureAdopted();
+    await this.ensureProvenanceSeeded();
     return await this.withLock(async () => {
       const target = this.fileFor(update);
       const current = await this.readFileAt(target);
       const report = applyUpdateWithReport(current, update);
       await this.writeFileAt(target, report.content);
+      await this.syncProvenance(source);
       /*
        * The report answers with the *whole* memory rather than the file that was
        * written, because every caller of it is asking a question about memory:
@@ -363,10 +411,15 @@ export class MemoryStore {
   /** Replaces the document, keeping each previous file as `memory.md.bak`. */
   async prune(request: MemoryPruneRequest): Promise<PruneReport> {
     await this.ensureAdopted();
+    await this.ensureProvenanceSeeded();
     return await this.withLock(async () => {
       const personUntouched = await this.writeDocument(request.content, {
         backup: true,
       });
+      // A prune carries what survives rather than dating everything again: the
+      // sync below keeps the entry of every bullet still present and drops the
+      // rest, which is exactly what "what survived" means.
+      await this.syncProvenance('tool');
       return {content: await this.readMerged(), personUntouched};
     });
   }
@@ -534,6 +587,136 @@ export class MemoryStore {
     await this.writeFileAt(person, renderMemory(personBlocks));
     const remaining = blocks.filter((block) => !adopted.includes(block));
     await this.writeFileAt(this.file, renderMemory(remaining));
+    await this.syncProvenance('tool');
+  }
+
+  /**
+   * When each remembered bullet was first written, as the store knows it.
+   *
+   * Seeded on first read rather than only on write, because the panel is the one
+   * caller and an empty answer on an install with a year of memory would read as
+   * "nothing is remembered yet".
+   */
+  async provenance(): Promise<MemoryProvenanceEntry[]> {
+    await this.ensureProvenanceSeeded();
+    return await this.readProvenance();
+  }
+
+  /**
+   * The one sync that dates what was already here as `adopted`.
+   *
+   * Called *before* a write rather than after, and that ordering is the whole
+   * point: run afterwards, the fact being written is indistinguishable from the
+   * facts that predate the document, and a fresh install would record its first
+   * remembered fact as "we found this lying around" rather than as the thing the
+   * user just asked for.
+   */
+  private async ensureProvenanceSeeded(): Promise<void> {
+    this.seededProvenance ??= this.syncProvenance('tool');
+    await this.seededProvenance;
+  }
+
+  private async readProvenance(): Promise<MemoryProvenanceEntry[]> {
+    const file = this.provenanceFile;
+    if (file === undefined) {
+      return [];
+    }
+    try {
+      const read = await readVersionedDocument(file, PROVENANCE_READ_OPTIONS);
+      if (read.state !== 'current') {
+        return [];
+      }
+      const parsed = memoryProvenanceFileSchema.safeParse(read.document);
+      return parsed.success ? parsed.data.entries : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Brings the bullet dates up to date with what memory now holds.
+   *
+   * A sync rather than a record, and that is the decision that makes this small:
+   * every bullet present gets an entry and every entry whose bullet is gone is
+   * dropped, so a prune carries what survives for free, a `replaces` loses the
+   * date of the bullet it removed, and a hand-edited file is absorbed without a
+   * second code path. The cost is reading two small markdown files on a write
+   * that was already rewriting one of them.
+   *
+   * Never throws and never fails a write. A date is a nicety about a fact; the
+   * fact is the thing the user asked for, and losing its date is not a reason to
+   * lose it.
+   */
+  private async syncProvenance(source: MemoryProvenanceEntry['source']): Promise<void> {
+    const file = this.provenanceFile;
+    if (file === undefined) {
+      return;
+    }
+    try {
+      const read = await readVersionedDocument(
+        file,
+        PROVENANCE_READ_OPTIONS,
+      );
+      if (read.state === 'too-new' || read.state === 'unreadable') {
+        // A document from a newer build, or one nothing can read: leaving it
+        // alone is the same answer both times, and neither is worth a rewrite.
+        return;
+      }
+      const existing: readonly MemoryProvenanceEntry[] =
+        read.state === 'current'
+          ? (memoryProvenanceFileSchema.safeParse(read.document).data?.entries ??
+            [])
+          : [];
+      /*
+       * The first sync of all dates everything `adopted`, because on an install
+       * that predates this document every bullet was written before anything was
+       * watching — and a date invented for the write that happens to trigger the
+       * first sync is a worse lie than an honest "we did not know then".
+       */
+      const seeding = read.state === 'absent';
+
+      const present: Array<{scope: MemoryScope; section: string; text: string}> =
+        [];
+      const person = this.personFile;
+      if (person !== undefined) {
+        parseBullets(await this.readFileAt(person), 'person', present);
+      }
+      parseBullets(await this.readFileAt(this.file), 'workspace', present);
+
+      const known = new Map(
+        existing.map((entry) => [
+          `${entry.scope}\u0000${collapse(entry.text)}`,
+          entry,
+        ]),
+      );
+      const at = new Date().toISOString();
+      const entries: MemoryProvenanceEntry[] = present.map((bullet) => {
+        const previous = known.get(
+          `${bullet.scope}\u0000${collapse(bullet.text)}`,
+        );
+        return {
+          scope: bullet.scope,
+          section: bullet.section,
+          // The file's own spelling, so a hand-edit that fixes a typo keeps the
+          // date instead of reading as a new fact.
+          text: bullet.text,
+          at: previous?.at ?? at,
+          source: previous?.source ?? (seeding ? 'adopted' : source),
+        };
+      });
+
+      await assertWritable(file, PROVENANCE_READ_OPTIONS);
+      await mkdir(dirname(file), {recursive: true});
+      const temporary = `${file}.${randomUUID()}.tmp`;
+      await writeFile(
+        temporary,
+        `${JSON.stringify({version: PROVENANCE_VERSION, entries}, null, 2)}\n`,
+        'utf8',
+      );
+      await rename(temporary, file);
+    } catch {
+      // See above: a date is not worth a failed write.
+    }
   }
 
   private async writeFileAt(file: string, content: string): Promise<void> {
@@ -561,6 +744,24 @@ export class MemoryStore {
 
 /** Which file a layer belongs in. */
 export type MemoryScope = 'person' | 'workspace';
+
+/**
+ * How a fact arrived, for the provenance document.
+ *
+ * The two that a write can have. `adopted` is not here because it is not
+ * something a caller can claim: it is what the store records for a bullet it
+ * found already in memory, which is the truthful answer for everything written
+ * before this document existed.
+ */
+export type MemorySource = 'tool' | 'review';
+
+export const PROVENANCE_VERSION = 1;
+
+const PROVENANCE_READ_OPTIONS: ReadVersionedOptions = {
+  label: 'The memory provenance file',
+  current: PROVENANCE_VERSION,
+  migrations: [],
+};
 
 interface Block {
   /** A `##` heading, or the preamble before the first one. */
@@ -665,6 +866,29 @@ function mergeBlock(target: Block[], block: Block): void {
     return true;
   });
   existing.lines = [...trimBlankEdges(existing.lines), ...additions];
+}
+
+/**
+ * Every bullet one file holds, with the layer it is under.
+ *
+ * The same `- `/`* ` shape `selectMemory` counts and the store writes, walked
+ * once here so the dates cannot disagree with the bullets they describe.
+ */
+function parseBullets(
+  text: string,
+  scope: MemoryScope,
+  into: Array<{scope: MemoryScope; section: string; text: string}>,
+): void {
+  for (const block of splitMemory(text)) {
+    const section = block.heading ?? '';
+    for (const line of block.lines) {
+      const match = /^\s*[-*]\s+(.+?)\s*$/u.exec(line);
+      const bullet = match?.[1] ?? '';
+      if (bullet.length > 0) {
+        into.push({scope, section, text: bullet});
+      }
+    }
+  }
 }
 
 /** Turns free text into bullet lines, one per non-empty input line. */

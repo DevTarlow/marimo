@@ -836,6 +836,11 @@ export class AgentService {
     return await this.runtime.memoryUsage(profileId);
   }
 
+  /** When each remembered bullet was first written, for the age list. */
+  async memoryProvenance(profileId?: string) {
+    return await this.runtime.memoryProvenance(profileId);
+  }
+
   /** Accepts one into memory, or drops it. */
   async resolveMemoryProposal(proposalId: string, accept: boolean) {
     return await this.runtime.resolveMemoryProposal(proposalId, accept);

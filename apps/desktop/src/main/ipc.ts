@@ -325,6 +325,10 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     'memory.usage': async (params) =>
       await agent().memoryUsage(params.profileId),
 
+    'memory.provenance': async (params) => ({
+      entries: await agent().memoryProvenance(params.profileId),
+    }),
+
     'memory.resolve': async (params) =>
       await agent().resolveMemoryProposal(params.proposalId, params.accept),
 

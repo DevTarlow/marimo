@@ -1868,6 +1868,18 @@
   user-select: text;
 }
 
+/*
+ * When a bullet was written, ahead of the bullet.
+ *
+ * Faint and fixed-width-ish so the column of dates reads as a column and the eye
+ * can find the oldest thing without reading every line.
+ */
+.memory-age {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
 .memory-why {
   font-size: var(--text-xs);
   color: var(--text-faint);

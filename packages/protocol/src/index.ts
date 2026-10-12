@@ -1771,6 +1771,52 @@ export function emptyFeedbackFile(): FeedbackFile {
  * `capBytes` is the hard one, past which writes are refused. Different questions:
  * one is "tidy up soon", the other is "this no longer works".
  */
+/**
+ * When one remembered bullet was first written.
+ *
+ * Memory's cap is the thing this exists for. A file that stops accepting facts at
+ * 64 KB is fine for a year and a trap afterwards, and the question a person
+ * actually has when they look at it is "what in here is stale?" — which needs an
+ * age, and the bullets themselves are plain lines with nowhere to put one.
+ *
+ * The key is the bullet's text rather than an identifier, because memory is a
+ * hand-editable markdown file and it is the *sentence* that survives an edit;
+ * `section` rides along so two identical sentences in different layers are two
+ * entries rather than one. `scope` says which of the two files it is in, so a
+ * bullet that has moved between them is recognisable.
+ */
+export const memoryProvenanceEntrySchema = z.object({
+  /** Which file: the person half or the workspace half. */
+  scope: z.enum(['person', 'workspace']),
+  /** The `##` heading it sits under — absent for the preamble. */
+  section: z.string(),
+  /** The bullet's text, exactly as the file spells it. */
+  text: z.string(),
+  /** When the store first saw this sentence, ISO. */
+  at: z.string().min(1),
+  /**
+   * How it arrived, which is the difference between "they told me" and "I read it
+   * back later and decided" — and it is also the honest answer for a bullet that
+   * predates this document, which is `adopted`.
+   */
+  source: z.enum(['tool', 'review', 'adopted']),
+});
+
+export type MemoryProvenanceEntry = z.infer<
+  typeof memoryProvenanceEntrySchema
+>;
+
+export const memoryProvenanceFileSchema = z.object({
+  version: z.literal(1),
+  entries: z.array(memoryProvenanceEntrySchema),
+});
+
+export type MemoryProvenanceFile = z.infer<typeof memoryProvenanceFileSchema>;
+
+export function emptyMemoryProvenance(): MemoryProvenanceFile {
+  return {version: 1, entries: []};
+}
+
 export const memoryUsageSchema = z.object({
   bytes: z.number().int().nonnegative(),
   limitBytes: z.number().int().positive(),
@@ -2407,6 +2453,14 @@ export const agentCallSchemas = {
    * every time it opens.
    */
   'memory.usage': z.object({profileId: z.string().min(1).optional()}),
+  /**
+   * When each remembered bullet was first written.
+   *
+   * Its own call rather than part of `memory.usage`: the size is read on every
+   * panel open and this is a longer document, and the two answer different
+   * questions — "is memory full" and "what in here is stale".
+   */
+  'memory.provenance': z.object({profileId: z.string().min(1).optional()}),
   'memory.resolve': z.object({
     proposalId: z.string().min(1),
     accept: z.boolean(),
@@ -2559,6 +2613,7 @@ export interface AgentCallResults {
   };
   'memory.forgetDismissals': {dismissed: DismissedMemory[]};
   'memory.usage': MemoryUsage;
+  'memory.provenance': {entries: MemoryProvenanceEntry[]};
   'memory.resolve': {
     ok: boolean;
     problem?: string;

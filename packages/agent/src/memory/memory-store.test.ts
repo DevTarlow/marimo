@@ -449,6 +449,123 @@ describe('MemoryStore, split by layer', () => {
     expect(memory.location).toContain(memory.file);
   });
 
+  /*
+   * Bullet dates.
+   *
+   * Memory stops accepting facts at a hard cap, so the question a person has when
+   * they look at a year of it is "what in here is stale?" — and the bullets are
+   * plain lines with nowhere to put an age. What is asserted here is that the
+   * dates survive the things that happen to memory: a rewrite of the same fact,
+   * a correction, a prune, and the one-time seeding of an install that predates
+   * the document.
+   */
+  describe('when each bullet was written', () => {
+    it('dates a fact as it is written', async () => {
+      const memory = store();
+      await memory.update({section: 'About the user', content: 'Has a dog'});
+
+      const entries = await memory.provenance();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.text).toBe('Has a dog');
+      expect(entries[0]?.scope).toBe('person');
+      expect(entries[0]?.section).toBe('About the user');
+      expect(entries[0]?.source).toBe('tool');
+      expect(Number.isNaN(new Date(entries[0]?.at ?? '').getTime())).toBe(false);
+    });
+
+    it('says whether the user asked for the fact or agreed to a suggestion', async () => {
+      const memory = store();
+      await memory.update({section: 'Notes', content: 'From a suggestion'}, 'review');
+
+      expect((await memory.provenance())[0]?.source).toBe('review');
+    });
+
+    /*
+     * The store drops a line it already holds, so the write is a no-op — and the
+     * date has to be the original one, not the moment somebody repeated
+     * themselves. Otherwise "when was this written" answers "the last time the
+     * subject came up".
+     */
+    it('keeps the original date when the same fact is written again', async () => {
+      const memory = store();
+      await memory.update({section: 'About the user', content: 'Has a dog'});
+      const first = (await memory.provenance())[0]?.at;
+
+      await memory.update({section: 'About the user', content: 'Has a dog'});
+
+      const entries = await memory.provenance();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.at).toBe(first);
+    });
+
+    it('forgets the date of a bullet a correction removed', async () => {
+      const memory = store();
+      await memory.update({section: 'Preferences and tone', content: 'Uses npm'});
+      await memory.update({
+        section: 'Preferences and tone',
+        content: 'Uses pnpm',
+        replaces: 'Uses npm',
+      });
+
+      const entries = await memory.provenance();
+      expect(entries.map((entry) => entry.text)).toEqual(['Uses pnpm']);
+    });
+
+    it('dates what survives a prune', async () => {
+      const memory = store();
+      await memory.update({section: 'About the user', content: 'Has a dog'});
+      await memory.update({section: 'Project pointers', content: 'State in TODO.md'});
+      const kept = (await memory.provenance()).find(
+        (entry) => entry.text === 'Has a dog',
+      )?.at;
+
+      await memory.prune({
+        content: '## About the user\n- Has a dog\n',
+      });
+
+      const entries = await memory.provenance();
+      expect(entries.map((entry) => entry.text)).toEqual(['Has a dog']);
+      expect(entries[0]?.at).toBe(kept);
+    });
+
+    /*
+     * The upgrade case. This document did not exist when the bullets were
+     * written, and inventing today's date for all of them would be a worse lie
+     * than an honest "we did not know then".
+     */
+    it('marks what it finds already there as adopted', async () => {
+      await mkdir(join(workDir, AGENT_DATA_DIR, DEFAULT_PROFILE_ID), {
+        recursive: true,
+      });
+      await writeFile(
+        join(workDir, AGENT_DATA_DIR, DEFAULT_PROFILE_ID, 'memory.md'),
+        '## Project pointers\n- State in TODO.md\n',
+        'utf8',
+      );
+
+      const entries = await store().provenance();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.source).toBe('adopted');
+    });
+
+    it('offers nothing when there is no place to keep dates', async () => {
+      const memory = new MemoryStore({workspaceRoot: workDir});
+      await memory.update({content: 'Has a dog'});
+
+      expect(memory.provenanceFile).toBeUndefined();
+      expect(await memory.provenance()).toEqual([]);
+    });
+
+    it('describes both files in one list', async () => {
+      const memory = store();
+      await memory.update({section: 'About the user', content: 'Has a dog'});
+      await memory.update({section: 'Project pointers', content: 'State in TODO.md'});
+
+      const scopes = (await memory.provenance()).map((entry) => entry.scope).sort();
+      expect(scopes).toEqual(['person', 'workspace']);
+    });
+  });
+
   describe('adoption of a file written before the split', () => {
     /** A workspace file in the old one-file layout. */
     async function seedOldLayout(text: string): Promise<void> {

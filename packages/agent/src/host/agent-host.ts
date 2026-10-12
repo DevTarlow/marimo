@@ -33,6 +33,7 @@ import {MAIN_AGENT_NAME} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
+import type {MemoryProvenanceEntry} from '@marimo/protocol';
 import type {SupersedeReport} from '../memory/index.js';
 import {DEFAULT_MAX_CHARS, selectMemory} from '../memory/select.js';
 import type {RecalledBullet} from '../memory/select.js';
@@ -906,6 +907,11 @@ export class AgentHost {
     return await this.memory.bytes();
   }
 
+  /** When each remembered bullet was first written, for the panel. */
+  async memoryProvenance(): Promise<MemoryProvenanceEntry[]> {
+    return await this.memory.provenance();
+  }
+
   /**
    * Adds a fact to memory, as if the agent had called `update_memory`.
    *
@@ -925,14 +931,20 @@ export class AgentHost {
     text: string,
     replaces?: string,
   ): Promise<SupersedeReport> {
-    const report = await this.memory.update({
-      section,
-      content: text,
-      mode: 'append',
-      ...(replaces === undefined || replaces.trim().length === 0
-        ? {}
-        : {replaces}),
-    });
+    const report = await this.memory.update(
+      {
+        section,
+        content: text,
+        mode: 'append',
+        ...(replaces === undefined || replaces.trim().length === 0
+          ? {}
+          : {replaces}),
+      },
+      // Provenance, not behaviour: a person reading their own memory later
+      // should be able to tell the facts they stated from the ones a background
+      // look proposed and they agreed to.
+      'review',
+    );
     return report.supersede;
   }
 

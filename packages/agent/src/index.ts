@@ -104,6 +104,7 @@ export {
   DEFAULT_SECTION,
   MAX_MEMORY_BYTES,
   MEMORY_FILE_NAME,
+  PROVENANCE_FILE_NAME,
   isNewProposal,
   MAX_PROPOSALS,
   MemoryStore,
@@ -129,7 +130,9 @@ export {
 } from './memory/index.js';
 export type {
   MemoryPruneRequest,
+  MemoryScope,
   MemorySelection,
+  MemorySource,
   MemoryStoreOptions,
   MemoryUpdate,
   RecalledBullet,

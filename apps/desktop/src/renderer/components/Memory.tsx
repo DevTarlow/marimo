@@ -30,6 +30,7 @@ import {
 import type {
   DismissedMemory,
   MemoryProposal,
+  MemoryProvenanceEntry,
   MemoryUsage,
 } from '@marimo/protocol';
 
@@ -70,6 +71,14 @@ export function Memory({
   const [dismissed, setDismissed] = useState<DismissedMemory[]>([]);
   const [usage, setUsage] = useState<MemoryUsage | null>(null);
   /**
+   * When each remembered bullet was first written.
+   *
+   * Loaded with the rest rather than on demand: it is one small document, and a
+   * list behind a second click is one nobody opens — which would make the whole
+   * point, that age is *visible*, not true.
+   */
+  const [provenance, setProvenance] = useState<MemoryProvenanceEntry[]>([]);
+  /**
    * The slider's own value while it is being dragged.
    *
    * Held apart from `usage.limitBytes` so dragging is smooth: the stored value
@@ -82,13 +91,15 @@ export function Memory({
 
   const load = async (): Promise<void> => {
     try {
-      const [listed, measured] = await Promise.all([
+      const [listed, measured, dated] = await Promise.all([
         window.marimo.call('memory.proposals', {}),
         window.marimo.call('memory.usage', {}),
+        window.marimo.call('memory.provenance', {}),
       ]);
       setProposals(listed.proposals);
       setDismissed(listed.dismissed);
       setUsage(measured);
+      setProvenance(dated.entries);
       setDraftLimit(null);
     } catch (failure) {
       setProblem(describe(failure));
@@ -447,11 +458,75 @@ export function Memory({
         </>
       )}
 
+      {/*
+        What memory holds, oldest first, with the date each bullet was written.
+        Folded away because it is a reference rather than a decision — but it is
+        the *only* place a person can see their memory in the window, and the only
+        way to answer "what in here is stale?" without opening the file.
+      */}
+      {provenance.length > 0 && (
+        <>
+          <h4 className="memory-proposals-heading">
+            {provenance.length === 1
+              ? 'One thing remembered'
+              : `Everything remembered, by when`}
+          </h4>
+          <p className="settings-muted">
+            Oldest first. This is what the agent is shown at the start of every
+            conversation; the dates are when each line was first written, and they
+            are here so you can tell what has been sitting there a year.
+          </p>
+          <details className="memory-why">
+            <summary>Show them</summary>
+            <ul className="memory-dismissed">
+              {[...provenance]
+                .sort((left, right) => left.at.localeCompare(right.at))
+                .map((entry) => (
+                  <li key={`${entry.scope}\u0000${entry.section}\u0000${entry.text}`}>
+                    <span className="memory-age">{describeAge(entry.at)}</span>{' '}
+                    {entry.text}
+                  </li>
+                ))}
+            </ul>
+          </details>
+        </>
+      )}
+
       {problem !== null && (
         <p className="connector-detail connector-error">{problem}</p>
       )}
     </SettingsSection>
   );
+}
+
+/**
+ * How long ago a date was, in the words a person would use.
+ *
+ * Rough on purpose — "about a year ago" is the judgement being made, and an exact
+ * day count invites arithmetic about somebody's memory that nobody asked for. An
+ * unparseable date says nothing rather than "NaN".
+ */
+function describeAge(at: string): string {
+  const then = new Date(at);
+  if (Number.isNaN(then.getTime())) {
+    return 'at some point';
+  }
+  const days = Math.floor((Date.now() - then.getTime()) / 86_400_000);
+  if (days <= 0) {
+    return 'today';
+  }
+  if (days === 1) {
+    return 'yesterday';
+  }
+  if (days < 30) {
+    return `${String(days)} days ago`;
+  }
+  const months = Math.round(days / 30);
+  if (months < 18) {
+    return months === 1 ? 'a month ago' : `${String(months)} months ago`;
+  }
+  const years = Math.round(days / 365);
+  return years <= 1 ? 'about a year ago' : `${String(years)} years ago`;
 }
 
 /** Electron wraps a rejected `invoke` in its own prefix, which is noise here. */

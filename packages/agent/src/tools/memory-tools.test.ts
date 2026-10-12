@@ -13,6 +13,7 @@ import {
   createPruneMemoryTool,
   createReadMemoryTool,
   createUpdateMemoryTool,
+  SAME_FACT_SCORE,
 } from './memory-tools.js';
 import type {RecallLookup} from './recall-tools.js';
 
@@ -53,6 +54,36 @@ function fakeRecall(state: MemoryIndexState | Error): {
     },
   };
   return {recall, asked};
+}
+
+/**
+ * A lookup that answers with bullets, for the near-duplicate advisory.
+ *
+ * Separate from `fakeRecall` rather than an option on it, because the two are
+ * about different questions: that one is about the *index note* a write carries,
+ * and this one is about what memory already holds.
+ */
+function recallHolding(
+  hits: Array<{section?: string; text: string; score: number}>,
+  state: MemoryIndexState = {vectors: hits.length, index: true, behind: false},
+): RecallLookup {
+  return {
+    scopes: () => ['memory'],
+    search: async () => ({
+      hits: hits.map((hit) => ({
+        kind: 'memory' as const,
+        path: '',
+        ...(hit.section === undefined ? {} : {section: hit.section}),
+        preview: hit.text,
+        score: hit.score,
+        text: hit.text,
+        stale: false,
+      })),
+      searched: ['memory'],
+      notes: [],
+    }),
+    memoryState: async () => state,
+  };
 }
 
 describe('memory tools', () => {
@@ -192,6 +223,117 @@ describe('memory tools', () => {
     expect(output).toContain('dedupe');
     expect(await readFile(memory.file, 'utf8')).toBe('## Facts\n- first\n');
     expect(await readFile(`${memory.file}.bak`, 'utf8')).toContain('- first');
+  });
+
+  /*
+   * The near-duplicate advisory.
+   *
+   * What it is for: a fact restated in different words has no substring in common
+   * with the bullet already in memory, so the store's own de-duplication cannot
+   * see it and the file quietly accumulates two versions of one fact. The note
+   * asks the model which of the two it meant.
+   */
+  describe('when memory already holds something close', () => {
+    it('says so, and names the bullet', async () => {
+      const output = await run(
+        createUpdateMemoryTool({
+          memory,
+          recall: recallHolding([
+            {section: 'Preferences and tone', text: 'They use npm.', score: 0.94},
+          ]),
+        }),
+        {content: 'They have moved to pnpm.', section: 'Preferences and tone'},
+      );
+
+      expect(output).toContain('Memory already holds something close');
+      expect(output).toContain('They use npm.');
+      expect(output).toContain('0.94');
+      expect(output).toContain('"replaces"');
+    });
+
+    it('says nothing when the nearest bullet is not close enough', async () => {
+      const output = await run(
+        createUpdateMemoryTool({
+          memory,
+          recall: recallHolding([
+            {text: 'Has a dog called Sunshine.', score: SAME_FACT_SCORE - 0.01},
+          ]),
+        }),
+        {content: 'They use pnpm.'},
+      );
+
+      expect(output).not.toContain('Memory already holds something close');
+    });
+
+    /*
+     * A behind index is missing everything written since the last refresh, so
+     * "nothing similar" would be a claim about a document that no longer exists.
+     */
+    it('says nothing while the index is behind', async () => {
+      const output = await run(
+        createUpdateMemoryTool({
+          memory,
+          recall: recallHolding(
+            [{text: 'They use npm.', score: 0.99}],
+            {vectors: 1, index: true, behind: true},
+          ),
+        }),
+        {content: 'They use pnpm.'},
+      );
+
+      expect(output).not.toContain('Memory already holds something close');
+    });
+
+    /*
+     * A call that already names the bullet it corrects has answered this question
+     * itself, and telling it about a bullet it is busy removing is noise.
+     */
+    it('says nothing when the call is already a correction', async () => {
+      await run(createUpdateMemoryTool({memory}), {
+        content: 'They use npm.',
+        section: 'Preferences and tone',
+      });
+      const output = await run(
+        createUpdateMemoryTool({
+          memory,
+          recall: recallHolding([
+            {text: 'They use npm.', score: 0.99},
+          ]),
+        }),
+        {
+          content: 'They have moved to pnpm.',
+          section: 'Preferences and tone',
+          replaces: 'They use npm.',
+        },
+      );
+
+      expect(output).not.toContain('Memory already holds something close');
+      expect(output).toContain('Replaced');
+    });
+
+    it('says nothing when the lookup fails', async () => {
+      const failing: RecallLookup = {
+        scopes: () => ['memory'],
+        search: async () => {
+          throw new Error('the recall model is not running');
+        },
+      };
+      const output = await run(
+        createUpdateMemoryTool({memory, recall: failing}),
+        {content: 'They use pnpm.'},
+      );
+
+      expect(output).toContain('Updated memory');
+      expect(output).not.toContain('Memory already holds something close');
+    });
+
+    it('says nothing when there is no recall at all', async () => {
+      const output = await run(createUpdateMemoryTool({memory}), {
+        content: 'They use pnpm.',
+      });
+
+      expect(output).not.toContain('Memory already holds something close');
+    });
   });
 
   it('reports an oversized rewrite instead of throwing', async () => {

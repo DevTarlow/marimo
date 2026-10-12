@@ -78,6 +78,147 @@ function bulletCount(text: string): number {
     .filter((line) => /^[-*]\s+\S/u.test(line)).length;
 }
 
+/**
+ * How alike two bullets have to be before one is called a restatement.
+ *
+ * Higher than the retrieval floor, and for a different question. That floor
+ * answers "is this worth putting in front of somebody"; this one answers "is
+ * this the same sentence", and a false yes is worse than a false no — it tells
+ * the model to remove a bullet that was a separate fact, which is the failure the
+ * `replaces` path exists to avoid.
+ *
+ * **This number is a conservative starting point rather than a measurement**, and
+ * it is deliberately too high rather than too low: too high means the advisory
+ * rarely fires, too low means it fires on unrelated facts. `near-duplicate.live.test.ts`
+ * is what measures it against real bullets when the weights are present, exactly
+ * as the retrieval floor is pinned by its own live test.
+ */
+export const SAME_FACT_SCORE = 0.9;
+
+/**
+ * How long the advisory may take before it is skipped.
+ *
+ * A write is something the user is waiting on, and the engine may be cold. Short
+ * enough to be invisible, which is the point: this is a hint, not a check, and a
+ * missed hint costs nothing while a slow write costs a turn.
+ */
+const NEAR_DUPLICATE_DEADLINE_MS = 250;
+
+/** How many bullets the advisory looks at. */
+const NEAR_DUPLICATE_LIMIT = 3;
+
+/** A bullet that already says something close to what is being written. */
+export interface NearDuplicate {
+  section: string;
+  text: string;
+  score: number;
+}
+
+/**
+ * The nearest existing bullet, when it is close enough to be the same fact.
+ *
+ * Advisory and total. Every reason it cannot answer — no recall, no memory
+ * corpus, an index that has not caught up with the file, a cold engine, a
+ * search that took too long — answers `undefined`, and `undefined` renders as
+ * no note at all. A write must never fail, or even slow down visibly, because a
+ * second process could not be asked a question.
+ *
+ * Called *before* the write, and that is not a detail: run afterwards, the
+ * bullet just added is in memory and in the index, so the nearest bullet to the
+ * new fact is the new fact — a note that says every write duplicates itself.
+ */
+export async function findNearDuplicate(
+  fact: string,
+  recall: RecallLookup | undefined,
+): Promise<NearDuplicate | undefined> {
+  const query = fact.trim();
+  if (recall === undefined || query.length === 0) {
+    return undefined;
+  }
+  try {
+    if (!recall.scopes().includes('memory')) {
+      return undefined;
+    }
+    /*
+     * A behind index is the one case where a wrong answer is likely rather than
+     * merely possible: it is missing the bullets written since the last refresh,
+     * so "nothing similar" would be a statement about a document that no longer
+     * exists. The next write gets the note instead.
+     */
+    const state = await recall.memoryState?.();
+    if (state?.behind === true) {
+      return undefined;
+    }
+    const answer = await withDeadline(
+      recall.search({
+        query,
+        scopes: ['memory'],
+        limit: NEAR_DUPLICATE_LIMIT,
+      }),
+      NEAR_DUPLICATE_DEADLINE_MS,
+    );
+    const best = answer.hits
+      .filter((hit) => hit.text.trim().length > 0)
+      .sort((left, right) => right.score - left.score)[0];
+    if (best === undefined || best.score < SAME_FACT_SCORE) {
+      return undefined;
+    }
+    return {
+      section: best.section ?? '',
+      text: best.text,
+      score: best.score,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What the model is told about a near-duplicate, in one paragraph.
+ *
+ * Written as a question about *this* bullet rather than as an instruction, and it
+ * says which of the two things to do: memory holds one file of facts, so a
+ * restatement should not be added twice and a contradiction must take the old
+ * wording out. A note that only said "this looks similar" would leave a small
+ * model to invent a third option.
+ */
+export function nearDuplicateNote(found: NearDuplicate): string {
+  const where = found.section.length > 0 ? ` under "${found.section}"` : '';
+  return (
+    `Memory already holds something close to this${where}: ` +
+    `"${found.text}" (similarity ${found.score.toFixed(2)}). ` +
+    'If that is the same fact in different words, it does not need adding again. ' +
+    'If this one corrects it, send it again with "replaces" set to that exact ' +
+    `bullet so the old wording is removed — do not add a second version of it.`
+  );
+}
+
+/**
+ * A promise, or a rejection if it takes longer than the deadline.
+ *
+ * The same shape the host uses, and a local copy rather than a shared one
+ * because the host asks a different question about a different thing: there, a
+ * timeout changes what is in the prompt, and here it means no note. Sharing the
+ * helper would tie a prompt's fallback to a hint's.
+ */
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('the lookup took too long'));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export function createReadMemoryTool(context: MemoryToolContext) {
   return new FunctionTool({
     name: 'read_memory',
@@ -163,6 +304,15 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
         ),
     }),
     execute: async ({content, section, scope, mode, replaces}) => {
+      /*
+       * Asked before the write, and only when nothing is being corrected: a call
+       * that already names the bullet it replaces has answered this question
+       * itself, and a whole-section rewrite is not a fact to compare.
+       */
+      const similar =
+        replaces === undefined && (mode ?? 'append') === 'append'
+          ? await findNearDuplicate(content, context.recall)
+          : undefined;
       let report: Awaited<ReturnType<MemoryStore['update']>>;
       try {
         report = await context.memory.update({
@@ -213,7 +363,11 @@ export function createUpdateMemoryTool(context: MemoryToolContext) {
        */
       warmRecall(context.recall);
       const note = await indexNote(context, bulletCount(report.content));
-      const suffix = [warning, note]
+      const suffix = [
+        similar === undefined ? '' : nearDuplicateNote(similar),
+        warning,
+        note,
+      ]
         .filter((part) => part.length > 0)
         .join('\n\n');
       return suffix.length > 0 ? `${outcome}\n\n${suffix}` : outcome;

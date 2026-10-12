@@ -136,6 +136,15 @@ export type {
   ReviewEvent,
   ReviewRequest,
 } from './memory/index.js';
+/*
+ * The threshold `update_memory` uses to decide that a new bullet and an existing
+ * one are probably the same fact. Exported because it is a *measurement* rather
+ * than a constant: `same-fact.live.test.ts` in the runtime package is the thing
+ * that pins it against the real embedding model, and a test cannot pin a number
+ * it cannot import.
+ */
+export {SAME_FACT_SCORE} from './tools/memory-tools.js';
+export type {NearDuplicate} from './tools/memory-tools.js';
 export {SKILLS, composeInstruction} from './skills/index.js';
 /*
  * Document versioning lives here rather than in `@marimo/runtime` because the

@@ -387,6 +387,27 @@
   user-select: text;
 }
 
+/*
+ * The dot that says something is waiting in Settings.
+ *
+ * A dot rather than a count: nothing here needs acting on now, and a number
+ * beside a button invites reading it as a task. The title attribute carries the
+ * count for anybody who wants it.
+ */
+.head-settings {
+  position: relative;
+}
+
+.head-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 .head-theme {
   display: flex;
   gap: var(--space-1);

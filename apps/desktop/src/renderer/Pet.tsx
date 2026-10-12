@@ -237,6 +237,20 @@ export function Pet(): React.JSX.Element {
       */}
       <div className="pet-moss" title="Drag to move">
         <img src="./marimo-logo.png" alt="Marimo" draggable={false} />
+        {/*
+          The same dot the window's Settings entry carries, on the surface a
+          casual user actually leaves open: the moss is the thing on screen all
+          day, and a suggestion that arrives while nobody is in the window is
+          exactly the case this is for. Not a badge with a number — the pet is too
+          small for one, and there is nothing here that needs acting on now.
+        */}
+        {agent.memoryWaiting > 0 && (
+          <span
+            className="pet-dot"
+            role="status"
+            aria-label="Something worth remembering is waiting"
+          />
+        )}
         <div className="pet-hover-actions">
           <Copy text={lastAnswer(shown, agent.live?.text)} what="last answer" />
           {/*

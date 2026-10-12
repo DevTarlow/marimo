@@ -260,6 +260,7 @@ export function App(): React.JSX.Element {
         }}
         modelProgress={agent.modelProgress}
         modelRevision={agent.modelRevision}
+        lastReview={agent.lastReview}
         onExperienceModeChange={(mode) => {
           /*
            * The density is this window's, and the switch is in the dialog, so
@@ -355,14 +356,31 @@ export function App(): React.JSX.Element {
           >
             Search
           </button>
+          {/*
+            The dot, and the whole reason the memory review is a feature rather
+            than a setting: a suggestion nobody is told about only exists if the
+            user happens to reopen a dialog. It is a dot rather than a count
+            because nothing here needs acting on, and it is cleared when the
+            dialog opens — the panel is where the list is, and the user is looking
+            at it.
+          */}
           <button
             type="button"
-            className="button button-quiet button-small"
+            className="button button-quiet button-small head-settings"
+            title={
+              agent.memoryWaiting > 0
+                ? `${String(agent.memoryWaiting)} thing(s) worth remembering are waiting in Settings`
+                : 'Settings'
+            }
             onClick={() => {
+              agent.clearMemoryWaiting();
               setShowSettings(true);
             }}
           >
             Settings
+            {agent.memoryWaiting > 0 && (
+              <span className="head-dot" aria-hidden="true" />
+            )}
           </button>
           <div className="head-theme" role="group" aria-label="Theme">
             {THEME_MODES.map((mode) => (

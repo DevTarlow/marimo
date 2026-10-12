@@ -140,6 +140,12 @@ export interface AgentController {
   openSettings: number;
   /** A download in flight, or null. Drawn by the welcome screen and the card. */
   modelProgress: ModelProgress | null;
+  /** Suggestions that have arrived since the panel was last opened. */
+  memoryWaiting: number;
+  /** What the last background look at the conversation read, and found. */
+  lastReview: {events: number; found: number} | null;
+  /** Clears that, when the panel opens and the user is looking at them. */
+  clearMemoryWaiting: () => void;
   /** Changes whenever the model files do, so a reader knows to re-read. */
   modelRevision: number;
   /** The stored theme preference, kept in step with the settings file. */
@@ -191,6 +197,27 @@ export function useAgent(): AgentController {
    * the Model card in Settings, and neither should own the stream.
    */
   const [modelProgress, setModelProgress] = useState<ModelProgress | null>(null);
+  /**
+   * How many suggestions have arrived since the user last looked at the panel.
+   *
+   * A count rather than the proposals themselves: this exists to put a dot
+   * somewhere, and the panel already reads the real list from the store when it
+   * opens. Held here because the event arrives while Settings is closed, which is
+   * the whole reason the count is worth having — a suggestion nobody is told
+   * about is one that only exists if they happen to reopen a dialog.
+   */
+  const [memoryWaiting, setMemoryWaiting] = useState(0);
+  /**
+   * What the last background look did.
+   *
+   * Kept apart from the count above and deliberately not cleared when the panel
+   * opens: the count answers "is there something new", and this answers "is the
+   * thing working at all" — a question a user asks precisely when a look has run
+   * and proposed nothing, which is the answer most of the time.
+   */
+  const [lastReview, setLastReview] = useState<{events: number; found: number} | null>(
+    null,
+  );
   /** Bumped when the model files change, so whoever is looking re-reads them. */
   const [modelRevision, setModelRevision] = useState(0);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -457,6 +484,24 @@ export function useAgent(): AgentController {
         setModelRevision((count) => count + 1);
         return;
       }
+      /*
+       * A background look at the conversation found something worth remembering.
+       *
+       * Handled before the conversation filter for the same reason the model
+       * download is: a proposal belongs to the *agent* rather than to whichever
+       * chat is on screen, and the event carries no session id to be filtered by.
+       * Counted rather than replaced, because two looks since the user last
+       * opened the panel are two more suggestions waiting, not the latest one.
+       */
+      if (event.type === 'memory.proposed') {
+        setMemoryWaiting((count) => count + event.count);
+        return;
+      }
+      if (event.type === 'memory.reviewed') {
+        setLastReview({events: event.events, found: event.found});
+        return;
+      }
+
       if (event.type === 'model.failed') {
         setModelProgress(null);
         // The banner the window already has for a failure the user must read.
@@ -885,6 +930,11 @@ export function useAgent(): AgentController {
     themeMode,
     modelProgress,
     modelRevision,
+    memoryWaiting,
+    lastReview,
+    clearMemoryWaiting: () => {
+      setMemoryWaiting(0);
+    },
     reload: boot,
     newSession,
     dismissError: () => {

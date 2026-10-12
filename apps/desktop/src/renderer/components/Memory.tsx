@@ -44,10 +44,20 @@ export function Memory({
   opened,
   onToggle,
   onChange,
+  lastReview,
 }: {
   opened: ReadonlySet<string>;
   onToggle: (title: string, expanded: boolean) => void;
   onChange?: () => void;
+  /**
+   * What the last background look read, and how much it found.
+   *
+   * The reassurance half of the feature. A look that read forty events and found
+   * nothing is the *usual* outcome, and without this line the only visible
+   * evidence is an empty list — which is exactly what a broken feature looks
+   * like. Absent before the first look of this session.
+   */
+  lastReview?: {events: number; found: number} | null;
 }): React.JSX.Element {
   const [proposals, setProposals] = useState<MemoryProposal[] | null>(null);
   /**
@@ -327,6 +337,19 @@ export function Memory({
         what is worth keeping. These are shown to it at the start of every
         future conversation, so it asks before writing one down.
       </p>
+
+      {/*
+        Drawn before the list rather than after it, because it is the answer to
+        "is this working at all" and that question comes first when the list is
+        empty — which is most of the time, and exactly when an empty list is
+        indistinguishable from a feature that never ran.
+      */}
+      {lastReview !== undefined && lastReview !== null && (
+        <p className="settings-why">
+          The last look read {lastReview.events} message
+          {lastReview.events === 1 ? '' : 's'} and found {lastReview.found}.
+        </p>
+      )}
 
       {proposals === null ? (
         <p className="settings-muted">Reading…</p>

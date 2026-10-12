@@ -95,12 +95,15 @@ export function Settings({
   onExperienceModeChange,
   modelProgress,
   modelRevision,
+  lastReview,
 }: {
   onClose: () => void;
   /** A model download in flight, from the window's event stream. */
   modelProgress: ModelProgress | null;
   /** Changes when the model files do, so the Model card re-reads them. */
   modelRevision: number;
+  /** What the last background look read and found, for the Memory card. */
+  lastReview?: {events: number; found: number} | null;
   /**
    * Told which size the dialog is now drawn at.
    *
@@ -859,7 +862,11 @@ export function Settings({
           }}
         />
 
-        <Memory opened={opened} onToggle={fold} />
+        <Memory
+          opened={opened}
+          onToggle={fold}
+          {...(lastReview === undefined ? {} : {lastReview})}
+        />
         {/*
           Recall sits beside memory because it is the same subject from the other
           end: memory is what the agent writes down, recall is how it finds it

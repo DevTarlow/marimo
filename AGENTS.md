@@ -130,7 +130,21 @@ it beside the stores.
 session index was the last one missing the guard, and its lenient read plus an
 unguarded write meant a corrupt index became an empty one on the very next
 message — every conversation gone from the sidebar. When you add a store, add it
-to that list.
+to that list. The two documents added since — `feedback.json`, and the bullet
+dates in `memory/<profile>/provenance.json` — both read through
+`readVersionedDocument` and call `assertWritable` before writing, and the second
+one quarantines an unreadable file first because a date that cannot be trusted is
+not a reason to lose the facts it describes.
+
+**Memory is the one document that is not versioned, and there are two of them.**
+`memory.md` is plain markdown a user edits by hand, so a version field would be a
+lie about a file the app does not own; the split between the person's half (under
+user data) and the folder's half is by *layer*, and which layer goes where is
+`scopeForSection` in `sections.ts`. The merge, the de-duplication and the one-time
+adoption of a file written before the split are all in `MemoryStore`, and a store
+built without `personMemoryRoot` is exactly the old one-file store — which is what
+every test that predates the split still gets.
+
 
 **One document's data sometimes has to move to another's.** The folders used to
 be a field on each profile; they are `workspaces.json` now, adopted on the first

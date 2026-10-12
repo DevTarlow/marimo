@@ -83,6 +83,8 @@ pnpm build:web   # the renderer bundle — `build` alone leaves it stale
 | Done        | The desktop companion: a frameless, transparent, click-through moss ball that answers in bubbles above itself, with its own chat bar underneath and its own settings for how long it answers, how much it shows, and whether it floats  |
 | Done        | A first run that downloads the model it needs, with progress and a resumed download, instead of showing a chat that refuses                                                                                                             |
 | Done        | A memory review: after a conversation goes quiet the agent proposes what is worth remembering and asks before writing it — reading a long session in stretches rather than only once it ends, and remembering the facts you turned down |
+| Done        | Memory in two halves: who the user is, which follows them between projects, and what this folder is, which does not — with a correction able to replace an old fact rather than sit beside it, and every bullet dated |
+| Done        | A way to say an answer was wrong. It is recorded, never written straight into memory, and the next review reads it |
 | Done        | Recall: find things by what they mean rather than by the words they use, across the folder you loaded, memory, your own conversations and — with one more download — images, audio and video, from a search box or the agent's own tool |
 | In progress | Windows and macOS installers (the config is written and both package; the installers are unbuilt — see [Building a release](#building-a-release))                                                                                       |
 
@@ -232,6 +234,63 @@ constrain behaviour — tone, conventions, boundaries — ride along whole whate
 was asked, because a missed rule is a wrong action and a missed fact is only a
 worse answer.
 
+### Memory is two files, and the layer decides which
+
+Memory is markdown, and there are two of them. `memory/<profile>/memory.md` under
+user data holds the facts about the *person* — who they are, how they want to be
+talked to, what they have asked never to happen. `<folder>/.marimo/<profile>/`
+holds the facts about *this workspace* — its conventions, its paths, one pointer
+per project to wherever it keeps its state.
+
+The split is by **layer**, and the vocabulary already knew which was which: the
+canonical sections in `sections.ts` carry a `scope`, separate from the `always`
+flag. It had to be separate. `Environment and conventions` rides along whole in
+every prompt *and* is a fact about one repository, so collapsing the two axes
+would have put one project's rules in every other project's prompt.
+
+Both files are read as one document, so everything above this — the prompt block,
+the recall index, the staleness hash, the block that narrows memory per question —
+never learned there are two. Only the write path knows, and it routes by section:
+a canonical name answers its own scope, and a heading the app never named stays in
+the workspace file, which is where it already is. That default is the careful
+half — nothing a user typed by hand moves on upgrade.
+
+The move itself happens once, on the first read after upgrading, and it is the
+same shape as the folders' adoption: data moving between two documents cannot be
+a migration, which is a pure function of one. Person-level sections are copied out
+of the workspace file and then removed from it, in that order, because the other
+order loses them if it throws in between. The merged read de-duplicates bullets,
+so the transient state where a fact is in both is invisible rather than doubled.
+
+Two things this deliberately does not do. A prune that never mentions the person
+leaves that half exactly as it was and says so in the tool result: the document
+the model sends replaces memory, and with two files "I did not mention it" and "I
+want it gone" are otherwise the same sentence. And no layer is ever deleted for
+being old — `provenance.json` records when each bullet was first written and the
+Memory card shows them oldest first, so what is stale is visible and the decision
+stays with the person.
+
+### An answer can be judged, and the judgement goes to the reviewer
+
+Everything in this app could be corrected except the thing the agent actually
+said. A fact can be replaced, a suggestion refused, a manner written down — but
+"you had that wrong, it is like this" had nowhere to go, and that is the
+difference between a store of facts and something that improves.
+
+There is now a quiet **Not quite** under an answer, in the window and on the moss,
+which records an optional line about what was right instead. Nothing is written to
+memory and nothing is said back: the transcript is left as it was, because a
+correction is a note *about* a conversation rather than a turn in it. What reads
+it is the next memory review, which gets the corrections as a block of their own —
+the strongest evidence it ever receives, because the person has already done the
+work of stating what is true. It is deliberately not the same as a refusal: a
+refusal says "do not remember that", a correction says "this is right".
+
+The store holds the user's words verbatim and bounded, and it is scoped to the
+profile, because one agent being told it was wrong about a deployment is not a
+fact about the other one. It reads leniently so a corrupt file still opens the
+window, and it moves that file aside before writing rather than over it.
+
 ### Two sizes, and one switch between them
 
 Everything the app can do is still a switch somebody turns on. What changed is
@@ -348,12 +407,16 @@ how development, the tests and the smoke check keep their state out of yours.
 secrets/                one file per secret, encrypted — a machine without a
                         keychain is refused rather than written readable
 sessions/               one JSONL file per conversation, plus an index
+memory/<profile>/       the half of memory that is about the *person*, plus the
+                        dates of every remembered bullet — it lives under user
+                        data because it has to outlive the folder
 profiles.json           the agents: identity and capabilities
 workspaces.json         the folders every agent can work in, and the current one
 jobs.json               scheduled jobs and how their last run went
 settings.json           preferences and connectors
 skills.json             skills you wrote
 memory-proposals.json   what the agent would remember, waiting for an answer
+feedback.json           answers the user said were wrong, which the next review reads
 window-state.json       where the main window was left
 companion-state.json    where the moss was left
 local-model.pid         the engine this process started, so a crash cannot orphan it
@@ -361,6 +424,10 @@ recall.pid              the embedding engine, for the same reason
 recall/                 the search index, when a profile has no folder to keep it in
 app.lock                the running app, so the headless runner leaves the jobs alone
 ```
+
+The other half of memory is the project's, and it is not here: it is
+`<folder>/.marimo/<profile>/memory.md`, so a folder you put on a stick takes its
+own remembered conventions with it and none of your personal facts.
 
 The model is in there too, under `model/`: the chat engine, whichever tier was
 downloaded, and a marker naming the engine asset it was unpacked from so a build

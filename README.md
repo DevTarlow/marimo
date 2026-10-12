@@ -18,7 +18,15 @@ own documents or code. It cannot see anything outside that folder.
 Web search is there for questions that need something current.
 
 Things you tell it, such as a preference or how a project is set up, are
-remembered and brought up in later conversations.
+remembered and brought up in later conversations. What it learns about *you* — a
+name, an animal, how you like to be talked to — follows you between folders,
+while the rules of a particular project stay with that project.
+
+If an answer is wrong, say so: there is a small "Not quite" under every reply
+where you can add one line about what was right instead. It is not written into
+memory directly — the next time the agent reads a conversation back it proposes
+that fact, and you decide. Settings shows you everything it remembers and when
+each line was written, so you can see what has been sitting there a while.
 
 It can also find a file or a note from a description of what it was about, even
 when you do not know the words in it. This one is off until you turn it on,

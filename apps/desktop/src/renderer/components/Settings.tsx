@@ -49,6 +49,7 @@ import {chosenPreset} from '../capabilities.js';
 import {describe} from '../describe.js';
 import type {ModelProgress} from '../hooks/useAgent.js';
 import {Connectors} from './Connectors.js';
+import {Dream} from './Dream.js';
 import {Memory} from './Memory.js';
 import {Model} from './Model.js';
 import {Recall} from './Recall.js';
@@ -882,6 +883,22 @@ export function Settings({
           <Connectors
             servers={loaded.settings.mcpServers}
             statuses={loaded.statuses}
+            opened={opened}
+            onToggle={fold}
+            onChange={() => {
+              void load();
+            }}
+          />
+        )}
+
+        {/*
+          Dream-RSI, power only — see the note at the top of its own file. Last
+          in the dialog because it is the thing fewest people will want, and a
+          capability nobody has turned on should not push the ones they have
+          further up the screen.
+        */}
+        {power && (
+          <Dream
             opened={opened}
             onToggle={fold}
             onChange={() => {

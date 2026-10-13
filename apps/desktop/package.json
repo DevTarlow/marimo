@@ -11,6 +11,7 @@
     "build": "tsc -b tsconfig.runner.json && vite build",
     "start": "tsx scripts/dev.ts",
     "run-due": "node dist/runner/run-due.js --run-due",
+    "replay:dream": "node dist/runner/replay-dream.js",
     "typecheck": "tsc -b tsconfig.runner.json && tsc -p tsconfig.renderer.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "model:fetch": "node scripts/local-model.mjs fetch",

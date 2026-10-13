@@ -29,9 +29,17 @@ import type {
   TokenUsage,
   TranscriptMessage,
 } from '@marimo/protocol';
-import {MAIN_AGENT_NAME} from '@marimo/protocol';
+import {
+  DEFAULT_DREAM_EXPLORATION_WEIGHT,
+  DEFAULT_DREAM_PRUNING_THRESHOLD,
+  DEFAULT_DREAM_RESULT_BYTES,
+  MAIN_AGENT_NAME,
+} from '@marimo/protocol';
 
-import type {AgentConfig} from '../config.js';
+import type {AgentConfig, DreamConfig} from '../config.js';
+import type {DreamSink} from '../dream/recorder.js';
+import {TreeRecorder} from '../dream/recorder.js';
+import {DreamToolPlugin} from '../dream/tool-plugin.js';
 import {MemoryStore} from '../memory/index.js';
 import type {MemoryProvenanceEntry} from '@marimo/protocol';
 import type {SupersedeReport} from '../memory/index.js';
@@ -121,6 +129,30 @@ export interface AgentHostOptions {
    * assembled, not about the agent.
    */
   recallService?: RecallLookup;
+  /**
+   * Where a turn's discovery tree goes, when Dream-RSI is on for that turn.
+   *
+   * A sink rather than a directory, for the reason `sessionsDir` is a directory
+   * and this is not: the host is what records, and whoever owns the file — the
+   * runtime, in both the window and the headless runner — is what knows the path.
+   * Resolving a path in here would put the user-data layout into a package that
+   * cannot see Electron's answer to where it is, which is the class of bug this
+   * repository lists as an invariant.
+   *
+   * Absent means no tree is ever recorded, whatever the config says. Both have to
+   * agree before anything is written, and that is deliberate: it is the second
+   * lock on a feature whose failure mode is recording somebody's work without
+   * their having asked.
+   */
+  dreamSink?: DreamSink;
+  /**
+   * Bytes of a tool result one node keeps.
+   *
+   * Absent means the built-in default. Here rather than in the config because it
+   * is a fact about the record rather than about the agent: nothing the model
+   * does changes because a result was capped at a different length.
+   */
+  dreamResultBytes?: number;
   /**
    * Told which conversations are gone, right after they are deleted.
    *
@@ -244,6 +276,15 @@ export class AgentHost {
    * the prompt and the tools can never disagree about which file is memory.
    */
   private readonly memory: MemoryStore;
+  /**
+   * Everything the host was built with, kept whole.
+   *
+   * The services below are still copied onto their own fields, so every existing
+   * reader is unchanged. This one exists for the two Dream-RSI options, which are
+   * read at the moment a runner is built rather than at construction: a sink and
+   * a byte cap describe a *turn*, and the runner cache outlives many of them.
+   */
+  private readonly options: AgentHostOptions;
   private readonly webSearch?: WebSearchProvider;
   private readonly jobService?: JobService;
   private readonly discordService?: DiscordService;
@@ -299,6 +340,16 @@ export class AgentHost {
    * runner is built, not because a second model is coming.
    */
   private readonly runners = new Map<string, Runner>();
+  /**
+   * The discovery tree being recorded for each invocation, when Dream-RSI is on.
+   *
+   * Keyed by invocation because that is what ADK's tool callbacks can name — a
+   * plugin is handed a `Context` and nothing else — and because a turn is one
+   * invocation, so the key and the unit are the same thing. One entry in practice:
+   * one turn runs at a time. The map exists because the entry has to be reachable
+   * from a callback that only knows an id.
+   */
+  private readonly dreamRecorders = new Map<string, TreeRecorder>();
   private active: {sessionId: string; controller: AbortController} | undefined;
   /**
    * The approval gates a paused turn is waiting on, and the decisions taken so
@@ -319,6 +370,7 @@ export class AgentHost {
   private gateRound: GateRound | undefined;
 
   constructor(options: AgentHostOptions) {
+    this.options = options;
     this.sessionService = new FileSessionService({
       rootDir: options.sessionsDir,
     });
@@ -380,6 +432,23 @@ export class AgentHost {
      * does, would be the one case where the feature could never work.
      */
     this.config = config;
+    /*
+     * Dream-RSI moves the runner cache rather than aborting a turn.
+     *
+     * The plugin is chosen when a runner is built, so switching the feature on or
+     * off has to invalidate the cached one — otherwise the setting would appear
+     * to do nothing until the model changed or the app restarted, which is the
+     * shape of bug this whole file is written to avoid. It is *not* in
+     * `affectsRuns` above, and that is the deliberate part: `affectsRuns` aborts
+     * a turn in flight, and aborting somebody's answer because they moved a
+     * slider is a worse outcome than the setting taking effect on the next turn.
+     * So the cache is dropped and the turn that is already running finishes under
+     * the policy it started with — which is also the honest thing for the log to
+     * record, since the tree stores the weights it ran under.
+     */
+    if (!sameDream(this.config.dream, config.dream)) {
+      this.runners.clear();
+    }
     // Memory follows both the folder and the agent: a profile switch must not
     // inherit the previous agent's remembered facts.
     this.memory.setWorkspaceRoot(config.workspaceRoot);
@@ -1200,10 +1269,98 @@ export class AgentHost {
       appName: this.appName,
       agent,
       sessionService: this.sessionService,
-      plugins: [new RepeatedToolCallPlugin()],
+      /*
+       * One plugin or the other, never both.
+       *
+       * Two plugins both deciding whether a call may proceed would be two answers
+       * to one question, and the first to return a value short-circuits the rest
+       * — so which won would depend on registration order rather than on anything
+       * anybody chose. With Dream-RSI off the runner gets exactly the plugin it
+       * has always had, which is what makes "off" mean the code that ran before
+       * this feature existed.
+       */
+      plugins: [
+        this.dreamEnabled()
+          ? new DreamToolPlugin({
+              recorderFor: (invocationId) =>
+                this.dreamRecorders.get(invocationId),
+              // Read per turn rather than captured: a user who moves the slider
+              // while the agent is thinking gets the new weight on the next turn.
+              settings: () => ({
+                explorationWeight:
+                  this.config.dream?.explorationWeight ??
+                  DEFAULT_DREAM_EXPLORATION_WEIGHT,
+                pruningThreshold:
+                  this.config.dream?.pruningThreshold ??
+                  DEFAULT_DREAM_PRUNING_THRESHOLD,
+              }),
+            })
+          : new RepeatedToolCallPlugin(),
+      ],
     });
     this.runners.set(model, runner);
     return runner;
+  }
+
+  /**
+   * Whether this turn is being recorded and its search controlled.
+   *
+   * Both halves have to be present: the config says the user asked for the
+   * feature, and the sink says somebody is willing to store the result. A host
+   * built without a sink — every test, and the placeholder host the runtime makes
+   * before it has read a folder — therefore records nothing even if it is handed
+   * a config that asks for it, which is the direction a mistake should fall in.
+   */
+  private dreamEnabled(): boolean {
+    return this.config.dream !== undefined && this.options.dreamSink !== undefined;
+  }
+
+  /**
+   * Starts a tree for one invocation, or answers nothing when the feature is off.
+   *
+   * Registered in a map keyed by invocation id because that is the only name a
+   * plugin callback is given: ADK hands a plugin a `Context`, and a `Context`
+   * knows its invocation and not this host. The entry is removed when the turn
+   * ends — see {@link closeRecorder} — so a long-lived window does not accumulate
+   * one tree per turn it has ever run.
+   */
+  private openRecorder(context: {
+    sessionId: string;
+    invocationId: string;
+    profileId?: string;
+  }): TreeRecorder | undefined {
+    const sink = this.options.dreamSink;
+    const policy = this.config.dream;
+    if (sink === undefined || policy === undefined) {
+      return undefined;
+    }
+
+    const recorder = new TreeRecorder(
+      {
+        sessionId: context.sessionId,
+        invocationId: context.invocationId,
+        ...(context.profileId === undefined
+          ? {}
+          : {profileId: context.profileId}),
+        policy,
+      },
+      sink,
+      {
+        resultBytes:
+          this.options.dreamResultBytes ?? DEFAULT_DREAM_RESULT_BYTES,
+      },
+    );
+    this.dreamRecorders.set(context.invocationId, recorder);
+    return recorder;
+  }
+
+  /** Forgets a finished turn's tree, so the map holds only what is running. */
+  private closeRecorder(recorder: TreeRecorder): void {
+    for (const [invocationId, known] of this.dreamRecorders) {
+      if (known === recorder) {
+        this.dreamRecorders.delete(invocationId);
+      }
+    }
   }
 
   private async *drive(
@@ -1262,6 +1419,22 @@ export class AgentHost {
      */
     let invocationId = '';
 
+    /*
+     * The turn's discovery tree, when the user has Dream-RSI on.
+     *
+     * Built here rather than in the plugin because the plugin is constructed once
+     * per model while a recorder belongs to one turn, and because *this* is where
+     * the session and the profile are known — a tree is filed under the
+     * conversation it belongs to. The plugin finds it by invocation id, which is
+     * the only name ADK hands a callback.
+     *
+     * `undefined` when the feature is off, and every use below is guarded by the
+     * plugin rather than by this: the recorder is registered so a callback can
+     * reach it, and a turn with no recorder is a turn whose plugin is the
+     * repeat-only one, which never asks.
+     */
+    let dream: TreeRecorder | undefined;
+
     try {
       const events = runner.runAsync({
         userId: this.userId,
@@ -1274,8 +1447,28 @@ export class AgentHost {
       });
 
       for await (const event of events) {
-        if (event.invocationId) {
+        if (event.invocationId && invocationId.length === 0) {
+          /*
+           * The first event of a turn is what names it, and the assignment is
+           * deliberately once-only.
+           *
+           * A turn is one invocation, so every event carries the same id — which
+           * is why this *could* be written as a plain assignment. It is not,
+           * because the two things keyed by this id are the transcript's
+           * invocation stamp and the recorder map, and a turn whose events ever
+           * disagreed would then leave a recorder registered under an id nothing
+           * would ever close. Binding the identity at the first event means the
+           * tree is opened once and closed once whatever arrives after it.
+           *
+           * It is also the earliest the tree can exist, and it has to exist
+           * before the plugin's next callback, which looks it up by this id.
+           */
           invocationId = event.invocationId;
+          dream = this.openRecorder({
+            sessionId,
+            invocationId,
+            ...(profileId === undefined ? {} : {profileId}),
+          });
         }
         for (const part of event.content?.parts ?? []) {
           // A thought part is the model's reasoning, not its answer. It is
@@ -1425,6 +1618,28 @@ export class AgentHost {
       }
     } finally {
       this.active = undefined;
+      /*
+       * The tree is closed here rather than with the events below, and the
+       * ordering is the point: `finally` runs on every path out of the try,
+       * including the one where the recovery above threw. A recorder left open
+       * would keep an entry in the map and a tree whose outcome says `'open'`
+       * forever — and an unfinished turn is exactly the turn somebody would want
+       * to replay.
+       *
+       * The outcome is derived from the same three facts the events below are
+       * derived from, so the log and the window cannot disagree about how a turn
+       * ended.
+       */
+      dream?.finish(
+        controller.signal.aborted
+          ? 'aborted'
+          : failure !== undefined
+            ? 'failed'
+            : 'answered',
+      );
+      if (dream !== undefined) {
+        this.closeRecorder(dream);
+      }
     }
 
     if (controller.signal.aborted) {
@@ -1570,6 +1785,28 @@ function sameList(
   const sortedLeft = [...left].sort();
   const sortedRight = [...right].sort();
   return sortedLeft.every((entry, index) => entry === sortedRight[index]);
+}
+
+/**
+ * Whether two Dream-RSI configurations are the same.
+ *
+ * Three states rather than two, and the third is the one that matters: absent
+ * means off, and `undefined` against a config is a *change* — the user switching
+ * the feature on or off — while two configs with the same two weights are not.
+ * Comparing only the fields would make switching the feature on look like no
+ * change at all, because there is nothing there to compare against.
+ */
+function sameDream(
+  left: DreamConfig | undefined,
+  right: DreamConfig | undefined,
+): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+  return (
+    left.explorationWeight === right.explorationWeight &&
+    left.pruningThreshold === right.pruningThreshold
+  );
 }
 
 function readUsage(event: AdkEvent): TokenUsage | undefined {

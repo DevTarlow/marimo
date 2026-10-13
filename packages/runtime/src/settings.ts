@@ -22,6 +22,7 @@ import {
   appearanceSchema,
   companionSettingsSchema,
   defaultAppearance,
+  defaultDreamSettings,
   defaultRecallSettings,
   defaultCompanionSettings,
   DEFAULT_MEMORY_REVIEW_EVENTS,
@@ -29,6 +30,7 @@ import {
   defaultWindowState,
   defaultDiscordSettings,
   discordSettingsSchema,
+  dreamSettingsSchema,
   recallSettingsSchema,
   settingsPatchSchema,
   settingsSchema,
@@ -98,6 +100,12 @@ export function defaultStoredSettings(): StoredSettings {
     // Recall off: it downloads a model and starts an engine, and neither is
     // something a fresh install should do without being asked.
     recall: defaultRecallSettings(),
+    // Dream-RSI off for the same reason, and a stronger one: turning it on makes
+    // the app write down every tool call the agent makes — its arguments and the
+    // head of its result — which is a record of somebody's work that did not
+    // exist before. Not a secret, and it never leaves the machine, but it is
+    // theirs to agree to rather than a default they discover.
+    dream: defaultDreamSettings(),
   };
 }
 
@@ -263,6 +271,18 @@ export class SettingsStore {
             defaults.recall,
             rawObject['recall'],
           ),
+          /*
+           * And Dream-RSI, filled the same way and for the same reason. It is
+           * also the block where getting this wrong would be quietest: a
+           * hand-edited exploration weight that failed the whole settings parse
+           * would reset every other preference *and* land on `enabled: false`, so
+           * a user's recording would appear to have switched itself off.
+           */
+          dream: fillBlock(
+            dreamSettingsSchema,
+            defaults.dream,
+            rawObject['dream'],
+          ),
         }
       : raw;
 
@@ -300,6 +320,9 @@ export class SettingsStore {
       const recall = defined.recall
         ? {...current.recall, ...definedOnly(defined.recall)}
         : current.recall;
+      const dream = defined.dream
+        ? {...current.dream, ...definedOnly(defined.dream)}
+        : current.dream;
       const merged = settingsSchema.parse({
         ...current,
         ...defined,
@@ -307,6 +330,7 @@ export class SettingsStore {
         companion,
         appearance,
         recall,
+        dream,
       });
       await this.write(merged);
       this.cache = merged;

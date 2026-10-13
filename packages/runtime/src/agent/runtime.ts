@@ -41,7 +41,12 @@ import type {
   SkillService,
   WebSearchProvider,
 } from '@marimo/agent';
-import {DEFAULT_AGENT_IDENTITY, LOCAL_MODEL_ID} from '@marimo/protocol';
+import {
+  DEFAULT_AGENT_IDENTITY,
+  DEFAULT_DREAM_KEEP_LOGS,
+  DEFAULT_DREAM_RESULT_BYTES,
+  LOCAL_MODEL_ID,
+} from '@marimo/protocol';
 import type {
   AgentProfile,
   AgentUiEvent,
@@ -66,6 +71,7 @@ import type {
 import {reviewDelay} from '@marimo/agent';
 
 import type {AppPaths} from '../paths.js';
+import {DreamStore} from '../dream-store.js';
 import {ProfileStore} from '../profiles.js';
 import {FeedbackStore} from '../feedback.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
@@ -186,9 +192,36 @@ export class AgentRuntime {
   private readonly hosts = new Map<string, AgentHost>();
   /** The configuration each host was last built with, so changes are noticed. */
   private readonly applied = new Map<string, string>();
+  /**
+   * The discovery trees, when the user has Dream-RSI on.
+   *
+   * Built unconditionally and asked for nothing until a config enables it, which
+   * is the shape the recall service has from the other side: the *store* costs a
+   * path join, while the capability does not exist until a setting says so. Were
+   * it built inside the settings read instead, the object a host holds its sink
+   * from could change identity between one turn and the next.
+   */
+  private readonly dreamStore: DreamStore;
+  /**
+   * The tree cap, as of the last settings read.
+   *
+   * Cached because the store asks for it on every write and the answer comes from
+   * a settings document that is already being read once per turn. A field rather
+   * than a second read, so a turn's writes cannot disagree with the config that
+   * turn is running under.
+   */
+  private cachedDreamKeepLogs = DEFAULT_DREAM_KEEP_LOGS;
+  private cachedDreamResultBytes = DEFAULT_DREAM_RESULT_BYTES;
 
   constructor(private readonly options: AgentRuntimeOptions) {
     this.settingsStore = new SettingsStore(options.paths.settings);
+    this.dreamStore = new DreamStore({
+      dir: options.paths.dreamDir,
+      // Read per write rather than captured at construction: a user who lowers
+      // the cap in Settings should have the next turn's write trim the file, not
+      // the next launch.
+      keepLogs: () => this.cachedDreamKeepLogs,
+    });
     this.profileStore = new ProfileStore({
       file: options.paths.profiles,
       // A brand-new profile starts with the app's identity and no capabilities:
@@ -870,6 +903,37 @@ export class AgentRuntime {
   async deleteSession(profileId: string, sessionId: string): Promise<void> {
     const host = await this.ensureHost(profileId);
     await host.deleteSession(sessionId, profileId);
+    /*
+     * And its discovery tree, for the reason the recall index drops its vectors:
+     * a record of what the agent did in a conversation must not outlive the
+     * user's ability to see that conversation. Best effort — the deletion the
+     * user asked for has already happened, and a log that could not be moved
+     * aside is not a reason to report a failure that did not occur.
+     */
+    await this.dreamStore.forget(sessionId);
+  }
+
+  /**
+   * The recorded trees, for the replay.
+   *
+   * Exposed rather than kept private because the offline replay is a *separate
+   * program* that this process happens to host: it needs the same store, the same
+   * directory resolution and the same versioning rules, and re-deriving the path
+   * in a CLI would be a second answer to where the trees live.
+   */
+  dreamTrees(): DreamStore {
+    return this.dreamStore;
+  }
+
+  /**
+   * The last thing the recorder could not write, or nothing.
+   *
+   * The window asks so the Dream-RSI card can stop claiming the agent is
+   * recording when it is not. Read-once, so a full disk is reported once rather
+   * than on every redraw of the panel.
+   */
+  takeDreamProblem(): string | undefined {
+    return this.dreamStore.takeProblem();
   }
 
   /** Every conversation, or one agent's. */
@@ -1021,6 +1085,17 @@ export class AgentRuntime {
     if (!resolved.ok) {
       return resolved;
     }
+
+    /*
+     * The two caps the recorder reads, refreshed from the same settings read that
+     * produced this turn's config. Kept here rather than in the store because
+     * this is the one place per turn that has already read the document — the
+     * store is asked for them on every flush, which is several times a turn, and
+     * a second read there would be both slower and a chance for the two answers
+     * to disagree about which settings the turn is running under.
+     */
+    this.cachedDreamKeepLogs = settings.dream.keepLogs;
+    this.cachedDreamResultBytes = settings.dream.resultBytes;
 
     host.updateConfig(resolved.config);
     this.applyMcpServers(host, profileId);
@@ -1302,6 +1377,29 @@ export class AgentRuntime {
       ...(services.discordService
         ? {discordService: services.discordService}
         : {}),
+      /*
+       * Dream-RSI's sink, handed over unconditionally.
+       *
+       * The host decides whether anything is written, and it decides it from two
+       * facts it holds: the config, which is the user's answer, and this sink,
+       * which is the app's ability to store the result. Passing it always rather
+       * than only when the setting is on is what keeps one source of truth for
+       * "is this turn being recorded" — and the store creates no directory until
+       * something is actually written, so an install that never turns the feature
+       * on leaves no trace of it.
+       */
+      dreamSink: {
+        append: (tree) => {
+          /*
+           * Deliberately not awaited, and the promise is deliberately dropped.
+           * This is called from inside a tool callback, where waiting on a disk
+           * would put a lock file and a write between the model and its result.
+           * The store reports what it could not do through `takeProblem`.
+           */
+          void this.dreamStore.append(tree);
+        },
+      },
+      dreamResultBytes: this.cachedDreamResultBytes,
       /*
        * The deletion sync, resolved lazily because the folder to purge from is
        * the one the *service* would have indexed into — and a service is built

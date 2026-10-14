@@ -350,7 +350,19 @@ export class AgentHost {
    * from a callback that only knows an id.
    */
   private readonly dreamRecorders = new Map<string, TreeRecorder>();
-  private active: {sessionId: string; controller: AbortController} | undefined;
+  /**
+   * The turn in flight, if there is one.
+   *
+   * `profileId` rides here rather than being read from the config, because the
+   * plugin that files a tree is cached per model while a profile can change
+   * between turns: a recorder built from `config.profileId` would have to be
+   * right about which agent a conversation belongs to at the moment a callback
+   * happens, and the turn's own answer is the only one that cannot be stale.
+   */
+  private active:
+    | {sessionId: string; profileId?: string; controller: AbortController}
+    | undefined;
+
   /**
    * The approval gates a paused turn is waiting on, and the decisions taken so
    * far.
@@ -1282,8 +1294,22 @@ export class AgentHost {
       plugins: [
         this.dreamEnabled()
           ? new DreamToolPlugin({
-              recorderFor: (invocationId) =>
-                this.dreamRecorders.get(invocationId),
+              /*
+               * Built on demand, at the first callback of the turn, rather than
+               * waited for: a model request happens before the host's event loop
+               * has seen anything, so a recorder created there is a recorder
+               * created too late to see the turn's first step. `openRecorder`
+               * dedupes by invocation id, so the event loop's own call below is
+               * a fallback rather than a second tree.
+               */
+              openRecorder: ({invocationId, sessionId}) => {
+                const profile = this.treeProfile();
+                return this.openRecorder({
+                  sessionId,
+                  invocationId,
+                  ...(profile === undefined ? {} : {profileId: profile}),
+                });
+              },
               // Read per turn rather than captured: a user who moves the slider
               // while the agent is thinking gets the new weight on the next turn.
               settings: () => ({
@@ -1324,6 +1350,19 @@ export class AgentHost {
    * ends — see {@link closeRecorder} — so a long-lived window does not accumulate
    * one tree per turn it has ever run.
    */
+  /**
+   * Which agent the turn in flight belongs to, for filing its tree.
+   *
+   * Three places need this answer — the event loop's own recorder, the plugin's
+   * factory, and nothing else — and the order is the order of certainty. The
+   * turn's own profile is what a conversation is filed under; the config is the
+   * fallback for a caller that ran a turn without naming one, which is the
+   * approve path, where the host was built for exactly one profile anyway.
+   */
+  private treeProfile(): string | undefined {
+    return this.active?.profileId ?? this.config.profileId;
+  }
+
   private openRecorder(context: {
     sessionId: string;
     invocationId: string;
@@ -1333,6 +1372,21 @@ export class AgentHost {
     const policy = this.config.dream;
     if (sink === undefined || policy === undefined) {
       return undefined;
+    }
+
+    /*
+     * One tree per invocation, whichever path asks first.
+     *
+     * Two things call this for the same turn: the plugin, at the turn's first
+     * model request, and the host's own event loop, at the first event. They
+     * race by construction — the request happens first — and returning a second
+     * recorder would mean two trees for one turn, each seeing half of it, with
+     * the store keyed by invocation id replacing one with the other. The first
+     * caller wins, and it is the only caller that can exist.
+     */
+    const existing = this.dreamRecorders.get(context.invocationId);
+    if (existing !== undefined) {
+      return existing;
     }
 
     const recorder = new TreeRecorder(
@@ -1390,7 +1444,11 @@ export class AgentHost {
     const runner = this.runnerFor(model);
 
     const controller = new AbortController();
-    this.active = {sessionId, controller};
+    this.active = {
+      sessionId,
+      ...(profileId === undefined ? {} : {profileId}),
+      controller,
+    };
     /*
      * A turn is where a round begins, and starting one abandons whatever the
      * last turn was waiting on: the user asked something else, or stopped the
@@ -1434,6 +1492,18 @@ export class AgentHost {
      * repeat-only one, which never asks.
      */
     let dream: TreeRecorder | undefined;
+    /*
+     * Which agent the tree is filed under.
+     *
+     * The turn's own answer when it has one, because a conversation belongs to
+     * the profile that ran the turn rather than to whatever the host was last
+     * configured with; the config is the fallback for a caller that ran a turn
+     * without naming a profile. Read here rather than where the recorder is made
+     * because the plugin makes it first, and the plugin reads the same two
+     * places — see the factory in `runnerFor`.
+     */
+    const treeProfile =
+      profileId ?? this.active?.profileId ?? this.config.profileId;
 
     try {
       const events = runner.runAsync({
@@ -1460,14 +1530,17 @@ export class AgentHost {
            * would ever close. Binding the identity at the first event means the
            * tree is opened once and closed once whatever arrives after it.
            *
-           * It is also the earliest the tree can exist, and it has to exist
-           * before the plugin's next callback, which looks it up by this id.
+           * The recorder is usually already here by now: the turn's first model
+           * request made it — see the plugin's `openRecorder` — and this call
+           * then returns that one rather than building a second. It remains the
+           * backstop, because a turn that somehow reaches an event without a
+           * request would otherwise record nothing at all.
            */
           invocationId = event.invocationId;
           dream = this.openRecorder({
             sessionId,
             invocationId,
-            ...(profileId === undefined ? {} : {profileId}),
+            ...(treeProfile === undefined ? {} : {profileId: treeProfile}),
           });
         }
         for (const part of event.content?.parts ?? []) {

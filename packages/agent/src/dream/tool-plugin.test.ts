@@ -16,7 +16,12 @@ import {DreamToolPlugin} from './tool-plugin.js';
  * live wiring is ADK's business and the *logic* is what is under test here.
  */
 function context(invocationId: string, functionCallId?: string): Context {
-  return {invocationId, functionCallId} as unknown as Context;
+  return {
+    invocationId,
+    // A recorder is built from both names, so the stand-in context carries both.
+    sessionId: 'session-1',
+    functionCallId,
+  } as unknown as Context;
 }
 
 function tool(name: string): BaseTool {
@@ -56,7 +61,13 @@ function pluginUnder(
     {resultBytes: 256},
   );
   const plugin = new DreamToolPlugin({
-    recorderFor: (id) => (id === invocationId ? recorder : undefined),
+    /*
+     * One recorder per invocation, the way the host builds them: the first
+     * callback of a turn gets it made, and a callback for any other invocation
+     * gets nothing, which is a turn that is not being watched.
+     */
+    openRecorder: ({invocationId: asked}) =>
+      asked === invocationId ? recorder : undefined,
     settings: () => ({
       explorationWeight: options.explorationWeight ?? 1,
       pruningThreshold: options.pruningThreshold ?? -1,
@@ -306,7 +317,7 @@ describe('DreamToolPlugin', () => {
   it('does nothing at all for a turn it has no recorder for', async () => {
     const {snapshots} = collecting();
     const plugin = new DreamToolPlugin({
-      recorderFor: () => undefined,
+      openRecorder: () => undefined,
       settings: () => ({explorationWeight: 1, pruningThreshold: 0}),
     });
 

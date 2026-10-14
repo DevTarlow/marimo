@@ -135,14 +135,27 @@ const REMEMBERED_INVOCATIONS = 8;
 
 export interface DreamToolPluginOptions {
   /**
-   * The recorder for an invocation, when the feature is on for it.
+   * The recorder for one invocation, made if this is the first callback of the
+   * turn to ask for one.
    *
-   * A function rather than a recorder, because the plugin is constructed once per
-   * model while a turn's recorder belongs to a turn: the host makes one when it
-   * learns the invocation id, and this asks for it by that id. `undefined` means
-   * this turn is not being watched.
+   * A builder rather than a lookup, and that is the fix for a bug worth naming.
+   * It used to be a lookup into a map the *host* filled when the first event of
+   * the turn arrived — and a model request happens before any event does, so on
+   * the first step of every turn there was nothing in the map and the step was
+   * silently never recorded: no `step` node, no proposals, no refusals. A turn
+   * that proposed a tool and then answered recorded a tree beginning with the
+   * *second* request, and the replay read a turn nobody had.
+   *
+   * A plugin callback is where the invocation id first exists, and the context
+   * it is handed carries the session id as well — so the plugin can ask for a
+   * recorder at exactly the moment one is needed, while the host keeps ownership
+   * of the sink, the path and the policy. `undefined` still means "this turn is
+   * not being watched", which is the feature being off.
    */
-  recorderFor: (invocationId: string) => TreeRecorder | undefined;
+  openRecorder: (context: {
+    invocationId: string;
+    sessionId: string;
+  }) => TreeRecorder | undefined;
   /**
    * The policy settings in force *now*.
    *
@@ -185,7 +198,7 @@ export class DreamToolPlugin extends BasePlugin {
   override async beforeModelCallback(params: {
     callbackContext: Context;
   }): Promise<undefined> {
-    const state = this.turn(params.callbackContext.invocationId);
+    const state = this.turn(params.callbackContext);
     if (state === undefined || state.stepped) {
       return undefined;
     }
@@ -233,7 +246,7 @@ export class DreamToolPlugin extends BasePlugin {
       return undefined;
     }
 
-    const state = this.turn(callbackContext.invocationId);
+    const state = this.turn(callbackContext);
     if (state === undefined) {
       return undefined;
     }
@@ -271,7 +284,7 @@ export class DreamToolPlugin extends BasePlugin {
     callbackContext: Context;
     tools: Readonly<Record<string, BaseTool>>;
   }): Promise<Readonly<Record<string, BaseTool>> | undefined> {
-    const state = this.turn(params.callbackContext.invocationId);
+    const state = this.turn(params.callbackContext);
     if (state === undefined) {
       return undefined;
     }
@@ -354,7 +367,7 @@ export class DreamToolPlugin extends BasePlugin {
     }
 
     const callId = toolContext.functionCallId;
-    const state = this.turn(toolContext.invocationId);
+    const state = this.turn(toolContext);
     if (state === undefined) {
       return undefined;
     }
@@ -414,7 +427,7 @@ export class DreamToolPlugin extends BasePlugin {
       return undefined;
     }
 
-    const state = this.turn(toolContext.invocationId);
+    const state = this.turn(toolContext);
     if (state === undefined) {
       return undefined;
     }
@@ -458,18 +471,28 @@ export class DreamToolPlugin extends BasePlugin {
   /**
    * The policy and recorder for this invocation.
    *
-   * Returns `undefined` when there is no recorder, which is the feature being off
-   * for this turn. Checked through the recorder rather than through a second flag
-   * so there is one source of truth for "is this turn being watched" — and the
-   * plugin being registered at all is already the outer answer.
+   * Returns `undefined` when no recorder can be had, which is the feature being
+   * off for this turn. Checked through the recorder rather than through a second
+   * flag so there is one source of truth for "is this turn being watched" — and
+   * the plugin being registered at all is already the outer answer.
+   *
+   * Takes the callback's `Context` rather than an id, because the two names a
+   * recorder is built from — the invocation and the session — are both on it.
+   * Deriving the session anywhere else would mean the host guessing which
+   * conversation a turn belonged to, and it does not have to: ADK hands it to
+   * every callback that can ask.
    */
-  private turn(invocationId: string): TurnState | undefined {
+  private turn(context: Context): TurnState | undefined {
+    const invocationId = context.invocationId;
     const cached = this.turns.get(invocationId);
     if (cached !== undefined) {
       return cached;
     }
 
-    const recorder = this.options.recorderFor(invocationId);
+    const recorder = this.options.openRecorder({
+      invocationId,
+      sessionId: context.sessionId,
+    });
     if (recorder === undefined) {
       return undefined;
     }

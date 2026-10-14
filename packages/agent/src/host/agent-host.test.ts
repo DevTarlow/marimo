@@ -16,7 +16,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import type {AgentUiEvent} from '@marimo/protocol';
 
-import type {Job} from '@marimo/protocol';
+import type {DreamTree, Job} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 
@@ -1938,6 +1938,96 @@ describe('AgentHost', () => {
 
       expect(names).toContain('recall');
       expect(names?.indexOf('recall')).toBe(names.indexOf('search_knowledge_base') + 1);
+    });
+  });
+
+  /*
+   * Dream-RSI is written from inside the model's own request path, and the
+   * request is the first thing a turn does — before any event from the runner
+   * exists for the host's loop to read an invocation id off. So "when is the
+   * recorder created" is not an implementation detail here: it decides whether
+   * the first step of every turn is recorded at all.
+   *
+   * The failure is silent and it has a shape worth naming. A turn whose first
+   * request proposes a tool and whose second answers records a tree with one
+   * step, one proposal and one call — all of them from the *second* request —
+   * and the answer node hangs directly off the root because no step was open
+   * when it arrived. Nothing errors, the file validates, and the replay reads a
+   * turn that never happened.
+   */
+  describe('the discovery tree', () => {
+    it('records the first step of a turn, not only the steps after it', async () => {
+      let tree: DreamTree | undefined;
+      fake = await startFakeDeepSeek((messages) =>
+        messages.some((message) => message['role'] === 'tool')
+          ? textChunks('The clock says noon.')
+          : toolCallChunks('call_time', 'current_time', {}),
+      );
+      const host = new AgentHost({
+        sessionsDir: join(workDir, 'sessions'),
+        config: {
+          ...createConfig(fake.baseUrl),
+          dream: {explorationWeight: 1, pruningThreshold: -1},
+        },
+        dreamSink: {
+          append: (snapshot) => {
+            tree = snapshot;
+          },
+        },
+      });
+      host.init();
+      openHosts.push(host);
+      const session = await host.createSession();
+
+      await collect(host.run(session.id, 'what time is it?'));
+
+      expect(tree).toBeDefined();
+      const nodes = tree?.nodes ?? [];
+      const kinds = (kind: string) =>
+        nodes.filter((node) => node.kind === kind);
+
+      /*
+       * Two requests were made, so two steps. One step means the first request
+       * was never recorded — the bug this test exists for.
+       */
+      expect(kinds('turn')).toHaveLength(3); // the root, plus one per request
+      expect(kinds('propose').map((node) => node.tool)).toEqual([
+        'current_time',
+      ]);
+      expect(kinds('call').map((node) => node.tool)).toEqual(['current_time']);
+      expect(kinds('answer')).toHaveLength(1);
+    });
+
+    /*
+     * A tree is filed under the agent that ran the turn, and the host serves one
+     * profile while the *plugin* is cached per model — so a recorder built from
+     * `config.profileId` would be one profile change away from filing a turn
+     * under the wrong agent. Nothing would error: the tree would validate and
+     * the replay would attribute the work to somebody who did not do it.
+     */
+    it('files the tree under the profile that ran the turn', async () => {
+      let tree: DreamTree | undefined;
+      fake = await startFakeDeepSeek(() => textChunks('ok'));
+      const host = new AgentHost({
+        sessionsDir: join(workDir, 'sessions'),
+        config: {
+          ...createConfig(fake.baseUrl),
+          profileId: 'profile-served',
+          dream: {explorationWeight: 1, pruningThreshold: -1},
+        },
+        dreamSink: {
+          append: (snapshot) => {
+            tree = snapshot;
+          },
+        },
+      });
+      host.init();
+      openHosts.push(host);
+      const session = await host.createSession('a chat', 'profile-running');
+
+      await collect(host.run(session.id, 'hi', undefined, 'profile-running'));
+
+      expect(tree?.profileId).toBe('profile-running');
     });
   });
 

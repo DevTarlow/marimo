@@ -42,7 +42,7 @@ export function Search({
    * Whether to show the nearest vectors even when none of them is near.
    *
    * The index has a floor below which a vector is not an answer, because a list
-   * of the least-unrelated things in a folder reads as a list of answers. That
+   * of the least-unrelated things in a space reads as a list of answers. That
    * floor can be wrong for a question phrased in words the corpus never uses, so
    * the results it withheld are one press away rather than gone. Reset with the
    * query, because the next question is a new one.
@@ -253,7 +253,7 @@ export function Search({
                   ) : (
                     /*
                      * Two different nothings. One is an empty index; the other is
-                     * a folder with something in it that this question did not
+                     * a space with something in it that this question did not
                      * reach, and the person is offered the rows the floor
                      * withheld rather than being told they are not there.
                      */
@@ -351,7 +351,7 @@ function group(hits: readonly RecallQueryHit[]): Array<{
   const media = hits.filter((hit) => hit.kind === 'media');
   const groups: Array<{label: string; hits: RecallQueryHit[]}> = [];
   if (files.length > 0) {
-    groups.push({label: 'In this folder', hits: files});
+    groups.push({label: 'In this space', hits: files});
   }
   if (memory.length > 0) {
     groups.push({label: 'From memory', hits: memory});

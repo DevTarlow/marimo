@@ -344,7 +344,7 @@ export function Transcript({
           <img className="empty-mark" src="./marimo-logo.png" alt="" />
           <h2>Say something to Marimo</h2>
           <p>
-            It can read and write files in the folder you chose, and use whatever
+            It can read and write files in the space you chose, and use whatever
             else you have switched on — anything that changes something asks you
             first.
           </p>

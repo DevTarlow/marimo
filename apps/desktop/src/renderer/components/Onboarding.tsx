@@ -43,7 +43,7 @@ export function Onboarding({
       </button>
 
       <p className="onboarding-note onboarding-quiet">
-        It can read files in the folder you choose and use whatever else you
+        It can read files in the space you choose and use whatever else you
         switch on. Anything that changes something asks you first.
       </p>
     </div>

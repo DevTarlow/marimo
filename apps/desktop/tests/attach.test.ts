@@ -51,7 +51,7 @@ describe('attaching files to a message', () => {
     ]);
   });
 
-  it('refuses a file outside the folder, and says which folder', async () => {
+  it('refuses a file outside the space, and says which space', async () => {
     await writeFile(join(dir, 'elsewhere', 'notes.md'), 'private\n');
 
     const {files, skipped} = await attachableFiles(root, [
@@ -61,7 +61,7 @@ describe('attaching files to a message', () => {
     expect(files).toEqual([]);
     expect(skipped).toHaveLength(1);
     /*
-     * The reason names the folder rather than saying "outside". The user chose
+     * The reason names the space rather than saying "outside". The user chose
      * the file in a dialog that let them go anywhere; the sentence that helps is
      * the one that says what the boundary was.
      */
@@ -69,14 +69,14 @@ describe('attaching files to a message', () => {
     expect(skipped[0]?.name).toBe('notes.md');
   });
 
-  it('refuses a link that points out of the folder', async () => {
+  it('refuses a link that points out of the space', async () => {
     await writeFile(join(dir, 'elsewhere', 'secret.txt'), 'not yours\n');
     await symlink(join(dir, 'elsewhere', 'secret.txt'), join(root, 'link.txt'));
 
     const {files, skipped} = await attachableFiles(root, [join(root, 'link.txt')]);
 
     expect(files).toEqual([]);
-    expect(skipped[0]?.reason).toContain('Outside the folder');
+    expect(skipped[0]?.reason).toContain('Outside the space');
   });
 
   it('refuses a file that is not text', async () => {

@@ -1,15 +1,21 @@
 /**
- * The folders, down the side, with their conversations under them.
+ * The spaces, down the side, with their conversations under them.
  *
- * A workspace is a folder the agent works in, and every agent shares the list —
- * so this is navigation over places, not over agents. The conversation on screen
- * is always under the folder it belongs to, because a rail that hid it would
- * look like the app had lost it.
+ * A space is the directory an agent works in — the word on screen for what this
+ * app used to call a folder. The code kept the old word: this component's name,
+ * its props, its classes and the store calls all still say workspace, because
+ * renaming those means migrating a file on disk and a schema rather than
+ * changing copy. The split is deliberate rather than an oversight, so the next
+ * reader does not "fix" one half of it.
  *
- * Two groups are not folders. **Social** holds what the app itself started — a
- * Discord mention arrives in whatever folder happened to be current and has
+ * Every agent shares the list, so this is navigation over places, not over
+ * agents. The conversation on screen is always under the space it belongs to,
+ * because a rail that hid it would look like the app had lost it.
+ *
+ * Two groups are not spaces. **Social** holds what the app itself started — a
+ * Discord mention arrives in whatever space happened to be current and has
  * nothing to do with it — and **Other chats** holds conversations from before
- * folders existed, or ones whose folder has since been forgotten. Both are
+ * spaces existed, or ones whose space has since been forgotten. Both are
  * rendered flat, with no "new chat" button, because neither is a place.
  */
 import {useEffect, useMemo, useRef, useState} from 'react';
@@ -82,9 +88,9 @@ export function WorkspaceRail({
   const cancelled = useRef(false);
 
   /*
-   * The folder of the conversation on screen is never collapsed. Selecting
-   * another folder does not move it, so this only matters after the user
-   * collapsed the folder and then opened one of its chats from elsewhere.
+   * The space of the conversation on screen is never collapsed. Selecting
+   * another space does not move it, so this only matters after the user
+   * collapsed the space and then opened one of its chats from elsewhere.
    */
   const openWorkspaceId =
     sessions.find((session) => session.id === activeSessionId)?.workspaceId ??
@@ -240,16 +246,16 @@ export function WorkspaceRail({
     });
 
   return (
-    <aside className="rail" aria-label="Workspaces">
+    <aside className="rail" aria-label="Spaces">
       <div className="rail-head">
-        <span className="rail-title">Workspaces</span>
+        <span className="rail-title">Spaces</span>
         <button
           type="button"
           className="button button-quiet button-small"
           disabled={disabled}
           onClick={onLoadWorkspace}
         >
-          Load folder…
+          Load a space…
         </button>
       </div>
 
@@ -260,7 +266,11 @@ export function WorkspaceRail({
           setMenu(null);
         }}
       >
-        {groups.length === 0 && <p className="rail-empty">Nothing yet.</p>}
+        {groups.length === 0 && (
+          <p className="rail-empty">
+            No spaces yet. Load one and every agent can work in it.
+          </p>
+        )}
 
         {groups.map((group) => {
           if (group.kind !== 'workspace') {
@@ -287,7 +297,7 @@ export function WorkspaceRail({
               <div className="rail-workspace-head">
                 {editing?.kind === 'workspace' &&
                 editing.id === workspace.id ? (
-                  editInput(editing, 'Folder name')
+                  editInput(editing, 'Space name')
                 ) : (
                   <>
                     <button
@@ -311,6 +321,11 @@ export function WorkspaceRail({
                         {workspace.name}
                       </span>
                     </button>
+                    {/*
+                      The space is named here rather than left to whichever one
+                      is current: a chat started under this heading is filed
+                      under it, even when the rail is pointed somewhere else.
+                    */}
                     <button
                       type="button"
                       className="rail-workspace-action"

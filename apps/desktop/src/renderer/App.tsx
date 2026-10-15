@@ -384,9 +384,9 @@ export function App(): React.JSX.Element {
             )}
             {/*
               Where this conversation works, moved out of Settings and onto the
-              surface it is about. It is the open chat's folder rather than the
-              current one: a conversation remembers the folder it was started in,
-              and the two differ the moment another folder is picked.
+              surface it is about. It is the open chat's space rather than the
+              current one: a conversation remembers the space it was started in,
+              and the two differ the moment another space is picked.
             */}
             {agent.activeFolder !== null && (
               <p className="head-sub head-workspace" title={agent.activeFolder}>
@@ -397,7 +397,7 @@ export function App(): React.JSX.Element {
           <button
             type="button"
             className="button button-quiet button-small"
-            title="Search your folder and memory (Ctrl+K)"
+            title="Search your space and memory (Ctrl+K)"
             onClick={() => {
               setSearching(true);
             }}
@@ -523,8 +523,8 @@ export function App(): React.JSX.Element {
             }
           }}
           /*
-           * Asked for by conversation, not by folder: the main process judges
-           * every picked file against the folder *this* conversation works in —
+           * Asked for by conversation, not by space: the main process judges
+           * every picked file against the space *this* conversation works in —
            * the same one its turn's file tools are confined to — so a file the
            * window would happily attach is one the agent can actually read.
            */

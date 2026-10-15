@@ -126,7 +126,7 @@ export function Recall({
   return (
     <SettingsSection title="Recall" opened={opened} onToggle={onToggle}>
       <p className="settings-muted">
-        Searches your folder and the notes it keeps about you by what you mean.
+        Searches your space and the notes it keeps about you by what you mean.
         Ask why the upload keeps failing and it finds the code that retries,
         though retry is not in the question.
       </p>
@@ -208,7 +208,7 @@ export function Recall({
                 void set({workspace: event.target.checked});
               }}
             />
-            Index the folder this agent works in
+            Index the space this agent works in
           </label>
           <label className="settings-check">
             <input
@@ -235,7 +235,7 @@ export function Recall({
           <p className="settings-muted">
             Your messages and its answers, not the thinking in between and not the
             tool calls. This is the corpus that lets it find something you settled
-            three weeks ago; it stays in the same index the folder does, on this
+            three weeks ago; it stays in the same index the space does, on this
             machine.
           </p>
 
@@ -283,18 +283,18 @@ export function Recall({
                 void set({codeQueries: event.target.checked});
               }}
             />
-            This folder is mostly code
+            This space is mostly code
           </label>
           <p className="settings-muted">
             The model has two ways of being asked a question, one for prose and one
             for code, and the code one finds code better. Nothing here can tell
-            which a question wants, so this is your answer about the folder rather
+            which a question wants, so this is your answer about the space rather
             than a guess made per search.
           </p>
 
           <p className="settings-muted">
             {index === undefined || index.records === 0
-              ? 'Nothing is indexed in this folder yet. It gets indexed the first time you search.'
+              ? 'Nothing is indexed in this space yet. It gets indexed the first time you search.'
               : `${String(index.records)} ${index.records === 1 ? 'item' : 'items'} indexed: ${describeIndex(index)}.` +
                 (index.changed > 0
                   ? ` ${String(index.changed)} ${index.changed === 1 ? 'file has' : 'files have'} changed since.`
@@ -370,7 +370,7 @@ export function Recall({
  */
 function describeIndex(index: RecallModelStatus['index']): string {
   const parts = [
-    `${String(index.chunks)} from the folder`,
+    `${String(index.chunks)} from the space`,
     `${String(index.memory)} from memory`,
   ];
   if (index.conversations > 0) {

@@ -78,7 +78,7 @@ export async function attachableFiles(
         name,
         reason:
           error instanceof PathOutsideWorkspaceError
-            ? `Outside the folder this conversation works in (${root}).`
+            ? `Outside the space this conversation works in (${root}).`
             : 'That file could not be read.',
       });
     }

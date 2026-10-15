@@ -114,7 +114,7 @@ export const CAPABILITY_PRESETS: readonly CapabilityPreset[] = [
     id: 'assistant',
     label: 'Help around my computer',
     blurb:
-      'It can read files in the folder you load, search the web, and note ' +
+      'It can read files in the space you load, search the web, and note ' +
       'things down for next time. Nothing on this list changes anything.',
     tools: [...SAFE_DEFAULT_TOOLS],
     recommended: true,
@@ -296,10 +296,10 @@ function blurbFor(name: string): string {
 const TOOL_BLURBS: Record<string, string> = {
   current_time:
     'What time it is, and what day. Without this it has no idea, and would guess.',
-  read_file: 'Open a text file in your folder and read it.',
-  list_dir: 'See what is in a folder, with file sizes.',
+  read_file: 'Open a text file in your space and read it.',
+  list_dir: 'See what is in a space, with file sizes.',
   search_knowledge_base:
-    'Search your folder for a word or phrase and show the lines it appears on.',
+    'Search your space for a word or phrase and show the lines it appears on.',
   write_file:
     'Create a file, or overwrite one. It asks before replacing a file that already exists.',
   run_shell:
@@ -311,11 +311,11 @@ const TOOL_BLURBS: Record<string, string> = {
     'until you ask for it.',
   web_search: 'Search the web and read the results. No account or key needed.',
   recall:
-    'Search your folder and its own notes by what you mean, not by the exact words.',
-  read_memory: 'Read its own notes about you and this folder.',
+    'Search your space and its own notes by what you mean, not by the exact words.',
+  read_memory: 'Read its own notes about you and this space.',
   update_memory:
     'Write something down to remember for next time — a preference, a decision, ' +
-    'how something is set up. It keeps these in a file in your folder.',
+    'how something is set up. It keeps these in a file in your space.',
   prune_memory:
     'Tidy those notes up when they get repetitive or out of date, keeping a copy ' +
     'of the previous version.',

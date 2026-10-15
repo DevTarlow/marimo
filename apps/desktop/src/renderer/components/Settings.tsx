@@ -114,6 +114,14 @@ interface Loaded {
   statuses: Record<string, McpStatus>;
   /** Whether the floating companion is on screen. */
   companionVisible: boolean;
+  /**
+   * Which space "wherever the rail is" currently means, when it means one.
+   *
+   * A fact about the rail rather than about the catalogue, which is why it comes
+   * from `workspaces.list`: `profiles.catalog` lists the spaces, and the active
+   * one is where somebody left the rail rather than something a space is.
+   */
+  activeSpaceName: string | undefined;
 }
 
 export function Settings({
@@ -168,12 +176,19 @@ export function Settings({
       const catalog = await window.marimo.call('profiles.catalog', {});
       const statuses = await window.marimo.call('mcp.statuses', {});
       const companion = await window.marimo.call('companion.status', {});
+      const {workspaces, activeWorkspaceId} = await window.marimo.call(
+        'workspaces.list',
+        {},
+      );
       setLoaded({
         settings,
         catalog,
         profile,
         statuses,
         companionVisible: companion.visible,
+        activeSpaceName: workspaces.find(
+          (entry) => entry.id === activeWorkspaceId,
+        )?.name,
       });
       setDraft(
         profile === undefined
@@ -426,6 +441,18 @@ export function Settings({
             and its own conversations. Making a second one is how you keep two
             jobs from sharing one memory.
           </p>
+          {/*
+            Once for the list rather than once per agent: with no spaces there is
+            nothing for any row to choose, and the same sentence repeated under
+            four agents is four times the noise for one fact.
+          */}
+          {loaded.catalog.spaces.length === 0 && (
+            <p className="settings-muted">
+              No spaces yet, so there is nothing here to choose. &ldquo;Load a
+              space…&rdquo; in the rail is where one is added, and it appears
+              here as soon as it is.
+            </p>
+          )}
           <div className="settings-agents">
             {loaded.settings.profiles.map((entry) => (
               <div className="settings-agent-row" key={entry.id}>
@@ -462,6 +489,25 @@ export function Settings({
                       await window.marimo.call('profiles.update', {
                         profileId,
                         patch: {model},
+                      });
+                    });
+                  }}
+                />
+                {/*
+                  Where this agent starts its chats, in the same row as its name
+                  and its model: it is a fact about that agent, and one list of
+                  agents is enough to carry all three.
+                */}
+                <AgentSpaceChoice
+                  profile={entry}
+                  spaces={loaded.catalog.spaces}
+                  activeSpaceName={loaded.activeSpaceName}
+                  disabled={saving}
+                  onChoose={(profileId, spaceId) => {
+                    void change(async () => {
+                      await window.marimo.call('profiles.update', {
+                        profileId,
+                        patch: {spaceId},
                       });
                     });
                   }}
@@ -1081,6 +1127,78 @@ function AgentModelChoice({
         onChoose(profile.id, {provider: shown.provider, model});
       }}
     />
+  );
+}
+
+/**
+ * One agent's own space, and the way back to wherever the rail is.
+ *
+ * Unlike the model picker, the fallback is not something this row can name on
+ * its own: "wherever I am" is a fact about the rail rather than about the agent,
+ * so the note beside the picker says which space that is right now. Without it
+ * the setting would be one whose effect is only visible somewhere else.
+ */
+function AgentSpaceChoice({
+  profile,
+  spaces,
+  activeSpaceName,
+  disabled,
+  onChoose,
+}: {
+  profile: AgentProfile;
+  spaces: ProfileCatalog['spaces'];
+  /** Which space the rail is on, when it is on one. */
+  activeSpaceName: string | undefined;
+  disabled: boolean;
+  /** `null` puts the agent back on wherever the rail is. */
+  onChoose: (profileId: string, spaceId: string | null) => void;
+}): React.JSX.Element | null {
+  if (spaces.length === 0) {
+    /*
+     * Nothing to choose. The section says why above the list, so a picker with
+     * no options — or the same explanation under every agent — would be noise.
+     */
+    return null;
+  }
+
+  const stored = profile.spaceId;
+  /*
+   * A space the rail no longer lists is treated as no choice at all, because
+   * that is what it is: the runtime skips a name it cannot resolve and files the
+   * chat where the rail is, so showing the stale id would describe something
+   * that does not happen.
+   */
+  const chosen =
+    stored !== undefined && spaces.some((space) => space.id === stored)
+      ? stored
+      : undefined;
+
+  return (
+    <>
+      <span className="settings-why">Works in</span>
+      <select
+        className="settings-input"
+        aria-label={`Works in for ${profile.name}`}
+        value={chosen ?? ''}
+        disabled={disabled}
+        onChange={(event) => {
+          onChoose(
+            profile.id,
+            event.target.value === '' ? null : event.target.value,
+          );
+        }}
+      >
+        <option value="">Wherever I am</option>
+        {spaces.map((space) => (
+          <option key={space.id} value={space.id}>
+            {space.name}
+          </option>
+        ))}
+      </select>
+      {chosen === undefined && activeSpaceName !== undefined && (
+        <em className="settings-why">Right now: {activeSpaceName}</em>
+      )}
+    </>
   );
 }
 

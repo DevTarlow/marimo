@@ -108,7 +108,7 @@ export function RecallIntro({
       <h2>Search by what you remember about it</h2>
 
       <p className="onboarding-lead">
-        Recall looks through the folder you give your agent and the notes it
+        Recall looks through the space you give your agent and the notes it
         keeps about you. Ask why the upload keeps failing and it lands on the
         code that retries.
       </p>

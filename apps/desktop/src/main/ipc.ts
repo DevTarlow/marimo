@@ -207,8 +207,8 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
    */
   async function pickFolder(): Promise<string | undefined> {
     const options: OpenDialogOptions = {
-      title: 'Choose a folder to work in',
-      buttonLabel: 'Use this folder',
+      title: 'Choose a space to work in',
+      buttonLabel: 'Use this space',
       properties: ['openDirectory'],
       defaultPath: await startFolder(),
     };
@@ -242,7 +242,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
   async function requireDirectory(path: string): Promise<void> {
     const stats = await stat(path).catch(() => undefined);
     if (stats === undefined || !stats.isDirectory()) {
-      throw new Error(`Not a folder: ${path}`);
+      throw new Error(`Not a space: ${path}`);
     }
   }
 
@@ -279,7 +279,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       );
       if (folder === undefined) {
         throw new Error(
-          'This conversation has no folder yet. Load one, then attach files ' +
+          'This conversation has no space yet. Load one, then attach files ' +
             'from it.',
         );
       }

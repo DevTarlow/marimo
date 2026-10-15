@@ -1,7 +1,7 @@
 /**
  * The little menu a control opens.
  *
- * One primitive for the conversation menu, the folder menu and the composer's
+ * One primitive for the conversation menu, the space menu and the composer's
  * `+`, because the hard parts are not the items: the rail is a scroll container,
  * so a menu positioned inside a row would be clipped at the container's edge,
  * and one opened near the bottom would be cut off entirely. `position: fixed`

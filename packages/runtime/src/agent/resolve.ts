@@ -126,8 +126,8 @@ export async function resolveAgentConfig(
     return {
       ok: false,
       problem:
-        `"${profile.name}" has no folder to work in. Use “Load folder…” in the ` +
-        'sidebar so its file tools have somewhere to work.',
+        `"${profile.name}" has no space to work in. Use “Load a space…” in the ` +
+        'rail so its file tools have somewhere to work.',
     };
   }
 

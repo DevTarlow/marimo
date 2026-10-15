@@ -2,7 +2,7 @@
  * Turning settings and a profile into an agent configuration.
  *
  * Every branch here is a sentence the user will read instead of a turn, so the
- * refusals are the cases worth testing: a profile with no folder, a provider that
+ * refusals are the cases worth testing: a profile with no space, a provider that
  * needs a key and has none, a key that exists and this process cannot read, and a
  * provider this build has never heard of. The other half of the file is the other
  * thing this layer decides — which of the three places a model choice can live
@@ -227,19 +227,19 @@ describe('resolveAgentConfig', () => {
     expect(none.ok && none.config.mcpServerIds).toEqual([]);
   });
 
-  it('refuses a turn with no folder, and says which agent', async () => {
+  it('refuses a turn with no space, and says which agent', async () => {
     const result = await resolve({
       settings: defaultStoredSettings(),
       profile: profile(),
-      // The caller has no folder to name: no workspaces at all, or the
-      // conversation's folder has been forgotten and there is nothing current.
+      // The caller has no space to name: no spaces at all, or the
+      // conversation's space has been forgotten and there is nothing current.
       workspaceRoot: undefined,
     });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.problem).toContain('Marimo');
-      expect(result.problem).toMatch(/folder/iu);
+      expect(result.problem).toMatch(/space/iu);
     }
   });
 

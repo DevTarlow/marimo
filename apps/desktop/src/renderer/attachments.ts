@@ -2,14 +2,14 @@
  * Turning attached files into the message the agent reads.
  *
  * What travels is the file's *path*, never its contents. The agent has its own
- * reader for that: `read_file` is confined to the conversation's folder, caps
+ * reader for that: `read_file` is confined to the conversation's space, caps
  * what it returns and says so when it truncated, and is gated by the same rules
  * as every other file the agent touches. Inlining the bytes here instead would
  * be a second reader to keep in step with that one, a transcript showing a
  * twenty-kilobyte message the user only meant to hand over, and — worst of the
  * three — a stored message whose text was not what the model was sent.
  *
- * So the paths are spelled out in the message, relative to the folder the agent
+ * So the paths are spelled out in the message, relative to the space the agent
  * works in, because a relative path is what its tools already describe
  * themselves in terms of and what does not put the user's home directory into
  * every conversation that ever mentioned a file.

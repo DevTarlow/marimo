@@ -132,20 +132,26 @@ export interface AgentController {
   clearMemoryWaiting: () => void;
   /** The stored theme preference, kept in step with the settings file. */
   themeMode: ThemeMode;
-  newSession: (workspaceId?: string) => Promise<void>;
+  /**
+   * Starts a conversation, in the space named or in the one the app picks.
+   *
+   * The name is what files it: a chat asked for under one space is started
+   * there, not wherever the rail happens to be pointed.
+   */
+  newSession: (spaceId?: string) => Promise<void>;
   dismissError: () => void;
-  /** The folders every agent works in, and which one is current. */
+  /** The spaces every agent works in, and which one is current. */
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
   /**
-   * The folder the open conversation works in, for the header.
+   * The directory of the space the open conversation works in, for the header.
    *
    * Not the same thing as the active workspace: a conversation remembers the
-   * folder it was started in, and the two differ the moment the user selects
+   * space it was started in, and the two differ the moment the user selects
    * another one.
    */
   activeFolder: string | null;
-  /** Loads a folder, or answers `false` when the picker was closed. */
+  /** Loads a space, or answers `false` when the picker was closed. */
   loadWorkspace: () => Promise<boolean>;
   selectWorkspace: (workspaceId: string) => Promise<void>;
   renameWorkspace: (workspaceId: string, name: string) => Promise<void>;
@@ -278,12 +284,12 @@ export function useAgent(): AgentController {
   }, [profile, loadTranscript]);
 
   /**
-   * Adopts a whole folder list.
+   * Adopts a whole space list.
    *
    * Whole rather than merged: every call that changes one answers with the list
-   * and the current folder together, and a window that merged a single entry
+   * and the current space together, and a window that merged a single entry
    * into its own copy could disagree with the file about the order, or about
-   * which folder is current.
+   * which space is current.
    */
   const applyWorkspaceState = useCallback(
     (state: {workspaces: Workspace[]; activeWorkspaceId: string | null}): void => {
@@ -332,11 +338,11 @@ export function useAgent(): AgentController {
   );
 
   /**
-   * Forgets a folder.
+   * Forgets a space.
    *
    * The conversations filed under it are not touched and do not need reloading:
    * their `workspaceId` now names nothing, which is what the rail draws as
-   * "Other chats" — and the header follows, because the folder it was showing is
+   * "Other chats" — and the header follows, because the space it was showing is
    * gone.
    */
   const removeWorkspace = useCallback(
@@ -359,7 +365,7 @@ export function useAgent(): AgentController {
           workspaceId,
         });
         if (!opened) {
-          setError('Could not open the folder in your file manager.');
+          setError('Could not open the space in your file manager.');
         }
       } catch (failure) {
         setError(describe(failure));
@@ -384,7 +390,7 @@ export function useAgent(): AgentController {
       }
 
       /*
-       * The folders, before the conversations: the rail draws every conversation
+       * The spaces, before the conversations: the rail draws every conversation
        * inside one, and a list that arrived a frame later would put them all
        * under "Other chats" and then move them.
        */
@@ -726,24 +732,28 @@ export function useAgent(): AgentController {
   }, [profile, sessionId]);
 
   /**
-   * Starts a conversation, in the folder named or in the current one.
+   * Starts a conversation, in the space named or in the current one.
    *
-   * A named folder is selected first rather than passed along: the *current*
-   * folder is what the session is stamped with, and a chat created under a
-   * highlighted folder that is not the current one would be filed somewhere the
-   * user is not looking.
+   * Named *and* selected, because the two do different jobs. The name is what
+   * files the chat: the runtime puts it in the space it was given — the named
+   * one, else this agent's default, else the active one — so a chat started
+   * under "website repo" lands there even when the rail is somewhere else. The
+   * selection is what the rail draws: without it the space marked current would
+   * be one the conversation on screen is not in, which is the thing a highlight
+   * is for.
    */
   const newSession = useCallback(
-    async (workspaceId?: string): Promise<void> => {
+    async (spaceId?: string): Promise<void> => {
       if (profile === undefined) {
         return;
       }
       try {
-        if (workspaceId !== undefined && workspaceId !== activeWorkspaceId) {
-          await selectWorkspace(workspaceId);
+        if (spaceId !== undefined && spaceId !== activeWorkspaceId) {
+          await selectWorkspace(spaceId);
         }
         const {session} = await window.marimo.call('sessions.create', {
           profileId: profile.id,
+          ...(spaceId === undefined ? {} : {spaceId}),
         });
         setSessions((current) => [session, ...current]);
         setSessionId(session.id);

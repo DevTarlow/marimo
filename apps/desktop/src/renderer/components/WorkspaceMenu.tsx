@@ -1,7 +1,7 @@
 /**
- * What one folder's `…` offers.
+ * What one space's `…` offers.
  *
- * Rename, open, forget — and "forget" is the word: removing a folder from the
+ * Rename, open, forget — and "forget" is the word: removing a space from the
  * list touches nothing on disk, and the confirmation says so in those terms. The
  * conversations filed under it stay where they are and reappear under "Other
  * chats", because a tidy-up that loses a chat is not a tidy-up.
@@ -42,7 +42,7 @@ export function WorkspaceMenu({
       {confirming ? (
         <div className="popover-confirm">
           <p>
-            Remove &ldquo;{workspace.name}&rdquo; from the list? The folder and
+            Remove &ldquo;{workspace.name}&rdquo; from the list? The space and
             everything in it are left untouched; its chats move to Other chats.
           </p>
           <div className="popover-row">
@@ -67,7 +67,7 @@ export function WorkspaceMenu({
       ) : (
         <>
           <PopoverItem onSelect={onRename}>Rename…</PopoverItem>
-          <PopoverItem onSelect={onOpen}>Open folder</PopoverItem>
+          <PopoverItem onSelect={onOpen}>Open the space</PopoverItem>
           <div className="popover-sep" />
           <PopoverItem
             onSelect={() => {

@@ -93,11 +93,11 @@ export function Composer({
   /** `null` gives up the choice, so the conversation follows its agent again. */
   onSelectModel: (model: AgentModel | null) => Promise<void>;
   /**
-   * Asks for files, judged against the folder this conversation works in.
+   * Asks for files, judged against the space this conversation works in.
    *
-   * Rejects with a sentence when there is no folder to attach from; answers with
+   * Rejects with a sentence when there is no space to attach from; answers with
    * what was accepted and what was refused otherwise. A refusal is not an error —
-   * a file outside the folder is a file the agent cannot read, and saying so is
+   * a file outside the space is a file the agent cannot read, and saying so is
    * the answer.
    */
   onPickFiles: () => Promise<{files: PickedFile[]; skipped: SkippedFile[]}>;

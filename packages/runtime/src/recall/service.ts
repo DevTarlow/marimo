@@ -331,7 +331,7 @@ export class RecallService {
       const existing = await readIndex(this.options.dir, this.options.model);
       if (existing === undefined || existing.file.count === 0) {
         notes.push(
-          'Nothing is indexed for this folder yet, and a scheduled run does not ' +
+          'Nothing is indexed for this space yet, and a scheduled run does not ' +
             'build an index. Open the app and search once.',
         );
         return {
@@ -380,7 +380,7 @@ export class RecallService {
          * still be searchable, and the sentence says which half is missing rather
          * than reporting "no results" for both.
          */
-        notes.push(`The folder could not be indexed: ${describe(failure)}.`);
+        notes.push(`The space could not be indexed: ${describe(failure)}.`);
       }
     }
 

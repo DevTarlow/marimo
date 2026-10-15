@@ -7,14 +7,43 @@
 # in this repository rather than a hypothetical.
 name: CI
 
+# Deliberately not on every push to main.
+#
+# This repository is private, so every run spends metered Actions minutes, and
+# during development the suite below has already been run locally — it costs a
+# few seconds there and a few minutes here. A pull request runs it, because that
+# is the moment somebody else's change needs checking, and the Actions tab runs
+# it on demand. Pushing to main does not.
+#
+# Turn the push trigger back on when main is expected to be green at all times
+# and the app is released; until then it is a bill for a verdict nobody reads.
 on:
-  push:
-    branches: [master, main]
   pull_request:
+    # A change to prose is not a change to the app. This skips the run for a
+    # README or a note, which is most of a documentation day's pushes.
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Build the AppImage and prove the packaged runner starts
+        type: boolean
+        default: false
+
+# One run per branch, and a newer push cancels the older run. Without this, five
+# pushes in ten minutes is five full suites, four of them answering a question
+# about code that no longer exists.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # A step that hangs would otherwise bill for the six-hour default.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -51,17 +80,19 @@ jobs:
         env:
           MARIMO_NO_SANDBOX: '1'
 
-      # The packaged runner is the one thing that works in development and can
-      # be broken by packaging alone: `ELECTRON_RUN_AS_NODE=1` has no asar
-      # support, so an archive it cannot read leaves the background service
-      # silently unable to start.
-      #
-      # Nothing is fetched and no model is bundled: the app carries no chat model,
-      # so packaging is a build rather than a build plus a gigabyte. What this step
-      # proves is unchanged — that the app packages and the packaged runner starts
-      # — and the runner is expected to report the recall model as not installed,
-      # which is a state it has to handle anyway.
+      # Why it is worth running at all: packaging is the one thing that works in
+      # development and can be broken by packaging alone, because
+      # `ELECTRON_RUN_AS_NODE=1` has no asar support and an archive the runner
+      # cannot read leaves the background service silently unable to start. The
+      # runner is expected to report the recall model as not installed, which is a
+      # state it has to handle anyway.
+      # The expensive half, and the one that proves a single thing: that the
+      # packaged app's runner starts. It downloads an Electron release and builds
+      # an AppImage, so it is not worth paying for on every change — run it from
+      # the Actions tab ("Run workflow", tick package) before a release, or when
+      # `package.json`, the build config or the runner's paths have moved.
       - name: Package, and prove the runner still starts
+        if: ${{ inputs.package }}
         run: |
           pnpm --filter @marimo/desktop package
           APP="apps/desktop/release/linux-unpacked"

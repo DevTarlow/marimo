@@ -1,5 +1,11 @@
 # Marimo
 
+> [!WARNING]
+> Marimo is under construction. It is developed in the open and changes often,
+> and some of those changes are breaking: what one build saved, the next may
+> rewrite or refuse. Download and run it at your own risk, and keep your own
+> copies of anything you care about.
+
 A desktop AI assistant that lives on your own computer.
 
 Marimo is a desktop app with two faces. There is a chat window, and there

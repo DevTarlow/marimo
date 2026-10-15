@@ -303,12 +303,6 @@ started to prove asar is still off. Read it before changing a build script, a
 dependency's version, or anything the package step assumes about
 `apps/desktop/release/`.
 
-**It runs now, and the red X means something.** The remote is
-`github.com/DevTarlow/marimo` and the repository is private, so a push to `main`
-or a pull request starts a real GitHub-hosted runner and spends metered minutes.
-Everything that used to be true about this file being decoration is gone: a
-failure here is a failure, and the packaging step below is the reason to look.
-
 **That step's first run found a real bug, which is the argument for keeping it.**
 It builds an AppImage and starts the packaged runner out of
 `release/linux-unpacked`, which is the one thing that works in development and can
@@ -325,9 +319,26 @@ unexpanded context fails the step rather than the job — and the runner's own
 expectation is that it reports the recall model as not installed, which is a state
 it has to handle anyway.
 
-Two consequences worth internalising. **A green local run is not a green CI run**
-— the steps above are the difference, so a packaging or preload change is not
-verified until CI has said so. And **a version belongs in exactly one place**:
+**It runs on a pull request, or when asked, and not on every push to `main`.**
+That is deliberate while the app is being built: the repository is private, so
+each run spends metered minutes, and the suite has just been run locally anyway.
+A push used to start one, and with a few pushes an hour that is a bill for a
+verdict nobody reads. `concurrency` cancels a superseded run rather than paying
+for both, the job has a twenty-minute timeout so a hung step cannot bill for the
+six-hour default, a prose-only pull request is skipped, and the packaging step
+is behind a `package` input on the manual trigger. When `main` is expected
+to be green at all times, put the push trigger back.
+
+The consequence worth knowing: **nothing checks a push any more.** A change that
+matters — the preload, the IPC schemas, the bundles — is verified by the local
+commands below, and by running the workflow from the Actions tab before a
+release. A failure in CI is still a failure; there is just no longer one per
+commit.
+
+Two consequences worth internalising. **A green local run is not a green CI
+run** — the steps above are the difference, so when packaging, the preload or the
+IPC schemas have moved, run the workflow on purpose rather than trusting the local
+pass. And **a version belongs in exactly one place**:
 `package.json`'s `packageManager` is the pnpm version, and the workflow
 deliberately does not repeat it, because `pnpm/action-setup` fails outright when
 both are present rather than picking one.

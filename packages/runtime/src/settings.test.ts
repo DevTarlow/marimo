@@ -2,9 +2,11 @@
  * Settings persistence, and the one thing it has to be lenient about.
  *
  * The file is hand-editable and has changed shape several times — most recently
- * when the app stopped having a provider catalogue. A field this build no longer
- * knows must cost its own value and nothing else, because a settings file that
- * fails to parse is every preference the user has, reset at once.
+ * when the app's bundled model became a provider the user chooses, which put a
+ * block of five entries where one flat address and model used to be. A field this
+ * build no longer knows must cost its own value and nothing else, because a
+ * settings file that fails to parse is every preference the user has, reset at
+ * once.
  */
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -12,13 +14,19 @@ import {join} from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
 import {
+  defaultProviders,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
   MEMORY_SOFT_LIMIT_MAX_BYTES,
 } from '@marimo/protocol';
 
 import {MAX_MEMORY_BYTES} from '@marimo/agent';
 
-import {readLegacyProfileSeed, SettingsStore} from './settings.js';
+import {
+  chooseModel,
+  defaultAvailableModels,
+  readLegacyProfileSeed,
+  SettingsStore,
+} from './settings.js';
 
 describe('readLegacyProfileSeed', () => {
   let dir: string;
@@ -171,21 +179,22 @@ describe('SettingsStore', () => {
     expect(after.discord.enabled).toBe(true);
     expect(after.discord.channelId).toBe('100');
   });
-
 });
 
 /**
- * A settings file written by a build that had a provider catalogue.
+ * A settings file written by a build from the provider era.
  *
- * That file holds `providers`, `availableModels` and `localModel`, and it may
- * name a service — DeepSeek, Gemini, somebody's own llama.cpp server — with an
- * address and a model id. None of it has a reader now: the app carries one model
- * and always runs it.
+ * It holds a `providers` block naming a service this build has never heard of —
+ * the engine the app used to bundle, which was a provider for one release — and
+ * it may hold a top-level `model` and `baseUrl` from before even that, which were
+ * DeepSeek's because DeepSeek was the only provider then.
  *
- * So the whole point is what *survives*: the connectors, the layout, the
- * companion and every other preference in the same document must come through
- * untouched. A read that failed on a field it did not recognise would reset all
- * of them at once, and the user would have no idea which line did it.
+ * That file is the common upgrade case rather than an exotic one, so the block is
+ * *adopted*: the flat pair fills DeepSeek's entry, an id this build does not know
+ * is dropped as an entry rather than as the block, and every other preference in
+ * the same document comes through untouched. A read that failed on a field it did
+ * not recognise would reset all of them at once, and the user would have no idea
+ * which line did it.
  */
 describe('SettingsStore, on a file from the provider era', () => {
   let dir: string;
@@ -210,15 +219,19 @@ describe('SettingsStore, on a file from the provider era', () => {
     );
   }
 
-  /** What such a file looked like: two providers, a list, and the knobs. */
+  /** What such a file looked like: the bundled engine, DeepSeek, and the knobs. */
   function providerEraFile(): Record<string, unknown> {
     return {
       version: 1,
       providers: {
-        active: 'deepseek',
+        // The app's own model, which was a provider for exactly one build.
+        active: 'builtin',
         configs: {
           builtin: {baseUrl: 'http://127.0.0.1:8137/v1', model: 'qwen3-1.7b'},
-          deepseek: {baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro'},
+          deepseek: {
+            baseUrl: 'https://api.deepseek.com',
+            model: 'deepseek-v4-pro',
+          },
         },
       },
       availableModels: {
@@ -237,12 +250,45 @@ describe('SettingsStore, on a file from the provider era', () => {
     };
   }
 
-  it('drops what it no longer knows and keeps everything else', async () => {
+  it('adopts the block, dropping only the provider it does not know', async () => {
     await write(providerEraFile());
     const settings = await store().load();
 
-    expect(settings).not.toHaveProperty('providers');
-    expect(settings).not.toHaveProperty('availableModels');
+    /*
+     * The pick was the engine, which no longer exists, so it falls to the
+     * catalogue's default — a provider this build can actually reach rather than
+     * a name it would have to refuse.
+     */
+    expect(settings.providers.active).toBe('deepseek');
+    expect(settings.providers.configs.deepseek).toEqual({
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-v4-pro',
+      // The file predates the field. Keychain is the answer that keeps a key
+      // already stored encrypted, and a machine without one refuses rather than
+      // writing it readable.
+      keyStorage: 'keychain',
+    });
+    // The id is dropped as an entry, and the block it sits in comes through.
+    expect(settings.providers.configs).not.toHaveProperty('builtin');
+    expect(settings.providers.configs.gemini).toEqual(
+      defaultProviders().configs.gemini,
+    );
+
+    // The fetched list travels the same way: DeepSeek's is what the file stored,
+    // the list belonging to the engine is gone, and the providers the file never
+    // mentioned keep the catalogue's placeholders.
+    expect(settings.availableModels.deepseek).toEqual([
+      'deepseek-flash',
+      'deepseek-v4-pro',
+    ]);
+    expect(settings.availableModels['builtin']).toBeUndefined();
+    expect(settings.availableModels.gemini).toEqual(
+      defaultAvailableModels().gemini,
+    );
+
+    // The engine's own knobs have no reader now — the tier plan and the global
+    // plaintext opt-in went with the engine — and they are the only part that is
+    // dropped outright.
     expect(settings).not.toHaveProperty('localModel');
     expect(settings).not.toHaveProperty('allowPlaintextApiKey');
 
@@ -251,7 +297,7 @@ describe('SettingsStore, on a file from the provider era', () => {
     expect(settings.disabledCommands).toEqual(['compact']);
   });
 
-  it('does not write the old fields back on the next save', async () => {
+  it('writes the adopted block back rather than the fields it replaced', async () => {
     await write(providerEraFile());
     const settings = store();
     await settings.load();
@@ -260,46 +306,68 @@ describe('SettingsStore, on a file from the provider era', () => {
     const written = JSON.parse(
       await readFile(join(dir, 'settings.json'), 'utf8'),
     ) as Record<string, unknown>;
+    const providers = written['providers'] as {
+      active: string;
+      configs: Record<string, unknown>;
+    };
+
     expect(written['temperature']).toBe(0.4);
-    expect(written).not.toHaveProperty('providers');
+    expect(providers.active).toBe('deepseek');
+    expect(providers.configs['deepseek']).toMatchObject({
+      model: 'deepseek-v4-pro',
+    });
+    // Neither the engine's knobs nor the id it was reached by come back.
     expect(written).not.toHaveProperty('localModel');
+    expect(written).not.toHaveProperty('allowPlaintextApiKey');
+    expect(providers.configs['builtin']).toBeUndefined();
   });
 
   /*
-   * The two flat fields at the top level predate the picker, and a build that
-   * had the catalogue moved them onto DeepSeek. There is nowhere for them to go
-   * now, and the one thing they must not do is stop the file from loading.
+   * The two flat fields predate the picker, and they were DeepSeek's: it was the
+   * only provider when they were written. Their presence is also what says the
+   * file was *pointed* at DeepSeek — so an upgrade keeps the address and the
+   * model the user had, rather than landing on the catalogue's default for a
+   * config nothing selects.
    */
-  it('ignores the flat model and base URL from before the picker', async () => {
-    await write({model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com'});
+  it('adopts the flat model and base URL into DeepSeek', async () => {
+    await write({
+      model: 'deepseek-v4-pro',
+      baseUrl: 'https://api.deepseek.com/v2',
+      temperature: 0.2,
+    });
     const settings = await store().load();
 
+    expect(settings.providers.active).toBe('deepseek');
+    expect(settings.providers.configs.deepseek).toEqual({
+      baseUrl: 'https://api.deepseek.com/v2',
+      model: 'deepseek-v4-pro',
+      keyStorage: 'keychain',
+    });
+    // And nothing else moved with them: a flat field could only ever have been
+    // DeepSeek's, so the other entries keep the catalogue's addresses.
+    expect(settings.providers.configs.gemini).toEqual(
+      defaultProviders().configs.gemini,
+    );
     expect(settings).not.toHaveProperty('model');
     expect(settings).not.toHaveProperty('baseUrl');
-    // Everything else is at its default, which is a working app.
-    expect(settings.temperature).toBe(0.7);
+    expect(settings.temperature).toBe(0.2);
   });
 });
 
 /**
- * The memory soft limit, which the Settings dialog draws as a slider.
+ * The provider block: which service answers, and what each one was last set to.
  *
- * The schema is a client of it too — the renderer's slider can only produce
- * values the schema accepts — so the bounds are what stops a hand-edited file
- * from setting a limit that makes the agent's warning nonsense.
+ * It is the block an upgrade is most likely to get wrong. A file written before
+ * the catalogue existed has no `providers` at all, and one hand-edited since can
+ * have a typo in exactly one of its five entries — and either has to cost its own
+ * value rather than the document, because the document beside it holds every
+ * other preference the user has.
  */
-/**
- * The tier override, which is the one switch that changes what gets downloaded.
- *
- * It is a preference like any other — which is exactly why it is worth a test:
- * a value that did not survive a restart would re-download 4.5 GB, or silently
- * run the smaller model on a machine the user had already told the app about.
- */
-describe('SettingsStore modelTier', () => {
+describe('SettingsStore providers', () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(process.cwd(), '.marimo-tier-'));
+    dir = await mkdtemp(join(process.cwd(), '.marimo-providers-'));
   });
 
   afterEach(async () => {
@@ -310,57 +378,162 @@ describe('SettingsStore modelTier', () => {
     return new SettingsStore(join(dir, 'settings.json'));
   }
 
-  it('lets the app decide on a fresh install', async () => {
-    expect((await store().load()).modelTier).toBe('auto');
-  });
+  async function write(raw: unknown): Promise<void> {
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify(raw, null, 2),
+      'utf8',
+    );
+  }
 
-  it('keeps an override through a write and a restart', async () => {
-    const settings = store();
-    await settings.patch({modelTier: 'high'});
-    await settings.patch({temperature: 0.2});
+  /*
+   * Every provider has to be reachable and describable before anything has been
+   * fetched or typed, or the first thing a fresh install shows is an empty
+   * picker — which reads as "the app has no models" rather than as an unset
+   * field.
+   */
+  it('points a fresh install at the catalogue defaults', async () => {
+    const settings = await store().load();
 
-    expect((await store().load()).modelTier).toBe('high');
-  });
-
-  it('keeps the rest of the file when the override is set', async () => {
-    const settings = store();
-    await settings.patch({temperature: 0.2});
-    const after = await settings.patch({modelTier: 'low'});
-
-    expect(after.temperature).toBe(0.2);
-    expect(after.modelTier).toBe('low');
+    expect(settings.providers).toEqual(defaultProviders());
+    expect(settings.availableModels).toEqual(defaultAvailableModels());
   });
 
   /*
-   * A hand-edited word must cost the choice its own value rather than the whole
-   * document: the alternative is a typo resetting the connectors and every layout
-   * width beside it.
+   * The merge is per provider, not per block, and that is the whole point of the
+   * block's patch shape: a window holding a copy of the other four addresses from
+   * before somebody's edit must not send them back, or the user's own server
+   * address quietly reverts to the catalogue's.
    */
-  it('falls back to the app deciding when the stored word is wrong', async () => {
-    await writeFile(
-      join(dir, 'settings.json'),
-      JSON.stringify({version: 1, modelTier: 'medium', sidebarWidth: 300}, null, 2),
-      'utf8',
-    );
-    const settings = await store().load();
+  it('merges a patch into the provider it names and leaves the others alone', async () => {
+    const settings = store();
+    const before = await settings.load();
 
-    expect(settings.modelTier).toBe('auto');
-    expect(settings.sidebarWidth).toBe(300);
+    const after = await settings.patch({
+      providers: {
+        configs: {gemini: {baseUrl: 'https://gemini.example.test/v1'}},
+      },
+    });
+
+    expect(after.providers.configs.gemini.baseUrl).toBe(
+      'https://gemini.example.test/v1',
+    );
+    // The fields the patch did not mention keep their values, and so does every
+    // provider it did not name — including the active pick.
+    expect(after.providers.configs.gemini.model).toBe(
+      before.providers.configs.gemini.model,
+    );
+    expect(after.providers.configs.gemini.keyStorage).toBe(
+      before.providers.configs.gemini.keyStorage,
+    );
+    expect(after.providers.configs.deepseek).toEqual(
+      before.providers.configs.deepseek,
+    );
+    expect(after.providers.active).toBe(before.providers.active);
   });
 
-  it('gives a file written before the field existed the automatic answer', async () => {
-    await writeFile(
-      join(dir, 'settings.json'),
-      JSON.stringify({version: 1, sidebarWidth: 300}, null, 2),
-      'utf8',
-    );
+  /*
+   * One bad entry, and the entry is all it costs. The block is filled a provider
+   * at a time rather than whole, so a mistyped Gemini address cannot take the
+   * provider the user was actually using, the active pick, or the layout beside
+   * them — which is what a single failed parse would have done.
+   */
+  it('costs one hand-edited provider rather than the document', async () => {
+    await write({
+      providers: {
+        active: 'gemini',
+        configs: {
+          deepseek: {
+            baseUrl: 'https://mine.example.test/v1',
+            model: 'deepseek-v4-pro',
+            keyStorage: 'plaintext',
+          },
+          // The address is a number and the storage word is not one this build
+          // knows, so this entry is not half-usable: it is replaced whole.
+          gemini: {baseUrl: 42, model: '', keyStorage: 'clear'},
+        },
+      },
+      sidebarWidth: 320,
+    });
     const settings = await store().load();
 
-    expect(settings.modelTier).toBe('auto');
-    expect(settings.sidebarWidth).toBe(300);
+    expect(settings.providers.configs.gemini).toEqual(
+      defaultProviders().configs.gemini,
+    );
+    expect(settings.providers.configs.deepseek).toEqual({
+      baseUrl: 'https://mine.example.test/v1',
+      model: 'deepseek-v4-pro',
+      keyStorage: 'plaintext',
+    });
+    expect(settings.providers.active).toBe('gemini');
+    expect(settings.sidebarWidth).toBe(320);
+  });
+
+  /*
+   * A list a provider reported is a *fact*, kept beside the preferences and
+   * written only by the call that fetched it. The provider's own default has to
+   * move with it: a model the endpoint has retired would fail the next turn for a
+   * reason nobody could see.
+   */
+  it('replaces a provider’s list and moves its default off a retired name', async () => {
+    const settings = store();
+    const before = await settings.load();
+    expect(before.providers.configs.deepseek.model).toBe('deepseek-flash');
+
+    const after = await settings.setAvailableModels('deepseek', [
+      'deepseek-v4-pro',
+      'deepseek-v4-pro',
+      '',
+    ]);
+
+    expect(after.availableModels.deepseek).toEqual(['deepseek-v4-pro']);
+    expect(after.providers.configs.deepseek.model).toBe('deepseek-v4-pro');
+    /*
+     * And nothing else moved. Each list is an answer about one endpoint, so a
+     * store that rewrote its neighbours would be inventing answers about services
+     * it never asked.
+     */
+    expect(after.availableModels.gemini).toEqual(before.availableModels.gemini);
+    expect(after.providers.configs.gemini).toEqual(
+      before.providers.configs.gemini,
+    );
   });
 });
 
+/*
+ * What a provider's default model becomes when the endpoint stops serving the
+ * stored name, which is the one decision `setAvailableModels` delegates.
+ *
+ * The cheap tier is the least surprising landing place: a provider that dropped
+ * its flagship must not silently move somebody onto its most expensive model, and
+ * a list with nothing that reads as small still has to answer with something.
+ */
+describe('chooseModel', () => {
+  it('keeps a model that still exists', () => {
+    expect(
+      chooseModel(['deepseek-flash', 'deepseek-v4-pro'], 'deepseek-v4-pro'),
+    ).toBe('deepseek-v4-pro');
+  });
+
+  it('picks a fast tier when the stored name has gone', () => {
+    expect(
+      chooseModel(['deepseek-v4-pro', 'deepseek-flash'], 'deepseek-v3'),
+    ).toBe('deepseek-flash');
+    // Nothing in the list reads as fast, and the first entry is a better answer
+    // than an empty picker.
+    expect(chooseModel(['deepseek-v4-pro'], 'deepseek-v3')).toBe(
+      'deepseek-v4-pro',
+    );
+  });
+});
+
+/**
+ * The memory soft limit, which the Settings dialog draws as a slider.
+ *
+ * The schema is a client of it too — the renderer's slider can only produce
+ * values the schema accepts — so the bounds are what stops a hand-edited file
+ * from setting a limit that makes the agent's warning nonsense.
+ */
 describe('SettingsStore memorySoftLimitBytes', () => {
   let dir: string;
 
@@ -1009,7 +1182,11 @@ describe('the recall block', () => {
     const file = join(dir, 'settings.json');
     await writeFile(
       file,
-      JSON.stringify({version: 1, temperature: 0.4, memorySoftLimitBytes: 8192}),
+      JSON.stringify({
+        version: 1,
+        temperature: 0.4,
+        memorySoftLimitBytes: 8192,
+      }),
       'utf8',
     );
 

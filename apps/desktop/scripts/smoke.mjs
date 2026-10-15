@@ -725,28 +725,24 @@ async function main() {
       }
 
       /*
-       * A fresh install opens by offering to download the model rather than by
+       * A fresh install opens by naming what it is missing rather than by
        * showing a chat that refuses. Checked here because it is the first thing a
-       * new user sees, it is the only part of the first run that no unit test
-       * covers, and it is now the *only* way the app gets a model at all.
+       * new user sees and the only part of the first run that no unit test
+       * covers.
        *
-       * The control is asserted rather than just the copy: a welcome that says
-       * "download the model" with nothing to press is the dead end this screen
-       * exists to avoid. This run has no weights in it, so what it must offer is
-       * the download — and what it must *not* do is claim the machine cannot run
-       * the model, because nothing has asked the hardware yet.
+       * What it is missing is a provider, not a download: the app carries no
+       * model and runs no engine, so the screen's job is to say so and to open
+       * the one place that fixes it. The control is asserted rather than just the
+       * copy — a welcome that names the problem with nothing to press is the dead
+       * end this screen exists to avoid.
        */
       const asked = await send('Runtime.evaluate', {
         expression: `(async () => {
-          const status = await window.marimo.call('localModel.status', {});
           return JSON.stringify({
             onboarding: !!document.querySelector('.onboarding'),
             cta: !!document.querySelector('.onboarding .button-primary'),
             label: document.querySelector('.onboarding .button-primary')?.textContent ?? '',
             composer: !!document.querySelector('.composer-box'),
-            enginePresent: status.enginePresent,
-            tiers: status.tiers.length,
-            runnable: status.runnable,
           });
         })()`,
         awaitPromise: true,
@@ -755,21 +751,15 @@ async function main() {
       const first = JSON.parse(asked.result.value);
       if (first.onboarding !== true || first.cta !== true) {
         fail(
-          `a fresh install did not offer to download the model: ${asked.result.value}`,
+          `a fresh install said nothing about what it is missing: ${asked.result.value}`,
         );
-      } else if (!/download/iu.test(first.label)) {
+      } else if (!/settings/iu.test(first.label)) {
         fail(`the first run's button says "${first.label}"`);
-      } else if (first.enginePresent !== false) {
-        fail('a fresh install reported an engine it does not have');
-      } else if (first.tiers !== 2) {
-        fail(`the status describes ${String(first.tiers)} tiers, not 2`);
       } else if (first.composer !== true) {
         // Not blocking: somebody who wants to look around first still can.
         fail('the first run took the message box away');
       } else {
-        ok(
-          'a fresh install offers the download, without taking the window over',
-        );
+        ok('a fresh install names the problem, without taking the window over');
       }
 
       /*
@@ -924,25 +914,6 @@ async function main() {
       }
 
       /*
-       * There is no model picker in the composer any more.
-       *
-       * A conversation used to be able to choose its own model, and the control
-       * for it lived beside the box you type in. There is one model now, so what
-       * this asserts is that the control is *gone* — a leftover picker would be a
-       * button that cannot change what answers, which is the kind of dead control
-       * that looks like a working feature from the outside.
-       */
-      const pickerGone = await evaluate(
-        `document.querySelector('.composer-model') === null &&
-         document.querySelector('.model-picker') === null`,
-      );
-      if (pickerGone !== true) {
-        fail('the composer still offers a model picker');
-      } else {
-        ok('the composer has no model picker, because there is one model');
-      }
-
-      /*
        * Settings, opened the way a person opens it.
        *
        * Everything below reaches *into* this dialog: which sections each screen
@@ -989,10 +960,15 @@ async function main() {
       const litCards = simpleScreen.choices.filter((entry) => entry.chosen);
       if (simpleScreen.mode !== false) {
         fail('a fresh install opens with the power-user switch already on');
-      } else if (simpleScreen.titles.includes('Provider')) {
-        fail(
-          'a fresh install opens on the screen the switch is supposed to reveal',
-        );
+      } else if (!simpleScreen.titles.includes('Provider')) {
+        /*
+         * The Provider card is on the simple screen, and that is deliberate
+         * rather than a leak from the power screen: the app carries no model of
+         * its own, so a fresh install that cannot answer has to be fixable from
+         * the screen it lands on. The old assertion here was the opposite, and
+         * it was right when a bundled model meant there was nothing to fix.
+         */
+        fail('a fresh install cannot reach the provider that answers for it');
       } else if (simpleScreen.titles.length < 4) {
         fail(
           `the simple screen has only ${String(simpleScreen.titles.length)} section(s)`,
@@ -1048,10 +1024,13 @@ async function main() {
 
       if (powerScreen.checked !== true) {
         fail('the power-user switch would not stay on');
-      } else if (powerScreen.titles.includes('Provider')) {
-        fail('the power screen still draws a Provider section');
-      } else if (!powerScreen.titles.includes('Model')) {
-        fail('the power screen does not draw the Model section');
+      } else if (!powerScreen.titles.includes('Provider')) {
+        fail('the power screen does not draw the Provider section');
+      } else if (powerScreen.titles.includes('Model')) {
+        // The Model card described an engine this app started and supervised.
+        // Nothing starts it now, so a card that describes it is a card that
+        // describes nothing.
+        fail('the power screen still draws a card for a model the app runs');
       } else if (powerScreen.density !== 'compact') {
         fail(`the power screen is drawn at density "${powerScreen.density}"`);
       } else {
@@ -1089,120 +1068,66 @@ async function main() {
       };
 
       /*
-       * No provider controls anywhere in the dialog.
+       * The Provider card, which is the one thing here that decides whether the
+       * app can answer at all.
        *
-       * The Provider card — the picker, the address box, the key field, the Fetch
-       * Models button — is gone with the catalogue, and what matters is that none
-       * of it is left behind. A control that writes to a file nothing reads is the
-       * shape of failure this check exists for.
-       *
-       * The temperature slider used to live on that card and has moved to the
-       * Model card, which is the older kind of check: the settings file has always
-       * held this number, and a control that quietly stops being drawn takes a
-       * setting nothing can reach with it.
+       * A window with no model of its own has three facts to get right and no way
+       * for a unit test to see them together: the picker offers the catalogue in
+       * its own order, the key field is a field rather than a value — invariant 8,
+       * which is exactly the thing a renderer bug would leak — and Fetch Models
+       * exists, because a service's list of models is not something this app can
+       * know and a picker with no way to ask is a picker of yesterday's guesses.
        */
-      await openSection('Model');
-      const modelControls = await until('the Model card to answer', async () => {
+      await openSection('Provider');
+      const providerCard = await until('the Provider card to answer', async () => {
         const state = await evaluate(`(() => {
-          const sections = [...document.querySelectorAll('.settings-section')];
-          const provider = sections.find(
-            (entry) => entry.querySelector('h3')?.textContent === 'Provider',
-          );
-          const model = sections.find(
-            (entry) => entry.querySelector('h3')?.textContent === 'Model',
-          );
-          if (model === undefined) return undefined;
+          const section = [...document.querySelectorAll('.settings-section')]
+            .find((entry) => entry.querySelector('h3')?.textContent === 'Provider');
+          if (section === undefined) return undefined;
+          const select = section.querySelector('select');
+          const key = section.querySelector('input[type="password"]');
           return JSON.stringify({
-            provider: provider !== undefined,
-            temperature: model.querySelector('input[type="range"]')?.value ?? null,
-            selects: model.querySelectorAll('select').length,
-            selectLabel: model.querySelector('select')?.getAttribute('aria-label') ?? null,
-            keyInputs: model.querySelectorAll('input[type="password"]').length,
-            textInputs: model.querySelectorAll('input[type="text"]').length,
+            options: select === null
+              ? null
+              : [...select.options].map((option) => option.textContent ?? ''),
+            selected: select === null ? null : select.value,
+            keyField: key !== null,
+            // The value, not the field: a password input that came back with a
+            // stored secret in it is the failure this asserts against.
+            keyValue: key === null ? null : key.value,
+            buttons: [...section.querySelectorAll('button')].map(
+              (button) => button.textContent ?? '',
+            ),
+            temperature: section.querySelector('input[type="range"]')?.value ?? null,
           });
         })()`);
         return state === undefined ? undefined : JSON.parse(state);
       });
 
-      if (modelControls.provider === true) {
-        fail('the Settings dialog still draws a Provider section');
-      } else if (
-        modelControls.keyInputs !== 0 ||
-        modelControls.textInputs !== 0
-      ) {
-        /*
-         * A key box or an address box is the thing being refused here: both would
-         * write to a file nothing reads. A `<select>` is *not* — the card has one
-         * legitimately now, the model's size — so what is asserted is that the
-         * only choice on offer is that one, by its label.
-         */
+      if (providerCard.keyField !== true) {
+        fail('the Provider card has no API-key field');
+      } else if (providerCard.keyValue !== '') {
+        // Invariant 8. The window is told whether a key is set, never what it is.
+        fail('the Provider card drew a stored key back into the field');
+      } else if (providerCard.options === null || providerCard.options.length < 5) {
         fail(
-          `the Model card offers something to configure the endpoint with: ${JSON.stringify(modelControls)}`,
+          `the Provider picker offers ${String(providerCard.options?.length)} services`,
         );
-      } else if (modelControls.selects !== 1) {
-        fail(`the Model card has ${String(modelControls.selects)} pick-lists, not 1`);
-      } else if (modelControls.selectLabel !== 'Model size') {
+      } else if (!providerCard.options.join(' ').includes('llama.cpp')) {
+        // The one entry that keeps a conversation on the machine. A catalogue
+        // without it is a catalogue where nothing is private by default.
+        fail('the Provider picker offers no server of your own');
+      } else if (!providerCard.buttons.some((label) => /fetch/i.test(label))) {
+        fail('the Provider card has no way to ask what a service serves');
+      } else if (providerCard.temperature !== '0.7') {
         fail(
-          `the Model card's pick-list is "${String(modelControls.selectLabel)}", not the model's size`,
-        );
-      } else if (modelControls.temperature !== '0.7') {
-        fail(
-          `the temperature slider opens at ${String(modelControls.temperature)}, ` +
+          `the temperature slider opens at ${String(providerCard.temperature)}, ` +
             'not the 0.7 the settings file defaults to',
         );
       } else {
         ok(
-          'the dialog has no provider controls, and the temperature slider lives ' +
-            'on the Model card',
-        );
-      }
-
-      /*
-       * The model card, which is the one thing on this screen that decides
-       * whether the app can answer at all.
-       *
-       * What it must do here is tell the truth about this install: a checkout is
-       * built without the weights, so the card says so — and it says *which file*
-       * it wanted, because "the model is not installed" without a path is a
-       * complaint nobody can act on. The command line is asserted too: it is the
-       * whole point of the power screen's version of this card, and a card whose
-       * command was empty would still pass every wording check above.
-       */
-      await openSection('Model');
-      const modelCard = await until('the Model section to answer', async () => {
-        const state = await evaluate(`(() => {
-          const section = [...document.querySelectorAll('.settings-section')]
-            .find((entry) => entry.querySelector('h3')?.textContent === 'Model');
-          if (section === undefined) return undefined;
-          return JSON.stringify({
-            text: section.textContent ?? '',
-            command: section.querySelector('.model-command')?.textContent ?? '',
-          });
-        })()`);
-        return state === undefined ? undefined : JSON.parse(state);
-      });
-
-      /*
-       * Case-insensitive, because the sentences start with the word: "Not
-       * downloaded yet" and "is not installed" are the same state said two ways,
-       * and a case-sensitive pattern would pass on one and fail on the other.
-       */
-      if (!/not downloaded|not installed|not running|loading|ready/iu.test(modelCard.text)) {
-        fail(`the Model card says nothing about the model: ${modelCard.text}`);
-      } else if (!modelCard.command.includes('llama-server')) {
-        fail(
-          `the Model card shows no command: ${JSON.stringify(modelCard.command)}`,
-        );
-      } else if (!modelCard.command.includes('--jinja')) {
-        // The flag the whole feature rests on, checked where a person can see it.
-        fail(
-          'the command the Model card shows does not ask for the model template',
-        );
-      } else if (!modelCard.command.includes('127.0.0.1')) {
-        fail('the command the Model card shows does not bind to loopback');
-      } else {
-        ok(
-          'the Model card reports the state of the model and the command that runs it',
+          'the Provider card offers the catalogue, no key value, Fetch Models ' +
+            'and the temperature',
         );
       }
 
@@ -1647,7 +1572,6 @@ const PROBE = `(async () => {
     result.product = info.name;
     result.version = info.version;
     result.userData = info.userData;
-    result.secretsEncrypted = info.secretsEncrypted;
 
     const {profiles, activeProfileId} = await window.marimo.call('profiles.list', {});
     result.profileCount = profiles.length;

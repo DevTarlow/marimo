@@ -4,7 +4,7 @@
  * The interesting failures here are all about a *second* engine, and none of
  * them is visible from the window: one that never stops is 400 MB of weights
  * and a fan on somebody's laptop; one that is killed under a request turns a
- * good answer into a failure; one whose argv is the chat model's is a process
+ * good answer into a failure; one whose argv belongs to a chat server is a process
  * that starts, loads, moves no vectors at all, and reports itself healthy. So
  * the spawn and the two HTTP calls are injected, and the argv is asserted as an
  * array.
@@ -140,12 +140,12 @@ describe('RecallEngine', () => {
 
   /*
    * The argv, asserted as data. This is the one thing that cannot be checked any
-   * other way: an engine started with the chat model's flags loads the model,
+   * other way: an engine started with a chat server's flags loads the model,
    * answers `/health`, and embeds nothing — `--embeddings` is what restricts it
    * to the endpoint we call, and `--pooling mean` is what makes a single vector
    * come out of a long input at all.
    */
-  it('starts the engine with the embedding flags and not the chat ones', async () => {
+  it('starts the engine with the embedding flags', async () => {
     const argv: string[][] = [];
     await engine({argv}).embedText(['hello']);
 
@@ -154,7 +154,8 @@ describe('RecallEngine', () => {
     expect(args[args.indexOf('--pooling') + 1]).toBe('mean');
     expect(args).not.toContain('--jinja');
     expect(args).not.toContain('--flash-attn');
-    // On the processor: the chat tier's memory plan assumes the GPU is its own.
+    // On the processor: this model's card warns about float16 activations, and
+    // the CPU backend accumulates in f32.
     expect(args[args.indexOf('--n-gpu-layers') + 1]).toBe('0');
     // Both halves of the batch, or llama.cpp clamps one down to the other and
     // any media input over 512 tokens is refused with a 500.
@@ -262,8 +263,12 @@ describe('RecallEngine', () => {
     );
   });
 
-  it('names its own pid file, so it can never reap the chat engine', () => {
+  /*
+   * The pid file names a process the next start will SIGKILL, so it has to be
+   * this engine's own name in the directory both processes resolve — never a
+   * path another part of the app might also write.
+   */
+  it('keeps its pid file under a name only this engine writes', () => {
     expect(embeddingPidFile('/data')).toBe(join('/data', 'recall.pid'));
-    expect(embeddingPidFile('/data')).not.toBe('/data/local-model.pid');
   });
 });

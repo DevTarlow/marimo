@@ -23,10 +23,10 @@ packages/agent      Everything ADK: the OpenAI-compatible client, tool set,
                     document-version machinery. No Electron.
 packages/runtime    The Electron-free half of the app proper: where files live,
                     secrets with the cipher injected, the jobs/profiles/
-                    workspaces/settings/skills/proposals stores, the supervisor
-                    for the model the app downloads, and the pins. Re-exports the
-                    version machinery it uses, so a caller still finds it beside
-                    them.
+                    workspaces/settings/skills/proposals stores, the provider
+                    catalogue's settings and key paths, and the supervisor and
+                    pins for the recall model. Re-exports the version machinery it
+                    uses, so a caller still finds it beside them.
 apps/desktop        The Electron app: src/main (window, IPC, tray, adapters),
                     src/preload (the sandboxed bridge), src/runner (the headless
                     job runner), src/renderer (React), src/shared.
@@ -79,10 +79,11 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     another, finds nothing due, and exits 0. **The model used to be a second case
     of this and no longer is**: it was bundled, so the window found it through
     Electron's `process.resourcesPath` while the runner derived the path from its
-    own executable. It is downloaded into the user-data directory now and the pins
-    are _imported_ rather than located, so there is one derivation instead of two —
-    and `resolveTier`/`localModelSpecFor` are what both processes call to get the
-    same tier at the same context.
+    own executable; then it was downloaded, with the pins _imported_ rather than
+    located. It is now not the app's at all — a provider's address comes from the
+    catalogue or from the user, and both processes read the same document — while
+    the recall engine's directory and pins are still imported by both, which is
+    what keeps a window and a scheduled job searching the same index.
 14. **An MCP server's tools cannot take a built-in name.** The reserved set is
     every built-in name _before_ the profile filter — a tool the profile has
     switched off still owns its name, because the profile can change between
@@ -97,13 +98,27 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     in a turn is refused rather than run, because a model that loops arrives at
     that silence by itself. Nothing here is a prompt: a prompt is what a small
     model loses first.
-16. **The engine's address exists only in the process that started it.** The
-    engine comes up on whatever port was free, so no address is stored anywhere:
-    the resolver takes the live one from the caller or refuses, with a sentence.
-    There is no placeholder to fall back to, which is the point — a fixed port
-    would send a conversation to whatever else is listening there. `--jinja` is
-    the other half of the same feature and is just as silent when missing: the
-    engine runs perfectly and the agent is offered no tools at all.
+16. **No address belongs to a process any more, and one key has to reach two of
+    them.** The app runs no backend of its own: every provider's address is the
+    catalogue's or one the user typed, and the invariant that used to live here —
+    a supervised engine's port existing only in the process that started it — is
+    gone with the engine. What replaced it is a fact about credentials. The
+    headless runner has no `app` object, therefore no `safeStorage`, therefore
+    cannot decrypt a key; so a provider's key is stored readable *only* when the
+    user ticks that provider's "let the background runner read it" box, and a job
+    whose agent needs an encrypted key fails with a sentence saying so rather than
+    with a 401. The related trap is silent in the other direction: a plaintext key
+    is written by the window and read by the runner through the *same* path, which
+    is why `paths.providerSecrets` is derived from the catalogue rather than
+    spelled out in either place.
+17. **A model is a pair, never an id.** `{provider, model}` is the only shape this
+    app stores or sends, because a model id means nothing without the endpoint
+    that serves it — `glm-5.3-flash` at OpenCode Go and a file of the same name on
+    somebody's own server are two different models. The resolver picks a
+    conversation's own choice, then its agent's, then the app's, and that order is
+    in one function (`modelChoiceFor`) because a second implementation of it would
+    be a second answer to "which model is this", and the one a user reads would be
+    the wrong one.
 
 ## Documents
 
@@ -280,7 +295,6 @@ watches the workspace poorly.
 ```bash
 pnpm install          # the store lives in .pnpm-store, per pnpm-workspace.yaml
 pnpm build            # tsc -b for every project — but NOT the renderer bundle
-pnpm --filter @marimo/desktop model:fetch   # 2.7 GB, for a checkout; see below
 pnpm build:web        # the renderer bundle: `tsc -b` + vite build, desktop only
 pnpm typecheck        # including test projects
 pnpm test             # vitest, everywhere
@@ -379,66 +393,53 @@ Either way the symptom is misleading and worth recognising: the dev launcher
 prints Vite's URL _first_ and Electron dies immediately after, so a host policy
 that refused a syscall reads as a renderer that failed to paint.
 
-## The model the app downloads
+## What answers, and where the key is
 
-**Nothing is bundled.** The app carries no weights and no engine, and downloads
-them on a user's first run into `<user-data>/model/`. That is a deliberate
-inversion of what this file used to say: an installer with 1.1 GB inside it worked
-offline out of the box, and the cost was a build that needed a gigabyte of network
-and a release that could only be rebuilt by downloading it again. The trade now is
-one download on first run, and the pins — tag, revision, per-asset sha256 — live in
-`packages/runtime/src/local-model/pins.ts`, which both processes _import_ rather
-than find on disk.
+**The app runs no chat model of its own.** It used to: a llama.cpp engine it
+downloaded, supervised on loopback and addressed by a port only the starting
+process knew. That is gone, and the app now talks to a provider — DeepSeek,
+Google Gemini, a llama.cpp server you run yourself, OpenCode Go, or OpenRouter.
+One client serves all of them because every one of those speaks the OpenAI
+chat-completions dialect, so switching provider is a base URL, a key and a model
+id rather than a second transport.
 
-**There are two tiers of one model, and no CPU path.** `low` is Qwen3.5-4B at
-Q4_K_M (2.7 GB, 16K) and `high` is the same model at Q8_0 (4.5 GB, 32K). Every
-engine asset is a GPU build — Vulkan on Linux and Windows, Metal on macOS — and a
-machine with no usable device is refused with a sentence rather than quietly run on
-a processor. `local-model/plan.ts` decides the tier from what the engine reports as
-free, and the decision is an _estimate_: weights, a quantized cache and a compute
-buffer, plus a margin. It probes and then downloads; it never tries and falls back.
-The estimate is why `modelTier` exists as a settings field — `auto`, `low` or
-`high` — and an explicit choice is never second-guessed, only warned about.
+**The catalogue is one file and it is data.** `packages/protocol/src/providers.ts`
+holds the descriptors, and four facts about an *endpoint* travel with the id
+rather than being decided in the transport: whether thinking arrives as
+`reasoning_content`, whether `stream_options.include_usage` may be sent, which
+header a gateway wants a conversation named in, and whether a key is needed. The
+failure these prevent is not cosmetic — Gemini's compatibility layer answers an
+unsupported field with an error, so asking it for usage fails every turn rather
+than one.
 
-**The engine is fetched before the tier, and that order is forced.** Nothing can
-ask the hardware until something can run on it, so the 32 MB engine goes first, then
-the probe, then the tier the probe chose. That is what stops a first run downloading
-4.5 GB for a card that cannot hold it — and it is why `LocalModelHost.install` is
-three steps rather than one.
+**A key is encrypted unless the user says otherwise, and they say it per
+provider.** See invariant 16: the headless runner has no keychain, so the
+"background runner may read this" consent is what makes a scheduled job on a
+hosted provider possible at all. The store is one file per provider under
+`secrets/`, derived from the catalogue by `paths.providerSecrets`.
 
-Five things here are easy to get wrong and expensive to find:
+**The recall engine is the one engine left, and it is a different thing.** It
+downloads its own embedding model and runs its own llama.cpp build under
+`model/recall/`, supervised by the same `LocalModelService` the chat engine used
+to use — kept precisely because recall still needs it. Everything in the
+paragraphs that used to be here about `--jinja`, `--flash-attn` and quantized KV
+caches still applies to it, and `pins.ts` still carries `RECALL_ENGINE` for the
+same reason: the app's own build cannot load that model. What is gone is
+`MODEL_PINS`, the tier plan and the hardware probe, because nothing chooses a
+chat tier any more.
 
-- **`--jinja` is load-bearing.** Without it llama.cpp does not apply the model's
-  own chat template, and Qwen3.5's template is what turns its `<tool_call>` block
-  into a call this app can see. The engine runs perfectly, every request succeeds,
-  and the agent is offered no tools at all. Verified against the pinned build: with
-  it, a tool call arrives as a structured `tool_calls` delta with its arguments.
-- **`enable_thinking:false` is honoured, and that is not universal.** One shipped
-  template ignores the flag entirely and forces thinking on, which reads as "off"
-  while every turn pays for it. Qwen3.5's honours it, so the thought stream is
-  absent when it should be and arrives as `reasoning_content` when it is not.
-- **`--flash-attn on` is not optional.** The KV cache is `q8_0`, and a quantized V
-  cache needs flash attention; an engine that resolved `auto` to `off` would store
-  the cache at f16 and use the memory the quantization exists to save.
-- **`fs.cp` rewrites relative symlinks to absolute ones** unless
-  `verbatimSymlinks: true`. The released engine archives link their libraries
-  relatively, so a copy points into a scratch directory that is deleted a line
-  later — and the engine then fails with `error while loading shared libraries`
-  while every file it names is visibly present.
-- **Never leave an engine behind.** It is gigabytes of memory and a spinning fan
-  with no window to explain it. `LocalModelService` stops it on the way out and
-  writes a pid file so the next run can reap one that outlived a crash; the command
-  to check by hand is `pgrep -x llama-server`.
-
-Tests for all of this inject `spawn`, `fetch` and `tar`, so nothing in the suite
-touches the network, spawns an archive tool, or loads a weight. Start a real one by
-hand only when you mean it:
+Two things about the engine remain worth keeping in mind. **Never leave it
+behind** — it is hundreds of megabytes of weights and a spinning fan with no
+window to explain it, so `LocalModelService` stops it on the way out and writes a
+pid file the next run reaps; the command to check by hand is
+`pgrep -x llama-server`. And **the live address still exists only in the process
+that started *that* engine**, which is why `resolveAgentConfig` refuses rather
+than defaulting for anything that needs one: a fixed port would send a
+conversation to whatever else is listening there.
 
 ```bash
-pnpm --filter @marimo/desktop model:fetch          # low tier, into .model-cache/
-pnpm --filter @marimo/desktop model:fetch high     # or the big one
-MARIMO_MODEL_DIR=$PWD/apps/desktop/.model-cache/local-model \
-  pnpm --filter @marimo/desktop dev
+MARIMO_MODEL_DIR=$PWD/apps/desktop/.model-cache/live-model \
+  pnpm --filter @marimo/runtime test:live
 ```
 
 ## Packaging
@@ -447,13 +448,13 @@ MARIMO_MODEL_DIR=$PWD/apps/desktop/.model-cache/local-model \
 pnpm --filter @marimo/desktop package   # AppImage into apps/desktop/release/
 ```
 
-**Packaging no longer fetches anything.** It used to be a build plus 1.1 GB of
-weights copied into the app's resources, with `MARIMO_SKIP_MODEL=1` as the escape
-hatch CI used. The model is downloaded on first run now, so `package`,
-`package:win` and `package:mac` are plain builds and there is no variable to
-remember. What a packaged app ships is an app that says it needs to download a
-model — which is the state a checkout is in too, and the state the smoke check
-runs in.
+**Packaging no longer fetches anything, and there is nothing to bundle.** It used
+to be a build plus 1.1 GB of weights inside the app, then a build plus a pin set
+that a first run downloaded from. Now the chat model is not the app's at all, so
+`package`, `package:win` and `package:mac` are plain builds and there is no
+variable to remember. What a packaged app ships is an app that asks which service
+should answer — which is the state a checkout is in too, and the state the smoke
+check runs in.
 
 **`asar` stays off.** The runner is this binary started with
 `ELECTRON_RUN_AS_NODE=1`, and Node mode has no asar support: reading a file
@@ -517,8 +518,8 @@ writes the runner's path into a systemd unit. Check `pnpm --filter
   shared libraries from, so an engine binary kept elsewhere is given the app's
   libraries and fails with `unknown model architecture`. That is also why
   `pins.ts` carries a second `RECALL_ENGINE`: the app's own build cannot load this
-  model at all. `model:fetch` populates the chat side only, so a live run usually
-  means pointing this at a directory assembled by hand — symlinking the pinned
-  weights beside an extracted `RECALL_ENGINE` archive is enough. An unset
+  model at all, and there is no fetch command for it, so a live run means
+  pointing this at a directory assembled by hand — symlinking the pinned weights
+  beside an extracted `RECALL_ENGINE` archive is enough. An unset
   environment, missing weights or a missing engine all report as skipped rather
   than failing, because none of them is a broken build.

@@ -18,7 +18,8 @@ import {BaseSessionService} from '@google/adk';
 
 import {z} from 'zod';
 
-import type {SessionSource} from '@marimo/protocol';
+import {agentModelSchema} from '@marimo/protocol';
+import type {AgentModel, SessionSource} from '@marimo/protocol';
 
 import {
   assertWritable,
@@ -77,6 +78,20 @@ export interface SessionIndexEntry {
    * do with.
    */
   source?: SessionSource;
+  /**
+   * The model this conversation was pointed at, when it has one of its own.
+   *
+   * A pair rather than a model id, because an id means nothing apart from the
+   * endpoint that serves it. Absent is the common case and the default meaning:
+   * whatever the agent this conversation belongs to answers with.
+   *
+   * It lives on the index entry rather than in the conversation's own JSONL,
+   * because it is a fact about the conversation that a *list* has to be able to
+   * report — the composer draws it before a turn runs, and reading every
+   * conversation's event log to find one field would make opening the window cost
+   * a scan of everything on disk.
+   */
+  model?: AgentModel;
 }
 
 /**
@@ -101,6 +116,28 @@ const sessionIndexEntrySchema = z
     userId: z.string(),
     profileId: z.string().optional(),
     workspaceId: z.string().optional(),
+    /*
+     * Declared rather than left to `.passthrough()` below, and the difference is
+     * not cosmetic: a value that passes through unread is a value the next write
+     * drops, so a conversation would lose its model the first time anything else
+     * about it changed. Optional, so an index written before the field existed
+     * still parses — which is the whole reason the entry schema is lenient.
+     *
+     * A *string* here is a document from the build that had per-conversation
+     * models before this one, where the field was `model?: string`. It is dropped
+     * rather than migrated, and both halves of that are deliberate. It cannot be
+     * migrated honestly: a bare model id means nothing without the endpoint that
+     * served it, and the provider that was active when it was written is not
+     * recorded anywhere — guessing is how a conversation silently moves to a
+     * different service. And it cannot be *refused*: this schema is checked once
+     * for the whole index, so one entry with a stale field would fail the parse
+     * of every entry, and `readIndex` quarantines a file it cannot parse. The
+     * user would lose the conversation list to keep one chat's old model id.
+     */
+    model: z.preprocess(
+      (value: unknown) => (typeof value === 'string' ? undefined : value),
+      agentModelSchema.optional(),
+    ),
   })
   .passthrough();
 
@@ -192,6 +229,39 @@ export class FileSessionService extends BaseSessionService {
         delete entry.workspaceId;
       } else {
         entry.workspaceId = workspaceId;
+      }
+      await this.writeIndex(index);
+      return entry;
+    });
+  }
+
+  /**
+   * Points a conversation at a model of its own, or back at its agent's.
+   *
+   * `undefined` removes the field rather than storing an empty one, exactly like
+   * `setSessionWorkspace` above: a conversation with no model of its own is the
+   * normal state, and a sentinel here would be a second way to say it that every
+   * reader would have to know about.
+   *
+   * `updatedAt` is left alone for the third time, and the reason is the same as
+   * the other two: the sidebar sorts on it as "when something happened in this
+   * conversation", and choosing a model is a decision about the chat rather than
+   * something that happened in it.
+   */
+  async setSessionModel(
+    sessionId: string,
+    model: AgentModel | undefined,
+  ): Promise<SessionIndexEntry | undefined> {
+    return await this.withLock(async () => {
+      const index = await this.readIndex();
+      const entry = index.sessions[sessionId];
+      if (!entry) {
+        return undefined;
+      }
+      if (model === undefined) {
+        delete entry.model;
+      } else {
+        entry.model = model;
       }
       await this.writeIndex(index);
       return entry;

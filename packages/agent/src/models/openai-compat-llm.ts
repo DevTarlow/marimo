@@ -1,19 +1,21 @@
 /**
- * The OpenAI-compatible client for Google ADK-JS, over the app's own engine.
+ * The OpenAI-compatible client for Google ADK-JS, over whichever service the
+ * user chose.
  *
- * ADK ships Gemini and Apigee model classes only, so an OpenAI-compatible
- * client is a normal `BaseLlm` implementation registered with `LLMRegistry`.
- * Everything here is transport: message translation lives in
- * `openai-mapping.ts`, SSE framing in `sse.ts`.
+ * ADK ships Gemini and Apigee model classes only, so an OpenAI-compatible client
+ * is a normal `BaseLlm` implementation registered with `LLMRegistry`. Everything
+ * here is transport: message translation lives in `openai-mapping.ts`, SSE
+ * framing in `sse.ts`.
  *
- * One client, and one backend: the llama.cpp `llama-server` the app starts and
- * supervises on loopback. It used to serve six of them, and two details travelled
- * with the choice — whether thinking arrives as `reasoning_content`, and whether
+ * One client, many backends — every provider in the catalogue speaks this
+ * dialect, which is the whole reason switching provider is a base URL, a key and
+ * a model id rather than a second client. Three details travel with the choice
+ * rather than being decided here, because they are facts about an *endpoint*:
+ * whether thinking arrives as `reasoning_content`, whether
  * `stream_options.include_usage` may be sent (Gemini's compatibility layer
- * rejects it, and a rejected field is a 400 on every turn). With one backend
- * those are facts rather than options, so they are written where they are used:
- * usage is always asked for, and `reasoning_content` is always read if it
- * arrives.
+ * rejects it, and a rejected field is a 400 on every turn), and which header a
+ * gateway wants a conversation named in. All three come from the provider
+ * descriptor and arrive as options.
  *
  * Protocol references:
  *   https://github.com/ggml-org/llama.cpp/blob/master/examples/server/README.md
@@ -27,7 +29,8 @@ import type {
   Part,
 } from '@google/genai';
 
-import {LOCAL_MODEL_ID} from '@marimo/protocol';
+import {PROVIDERS} from '@marimo/protocol';
+import type {ProviderId} from '@marimo/protocol';
 
 import {
   systemInstructionToText,
@@ -40,15 +43,45 @@ import {iterateSseData} from './sse.js';
 export interface OpenAiCompatLlmOptions {
   model: string;
   /**
-   * Where the engine is listening, from the process that started it.
+   * Where requests go: the catalogue's address or the user's own.
    *
-   * Required rather than defaulted: there is no catalogue address to fall back
-   * to, and a client built without one would post a conversation to `undefined`.
+   * Required rather than defaulted, because a client built without one would post
+   * a conversation to `undefined` — and the mistake would look like a provider
+   * that is down.
    */
   baseUrl: string;
+  /**
+   * Which provider this is, so the endpoint's own flags apply.
+   *
+   * Optional only so a test can build a client without the whole catalogue; a
+   * missing id is read as DeepSeek's flags, which are the permissive ones and
+   * therefore the ones that fail loudly at a stricter endpoint rather than
+   * quietly here.
+   */
+  provider?: ProviderId;
+  /**
+   * The credential, or an empty string for a server that takes none.
+   *
+   * Empty means no `Authorization` header is sent at all, rather than an empty
+   * one: a bearer token with nothing in it is refused where an absent header is
+   * ignored, and the provider this matters for is a local server that may not look
+   * at it either way.
+   */
+  apiKey?: string;
   temperature?: number;
   maxOutputTokens?: number;
   timeoutMs?: number;
+  /**
+   * The conversation this request belongs to, read at send time.
+   *
+   * A function rather than a string because the client outlives the turn: it is
+   * built once per model and shared by every conversation that uses that model, so
+   * a session id captured at construction would be the *first* conversation's for
+   * ever. The reader is asked as the request is assembled, and a caller that has
+   * no conversation returns nothing — the header is then omitted, which is a lost
+   * prompt cache rather than a failed request.
+   */
+  readSessionId?: () => string | undefined;
   /** Injectable for tests; defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
 }
@@ -73,30 +106,37 @@ interface StreamToolCallAccumulator {
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 /**
- * How the backend is named in an error the user will read.
+ * How the service is named in an error the user will read.
  *
- * A constant rather than a descriptor lookup, and phrased for the person reading
- * the chat rather than for a developer: the only thing that can answer is the
- * engine this app started, so an error naming a company would be naming somebody
- * who was never involved.
+ * Taken from the catalogue rather than written here, because the sentence is
+ * about the provider the user chose and a second copy of its name is a copy that
+ * can disagree — an error blaming DeepSeek for a request made to OpenRouter is
+ * worse than no label at all. The fallback is for a client built without one,
+ * which is a test's client rather than the app's.
  */
-const LOCAL_MODEL_LABEL = 'The local model';
+function providerLabel(provider: ProviderId | undefined): string {
+  const descriptor = provider === undefined ? undefined : PROVIDERS[provider];
+  return descriptor === undefined ? 'The model' : descriptor.label;
+}
 
 export class OpenAiCompatLlm extends BaseLlm {
   /**
    * Only documentation, today: `AgentHost` constructs this class directly and
    * never consults `LLMRegistry`, so nothing here decides which client runs.
    *
-   * Deliberately not a wildcard. A locally served model id is whatever file the
-   * server loaded — `Qwen3-30B-A3B-Q4_K_M`, say — so no pattern can claim it
-   * honestly, and a match-everything entry would let this class answer a
-   * registry lookup meant for ADK's native Gemini client.
+   * Empty, and that is the honest answer rather than an oversight. Model ids are
+   * whatever each service happens to serve — `deepseek-v4-pro`, `openrouter/auto`,
+   * a GGUF file's name on somebody's own server — so no pattern can claim them
+   * honestly, and a match-everything entry would let this class answer a registry
+   * lookup meant for ADK's native Gemini client.
    */
-  static override readonly supportedModels: Array<string | RegExp> = [
-    LOCAL_MODEL_ID,
-  ];
+  static override readonly supportedModels: Array<string | RegExp> = [];
 
   private readonly baseUrl: string;
+  private readonly provider: ProviderId | undefined;
+  private readonly label: string;
+  private readonly apiKey: string;
+  private readonly readSessionId: (() => string | undefined) | undefined;
   private readonly temperature?: number;
   private readonly maxOutputTokens?: number;
   private readonly timeoutMs: number;
@@ -107,6 +147,10 @@ export class OpenAiCompatLlm extends BaseLlm {
     // A trailing slash here and a leading one on the path would be a different
     // URL, so the address is normalised at the one place it enters.
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    this.provider = options.provider;
+    this.label = providerLabel(options.provider);
+    this.apiKey = options.apiKey ?? '';
+    this.readSessionId = options.readSessionId;
     this.temperature = options.temperature;
     this.maxOutputTokens = options.maxOutputTokens;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -145,7 +189,7 @@ export class OpenAiCompatLlm extends BaseLlm {
    */
   override async connect(): Promise<BaseLlmConnection> {
     throw new Error(
-      `${LOCAL_MODEL_LABEL} does not support live (bidirectional) connections.`,
+      `${this.label} does not support live (bidirectional) connections.`,
     );
   }
 
@@ -184,14 +228,34 @@ export class OpenAiCompatLlm extends BaseLlm {
       body.tools = tools;
       body.tool_choice = 'auto';
     }
-    if (stream) {
-      // Ask for a trailing usage-only chunk so token counts reach the UI. The
-      // app's engine understands the field; it was optional because Gemini's
-      // compatibility layer answers it with an error rather than ignoring it.
+    if (stream && this.usageInStream()) {
+      /*
+       * Ask for a trailing usage-only chunk so token counts reach the UI.
+       *
+       * Guarded by the provider rather than always sent: Gemini's compatibility
+       * layer answers an unsupported field with an error rather than ignoring it,
+       * so asking there would fail every turn. The cost of not asking is a quiet
+       * token badge, which is a much smaller loss.
+       */
       body.stream_options = {include_usage: true};
     }
 
     return body;
+  }
+
+  /** Whether this endpoint may be asked for usage in the stream. */
+  private usageInStream(): boolean {
+    const descriptor = this.provider === undefined ? undefined : PROVIDERS[this.provider];
+    // The permissive default: sending the field to an endpoint that ignores it
+    // costs nothing, and one that rejects it is a provider whose descriptor says
+    // so.
+    return descriptor?.usageInStream ?? true;
+  }
+
+  /** Whether thinking arrives as a separate `reasoning_content` delta. */
+  private hasReasoningChannel(): boolean {
+    const descriptor = this.provider === undefined ? undefined : PROVIDERS[this.provider];
+    return descriptor?.reasoningChannel ?? true;
   }
 
   private async post(
@@ -199,15 +263,30 @@ export class OpenAiCompatLlm extends BaseLlm {
     abortSignal?: AbortSignal,
   ): Promise<Response> {
     const signal = this.combineSignals(abortSignal);
-    /*
-     * No `Authorization` header, and that is a fact about the backend rather than
-     * an omission: the app starts its own engine on loopback without `--api-key`,
-     * so there is no credential to send.
-     */
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     };
+    /*
+     * The key is sent only when there is one, and the difference matters at
+     * exactly one provider: a local server usually takes no credential, and
+     * `Authorization: Bearer ` with nothing after it is refused where an absent
+     * header is ignored.
+     */
+    if (this.apiKey.length > 0) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+    /*
+     * The one gateway that routes and caches per conversation asks to be told
+     * which one this is. Omitted when the caller has no session, which costs a
+     * prompt cache rather than the request.
+     */
+    const sessionHeader =
+      this.provider === undefined ? '' : PROVIDERS[this.provider].sessionHeader;
+    const sessionId = this.readSessionId?.();
+    if (sessionHeader.length > 0 && sessionId !== undefined) {
+      headers[sessionHeader] = sessionId;
+    }
 
     let response: Response;
     try {
@@ -224,7 +303,7 @@ export class OpenAiCompatLlm extends BaseLlm {
       const reason = error instanceof Error ? error.message : String(error);
       throw new OpenAiCompatRequestError(
         0,
-        `${LOCAL_MODEL_LABEL} request failed: ${reason}`,
+        `${this.label} request failed: ${reason}`,
       );
     }
 
@@ -232,7 +311,7 @@ export class OpenAiCompatLlm extends BaseLlm {
       const detail = await readErrorBody(response);
       throw new OpenAiCompatRequestError(
         response.status,
-        `${LOCAL_MODEL_LABEL} returned ${response.status}: ${detail}`,
+        `${this.label} returned ${response.status}: ${detail}`,
       );
     }
 
@@ -246,7 +325,7 @@ export class OpenAiCompatLlm extends BaseLlm {
     if (!response.body) {
       throw new OpenAiCompatRequestError(
         response.status,
-        `${LOCAL_MODEL_LABEL} returned a streaming response with no body.`,
+        `${this.label} returned a streaming response with no body.`,
       );
     }
 
@@ -280,12 +359,16 @@ export class OpenAiCompatLlm extends BaseLlm {
       const delta = choice.delta ?? {};
 
       /*
-       * Read whenever it arrives, which is one `typeof` check on a field the
-       * engine may not send. The name is DeepSeek's convention and llama.cpp
-       * emits it under `--reasoning-format deepseek`; refusing to read it would
-       * throw away thinking that did arrive.
+       * Read when the endpoint has a reasoning channel, which is a fact about the
+       * provider rather than a guess: the name is DeepSeek's convention and
+       * llama.cpp emits it under `--reasoning-format deepseek`, while OpenRouter
+       * sends the same idea under a different key and Gemini's layer has no
+       * equivalent. Reading a field that is never sent costs nothing — a `typeof`
+       * check on an absent key — so the flag is what decides whether thinking that
+       * arrived is kept.
        */
       if (
+        this.hasReasoningChannel() &&
         typeof delta.reasoning_content === 'string' &&
         delta.reasoning_content
       ) {

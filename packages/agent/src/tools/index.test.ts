@@ -51,6 +51,8 @@ describe('createTools', () => {
     return {
       baseUrl: 'http://127.0.0.1:1',
       model: 'deepseek-chat',
+      provider: 'deepseek',
+      apiKey: '',
       temperature: 0,
       systemPrompt: 'test',
       workspaceRoot: workDir,
@@ -68,7 +70,7 @@ describe('createTools', () => {
 
   it('offers the same catalogue in a stable order', () => {
     expect(
-      names(createTools(config(), {memory: memory(), model: 'deepseek-chat'})),
+      names(createTools(config(), {memory: memory(), model: 'deepseek-chat', provider: 'deepseek'})),
     ).toEqual([
       'current_time',
       'read_file',
@@ -89,6 +91,7 @@ describe('createTools', () => {
       createTools(config(), {
         memory: memory(),
         model: 'deepseek-chat',
+        provider: 'deepseek',
         webSearch: provider,
       }),
     );
@@ -96,7 +99,7 @@ describe('createTools', () => {
     expect(withProvider.indexOf('web_search')).toBe(9);
     expect(withProvider.indexOf('run_shell')).toBe(10);
     expect(
-      names(createTools(config(), {memory: memory(), model: 'deepseek-chat'})),
+      names(createTools(config(), {memory: memory(), model: 'deepseek-chat', provider: 'deepseek'})),
     ).not.toContain('web_search');
   });
 
@@ -118,6 +121,7 @@ describe('createTools', () => {
       createTools(config(), {
         memory: memory(),
         model: 'deepseek-chat',
+        provider: 'deepseek',
         jobService: jobs,
       }),
     );
@@ -158,13 +162,14 @@ describe('createTools', () => {
       }),
     };
     expect(
-      names(createTools(config(), {memory: memory(), model: 'deepseek-chat'})),
+      names(createTools(config(), {memory: memory(), model: 'deepseek-chat', provider: 'deepseek'})),
     ).not.toContain('list_todos');
 
     const withDesk = names(
       createTools(config(), {
         memory: memory(),
         model: 'deepseek-chat',
+        provider: 'deepseek',
         deskService: desk,
       }),
     );
@@ -204,6 +209,7 @@ describe('createTools', () => {
         createTools(narrowed, {
           memory: memory(),
           model: 'deepseek-chat',
+          provider: 'deepseek',
           skillService: skills,
         }),
       ),
@@ -214,14 +220,19 @@ describe('createTools', () => {
       names(
         createTools(
           {...config(), enabledTools: []},
-          {memory: memory(), model: 'deepseek-chat', skillService: skills},
+          {
+            memory: memory(),
+            model: 'deepseek-chat',
+            provider: 'deepseek',
+            skillService: skills,
+          },
         ),
       ),
     ).toEqual(['save_skill']);
 
     // And with no skill service there is nothing to write with, so no tool.
     expect(
-      names(createTools(config(), {memory: memory(), model: 'deepseek-chat'})),
+      names(createTools(config(), {memory: memory(), model: 'deepseek-chat', provider: 'deepseek'})),
     ).not.toContain('save_skill');
   });
 
@@ -229,6 +240,7 @@ describe('createTools', () => {
     const tools = createTools(config(), {
       memory: memory(),
       model: 'deepseek-chat',
+      provider: 'deepseek',
     });
     expect(names(tools)).not.toContain('google_search');
   });
@@ -237,6 +249,7 @@ describe('createTools', () => {
     const tools = createTools(config(), {
       memory: memory(),
       model: 'deepseek-chat',
+      provider: 'deepseek',
     });
     const shell = tools.find((tool) => tool.name === 'run_shell');
     expect(shell).toBeDefined();
@@ -257,6 +270,7 @@ describe('createTools', () => {
           createTools(profileConfig, {
             memory: memory(),
             model: 'deepseek-chat',
+            provider: 'deepseek',
           }),
         ),
       ).toEqual(['read_file', 'write_file']);
@@ -269,6 +283,7 @@ describe('createTools', () => {
           createTools(profileConfig, {
             memory: memory(),
             model: 'deepseek-chat',
+            provider: 'deepseek',
           }),
         ),
       ).toEqual([]);
@@ -284,6 +299,7 @@ describe('createTools', () => {
           createTools(profileConfig, {
             memory: memory(),
             model: 'deepseek-chat',
+            provider: 'deepseek',
           }),
         ),
       ).toEqual(['read_file']);
@@ -299,6 +315,7 @@ describe('createTools', () => {
     const tools = createTools(config(), {
       memory: memory(),
       model: 'deepseek-chat',
+      provider: 'deepseek',
       webSearch: {search: async () => []},
     });
     const offenders: string[] = [];
@@ -367,6 +384,8 @@ describe('the safe defaults', () => {
       {
         baseUrl: 'http://127.0.0.1:1',
         model: 'deepseek-chat',
+        provider: 'deepseek',
+        apiKey: '',
         temperature: 0,
         systemPrompt: 'test',
         workspaceRoot: workDir,
@@ -375,6 +394,7 @@ describe('the safe defaults', () => {
       {
         memory: new MemoryStore({workspaceRoot: workDir}),
         model: 'deepseek-chat',
+        provider: 'deepseek',
         // Present so the web-search name resolves; the defaults name it.
         webSearch: {search: async () => []},
         // And recall, which is a default too — offered, and only *buildable*
@@ -432,10 +452,18 @@ describe('the tool catalogue', () => {
     await rm(workDir, {recursive: true, force: true});
   });
 
+  /*
+   * DeepSeek on both sides of every comparison below, because the provider is
+   * what decides whether `google_search` exists: built with one provider here
+   * and described with another, a comparison would report the grounding tool as
+   * either unreachable or unlisted when neither is true.
+   */
   function config(): AgentConfig {
     return {
       baseUrl: 'http://127.0.0.1:1',
       model: 'deepseek-chat',
+      provider: 'deepseek',
+      apiKey: '',
       temperature: 0,
       systemPrompt: 'test',
       workspaceRoot: workDir,
@@ -460,6 +488,7 @@ describe('the tool catalogue', () => {
     return createTools(config(), {
       memory: new MemoryStore({workspaceRoot: workDir}),
       model: 'deepseek-chat',
+      provider: 'deepseek',
       webSearch: {search: async () => []},
       ...services(),
     }).map((tool) => tool.name);
@@ -475,6 +504,7 @@ describe('the tool catalogue', () => {
       describeTools({
         workspaceRoot: workDir,
         model: 'deepseek-chat',
+        provider: 'deepseek',
         webSearch: {search: async () => []},
         jobs: true,
         skills: true,
@@ -497,6 +527,7 @@ describe('the tool catalogue', () => {
     const entries = describeTools({
       workspaceRoot: workDir,
       model: 'deepseek-chat',
+      provider: 'deepseek',
       webSearch: {search: async () => []},
       jobs: true,
       skills: true,
@@ -525,6 +556,7 @@ describe('the tool catalogue', () => {
     const entries = describeTools({
       workspaceRoot: workDir,
       model: 'deepseek-chat',
+      provider: 'deepseek',
       webSearch: {search: async () => []},
       jobs: true,
       // Recall is one of the defaults, so the catalogue that checks the defaults
@@ -566,6 +598,8 @@ describe('the capability presets', () => {
         {
           baseUrl: 'http://127.0.0.1:1',
           model: 'deepseek-chat',
+          provider: 'deepseek',
+          apiKey: '',
           temperature: 0,
           systemPrompt: 'test',
           workspaceRoot: workDir,
@@ -574,6 +608,7 @@ describe('the capability presets', () => {
         {
           memory: new MemoryStore({workspaceRoot: workDir}),
           model: 'deepseek-chat',
+          provider: 'deepseek',
           webSearch: {search: async () => []},
           jobService: {} as never,
           skillService: {} as never,

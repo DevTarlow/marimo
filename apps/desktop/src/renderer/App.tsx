@@ -14,6 +14,7 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 
 import {COMMAND_IDS, COMMANDS, THEME_MODES} from '@marimo/protocol';
 import type {
+  AgentModel,
   AppInfo,
   ExperienceMode,
   PublicSettings,
@@ -169,20 +170,69 @@ export function App(): React.JSX.Element {
   const disabled = agent.profile === undefined;
 
   /*
-   * A finished download is a fact the gate is derived from — `modelReady` comes
-   * from the main process, which has just seen the files appear — so the payload is
-   * re-read rather than the window assuming the download did what it said.
+   * Which model will answer, and where that choice lives.
+   *
+   * Three levels, resolved in one order: the conversation's own choice, then its
+   * agent's, then the app's. `SessionSummary.model` and `AgentProfile.model` are
+   * both absent until somebody picks one, so the picker needs the pair of facts —
+   * what will answer, and whether there is a choice here to give up.
+   *
+   * A pair rather than an id throughout. The composer's list comes from one
+   * provider's catalogue, so the pair is what says which endpoint a chosen id
+   * belongs to; a bare string would let the same name from two services be
+   * swapped for one another silently.
    */
-  useEffect(() => {
-    loadSettings();
-  }, [agent.modelRevision, loadSettings]);
+  const sessionModel = agent.sessions.find(
+    (entry) => entry.id === agent.sessionId,
+  )?.model;
+  const agentModel = agent.profile?.model;
+  const appModel: AgentModel | undefined =
+    settings === null
+      ? undefined
+      : {
+          provider: settings.providers.active,
+          model: settings.providers.configs[settings.providers.active].model,
+        };
+  const currentModel = sessionModel ?? agentModel ?? appModel;
+  /*
+   * The list the picker chooses within, and the reason it is short: the window
+   * has one catalogue — the *active* provider's, because that is the one
+   * `providers.fetch` asks. A conversation or an agent pinned elsewhere gets the
+   * single id stored for it rather than a list belonging to another endpoint,
+   * and the way back to the agent is what makes that a state it can leave.
+   *
+   * The stored value is always offered even when the catalogue has stopped
+   * carrying it, which is the rule Settings follows too: a model that has been
+   * retired may still answer, and a trigger showing something other than what is
+   * stored is worse than one showing a name the endpoint no longer advertises.
+   */
+  const catalogue =
+    currentModel !== undefined &&
+    currentModel.provider === settings?.providers.active
+      ? settings.availableModels
+      : [];
+  const models =
+    currentModel === undefined || catalogue.includes(currentModel.model)
+      ? catalogue
+      : [currentModel.model, ...catalogue];
+  /*
+   * What a model the conversation did not choose falls back to, in one word for
+   * the trigger. Absent is meaningful: it says this conversation has a choice of
+   * its own, which is the only state in which giving it up changes anything.
+   */
+  const inherited =
+    sessionModel !== undefined
+      ? undefined
+      : agentModel !== undefined
+        ? 'agent'
+        : 'default';
 
   /*
    * The transition, not the state. `settings.modelReady` is true on every launch
    * for anybody who has used the app, and offering recall to somebody who is
    * already using it would be the nag this is shaped to avoid — so the offer
-   * belongs to the moment it goes from false to true, which is a download
-   * finishing.
+   * belongs to the moment it goes from false to true, which is the first run
+   * being pointed at a provider that answers.
    *
    * What `wasReady` may not record is the `false` a payload that has not arrived
    * yet produces, or every launch looks like that transition. It is written only
@@ -229,9 +279,9 @@ export function App(): React.JSX.Element {
           /*
            * Answering it, either way, is what makes it once. The write is not
            * awaited and its failure is not reported: the worst outcome is the
-           * card being offered again after a later model download, and an error
-           * over the conversation about a flag the user never asked to see would
-           * be worse than that.
+           * card being offered again after a later launch, and an error over the
+           * conversation about a flag the user never asked to see would be worse
+           * than that.
            */
           void window.marimo
             .call('settings.set', {patch: {recall: {introSeen: true}}})
@@ -258,8 +308,6 @@ export function App(): React.JSX.Element {
           void agent.reload();
           loadSettings();
         }}
-        modelProgress={agent.modelProgress}
-        modelRevision={agent.modelRevision}
         lastReview={agent.lastReview}
         onExperienceModeChange={(mode) => {
           /*
@@ -434,27 +482,18 @@ export function App(): React.JSX.Element {
            * gives is honest and in the right place — but it is the *second*
            * thing a new user learns, and the first should have been the reason.
            *
-           * What can stop this install answering is the weights or the engine not
-           * being where the app looked, or an engine that refused to start, and
-           * the sentence saying which is written by the process that looked.
+           * There is no bundled model to wait for: what stops this install
+           * answering is a provider that has no key, a key that cannot be read,
+           * or an address nothing is listening on, and the sentence saying which
+           * is written by the process that looked.
            */
           <Onboarding
             problem={
               settings.modelProblem ??
               'The app has no way to answer yet. Settings will say what is missing.'
             }
-            progress={agent.modelProgress}
-            revision={agent.modelRevision}
             onOpenSettings={() => {
               setShowSettings(true);
-            }}
-            /*
-             * A download that has started changes what the gate should say, and
-             * the gate reads the settings payload — so the payload is re-read
-             * rather than the screen guessing at what the download did.
-             */
-            onChanged={() => {
-              loadSettings();
             }}
           />
         ) : (
@@ -474,6 +513,15 @@ export function App(): React.JSX.Element {
         <Composer
           busy={busy}
           disabled={disabled || !agent.ready}
+          model={currentModel}
+          models={models}
+          inherited={inherited}
+          onSelectModel={async (model) => {
+            const sessionId = agent.sessionId;
+            if (sessionId !== null) {
+              await agent.setSessionModel(sessionId, model);
+            }
+          }}
           /*
            * Asked for by conversation, not by folder: the main process judges
            * every picked file against the folder *this* conversation works in —

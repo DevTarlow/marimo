@@ -902,6 +902,63 @@
 }
 
 /*
+ * The model this conversation uses, at the right of the foot row.
+ *
+ * The picker's own styles are the Settings field's, so what changes here is the
+ * field-ness: a quiet pill on the composer's surface rather than a bordered box
+ * that would read as a second input.
+ */
+.composer-model {
+  flex: none;
+  max-width: 46%;
+}
+
+.composer-model .model-picker {
+  flex: none;
+}
+
+.composer-model .model-picker-trigger {
+  width: auto;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.composer-model .model-picker-trigger:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.composer-model .model-picker-chevron {
+  font-size: var(--text-xs);
+}
+
+/* "agent" or "default": the model shown is not this conversation's choice. */
+.model-picker-note {
+  flex: none;
+  padding: 0 var(--space-1);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+/*
+ * Anchored to the right edge and given a width of its own: the trigger is a
+ * narrow pill, and a list that inherited its width would be one word per row.
+ */
+.composer-model .model-picker-popover {
+  left: auto;
+  right: 0;
+  width: 300px;
+}
+
+/*
  * Attached files, above the text: they are part of the message being written,
  * so they live inside the box rather than in a strip beside it.
  */
@@ -1735,20 +1792,20 @@
 }
 
 /*
- * A download, which is the one thing in this app that takes minutes.
+ * The recall download, which is the one thing in this app that takes minutes.
  *
  * A bar rather than only a number, for the reason the memory readout is one: "2.1
  * GB of 4.5 GB" is precise and still hard to feel, while a bar half full is read
- * at a glance. It is drawn on the welcome screen and in the Model card, so it
- * lives here rather than beside either of them.
+ * at a glance. It shares the first-run shell above and lives here rather than
+ * beside the card that draws it, because the first-run card is not Settings.
  */
-.model-progress {
+.recall-progress {
   width: 100%;
   max-width: 42ch;
   margin-top: var(--space-3);
 }
 
-.model-progress-bar {
+.recall-progress-bar {
   height: 6px;
   border-radius: var(--radius-pill);
   background: var(--surface);
@@ -1756,7 +1813,7 @@
   overflow: hidden;
 }
 
-.model-progress-bar > span {
+.recall-progress-bar > span {
   display: block;
   height: 100%;
   background: var(--accent);
@@ -1765,7 +1822,7 @@
   transition: width var(--transition-fast);
 }
 
-.model-progress p {
+.recall-progress p {
   margin: var(--space-2) 0 0;
   text-align: left;
 }
@@ -1980,24 +2037,150 @@
   font-size: var(--text-xs);
 }
 
+/* --------------------------------------------------------- picking a model */
+
 /*
- * The exact command line the app hands llama.cpp.
+ * The searchable model picker.
  *
- * Monospaced and wrapped rather than scrolled: it is a long single line with a
- * dozen arguments in it, and the one thing a reader does with it is compare it
- * against the command they would have typed — which means seeing all of it.
+ * Absolutely positioned over the cards below rather than pushing them down: the
+ * list is a temporary overlay, and a three-hundred-row list that reflowed the
+ * dialog every time it opened would move the Fetch button out from under the
+ * pointer that just pressed it.
  */
-.model-command {
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+.model-picker {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.model-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+
+.model-picker-trigger:disabled {
+  cursor: not-allowed;
+}
+
+.model-picker-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-chevron {
+  flex: none;
   color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-  white-space: pre-wrap;
+}
+
+.model-picker-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  padding: var(--space-2);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.model-picker-search {
+  width: 100%;
+}
+
+/* Opened upwards, for a trigger at the bottom of the window: the composer. */
+.model-picker-popover.is-above {
+  top: auto;
+  bottom: calc(100% + var(--space-1));
+}
+
+/*
+ * The row that gives the choice up, above the list. A row of the popover rather
+ * than an option in the listbox — it is not a model — so it is separated from
+ * the list the keyboard walks.
+ */
+.model-picker-default {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.model-picker-default:hover {
+  background: var(--surface-hover);
+}
+
+.model-picker-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  /* Tall enough to read a handful at once, short enough to stay on screen. */
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.model-picker-option {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
   overflow-wrap: anywhere;
-  user-select: text;
+}
+
+.model-picker-option.is-highlighted {
+  background: var(--surface-hover);
+}
+
+/* The model that is actually saved, marked apart from the one the keyboard is
+   merely on. */
+.model-picker-option.is-selected {
+  color: var(--accent);
+}
+
+.model-picker-empty {
+  padding: var(--space-2);
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
+/*
+ * An agent and its model on one line.
+ *
+ * The picker keeps its own width here rather than absorbing the row: it is a
+ * one-word chip beside the agent's name, not a form field, and a trigger
+ * stretched across the card would read as the more important of the two.
+ */
+.settings-agent-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.settings-agent-row .model-picker {
+  flex: none;
+  /*
+   * Capped, because an OpenRouter id can be longer than the card is wide and a
+   * row that overflowed would drag the whole agent list sideways. The value
+   * inside ellipsises; the popover, which is where the whole id is read, is
+   * anchored to this box and not to its width.
+   */
+  max-width: 24ch;
+}
+
+.settings-agent-row .model-picker-trigger {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
 }

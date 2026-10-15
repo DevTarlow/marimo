@@ -4,15 +4,16 @@
  * This is the same process problem `local-model/service.ts` already solves —
  * spawn, wait for health, keep the last lines it printed, reap what a crash left
  * behind, never outlive the app — so it is the same class underneath and this
- * file adds the three things that are specific to a *second* engine:
+ * file adds the three things that are specific to *this* engine:
  *
- * 1. **It is optional and it is on demand.** The chat engine is the app; this one
- *    is a feature. It starts when something actually needs a vector and stops
- *    itself after five idle minutes, because 400 MB of resident weights and a fan
- *    spinning for a search somebody did yesterday is the failure AGENTS.md names
- *    about models left behind.
- * 2. **Its own pid file.** Reaping kills whatever pid the file names, so sharing
- *    `local-model.pid` would have whichever engine started second kill the other.
+ * 1. **It is optional and it is on demand.** Recall is a feature the user can
+ *    leave off, not the app's way of answering, so the engine starts when
+ *    something actually needs a vector and stops itself after five idle minutes.
+ *    400 MB of resident weights and a fan spinning for a search somebody did
+ *    yesterday is the failure AGENTS.md names about models left behind.
+ * 2. **Its own pid file.** Reaping kills whatever pid the file names, so the file
+ *    has to be one only this engine writes — `recall.pid` under the user-data
+ *    directory, never a generic name another part of the app might also use.
  * 3. **One request at a time, and a sentence instead of a throw.** Callers of
  *    `embed` are a turn that must not fail because search is unavailable, and a
  *    background indexer that has to survive one bad file. So the failure comes
@@ -21,10 +22,9 @@
  */
 import type {spawn} from 'node:child_process';
 
-import type {EngineStatus} from '@marimo/protocol';
-
 import {embeddingArgs} from '../local-model/args.js';
 import {LocalModelService} from '../local-model/service.js';
+import type {EngineStatus} from '../local-model/service.js';
 import type {RecallFiles, RecallSpec} from '../local-model/files.js';
 import {EmbeddingClient, EmbeddingError} from './client.js';
 import type {EmbeddingPart, EmbeddingResult} from './client.js';

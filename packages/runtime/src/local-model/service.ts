@@ -1,9 +1,9 @@
 /**
- * The engine the app runs for its own model, supervised.
+ * A llama.cpp engine, supervised.
  *
- * One long-lived child process, started on demand and stopped when the app goes
- * away. Everything here exists because a model server is a *process*, and the
- * three ways that goes wrong are all silent:
+ * The recall model's engine is the one this runs, and it is a *process*: one
+ * long-lived child, started on demand and stopped when the app goes away.
+ * Everything here exists because that goes wrong in three silent ways:
  *
  * 1. **It never comes up.** A missing shared library, an unsupported flag, a
  *    corrupted file — the engine prints one line to stderr and exits non-zero.
@@ -13,7 +13,7 @@
  *    so the address is read back from the supervisor rather than stored — a
  *    fixed port in a settings file is a promise about a machine this app does not
  *    own.
- * 3. **It outlives the app.** A stray `llama-server` is 1.3 GB of memory and a
+ * 3. **It outlives the app.** A stray `llama-server` is 400 MB of memory and a
  *    spinning fan on somebody's laptop with no window that explains it. A pid
  *    file, a kill on the way out, and a check on the way in.
  *
@@ -26,11 +26,6 @@ import type {ChildProcess} from 'node:child_process';
 import {readFile, rm, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {join} from 'node:path';
-
-import type {EngineStatus} from '@marimo/protocol';
-
-import {engineArgs} from './args.js';
-import type {LocalModelFiles} from './files.js';
 
 /** How long the engine gets to load the weights and answer `/health`. */
 const READY_TIMEOUT_MS = 90_000;
@@ -50,8 +45,8 @@ const STOP_GRACE_MS = 3_000;
 const LOG_LINES = 40;
 
 export interface LocalModelOptions<
-  T extends EngineFiles = LocalModelFiles,
-  S extends EngineRunSpec<T> = EngineRunSpec<T>,
+  T extends EngineFiles,
+  S extends EngineRunSpec<T>,
 > {
   /**
    * Resolved fresh on every start and every status, so a settings change shows
@@ -66,20 +61,21 @@ export interface LocalModelOptions<
   /**
    * The command line, as data, for whatever model this supervisor is running.
    *
-   * Absent means the chat model's own argv, which is what the one caller that
-   * has been here all along wants. The recall engine passes `embeddingArgs`,
-   * because the two servers share a binary and almost nothing else: a
-   * supervisor duplicated to say `--embeddings` instead of `--jinja` would be a
-   * second copy of the pid file, the reap, the health poll and the log tail, and
-   * every one of those is a failure this class exists to have already handled.
+   * Required rather than defaulted: this class knows nothing about the model it
+   * runs — not the flags, not the pooling, not whether a projector is passed — so
+   * an argv with a fallback would be a second, silent definition of the command
+   * line, and which one the engine actually got would be nobody's answer. A
+   * supervisor duplicated to build argv would be a second copy of the pid file,
+   * the reap, the health poll and the log tail, and every one of those is a
+   * failure this class exists to have already handled.
    *
-   * It is handed the whole spec rather than the three fields this class reads,
-   * because the resolver is allowed to know things the supervisor is not — the
-   * recall spec carries the pooling its argv needs — and a callback typed to a
+   * It is handed the whole spec rather than the fields this class reads, because
+   * the resolver is allowed to know things the supervisor is not — the recall
+   * spec carries the pooling its argv needs — and a callback typed to a
    * stripped-down spec would be a place a caller's field could go missing with
    * no type error to say so.
    */
-  args?: (spec: S, port: number | string) => string[];
+  args: (spec: S, port: number | string) => string[];
   /** Where the pid file goes. Absent means no stray-process protection. */
   pidFile?: string;
   log?: (line: string) => void;
@@ -90,10 +86,11 @@ export interface LocalModelOptions<
 /**
  * What the supervisor needs to know about the files, whatever is being run.
  *
- * Narrower than `LocalModelFiles` on purpose: a recall install has no tiers and
- * an extra projector, and the supervisor cares about none of that. It reads the
+ * Narrower than what a caller resolves on purpose: the supervisor reads the
  * engine, the directory its libraries are in, and whether the two files it needs
- * are there. Everything else belongs to whoever resolved the spec.
+ * are there. Everything else — the projector, the pooling, whether media was
+ * asked for — belongs to whoever resolved the spec and reaches the argv through
+ * `args`.
  */
 export interface EngineFiles {
   engine: string;
@@ -104,30 +101,42 @@ export interface EngineFiles {
 }
 
 /**
- * The files, plus the two numbers the argv is built from.
+ * The files, plus the one number the argv is built from.
  *
- * `thinking` is optional because it is the chat model's: the recall engine has
- * no template to switch, and a required field there would be a value invented to
- * satisfy a type.
+ * `args` gets the whole spec, so a caller's spec is allowed to carry anything
+ * else it needs — the recall spec's `pooling` and `media` are its own business —
+ * and this stays the part the supervisor itself reads.
  */
 export interface EngineRunSpec<T extends EngineFiles> {
   files: T;
   contextSize: number;
-  thinking?: boolean;
 }
 
-/** The chat model's argv, which is what a caller without an `args` gets. */
-function chatArgs(
-  spec: EngineRunSpec<EngineFiles>,
-  port: number | string,
-): string[] {
-  return engineArgs({
-    engine: spec.files.engine,
-    model: spec.files.model,
-    port,
-    contextSize: spec.contextSize,
-    thinking: spec.thinking ?? false,
-  });
+/**
+ * What the supervisor answers when anything asks what it is doing.
+ *
+ * The shape came from `@marimo/protocol`, where it was the chat model card's
+ * status and went when that card did. A status is a fact about a *process this
+ * class started*, so it belongs beside the class rather than in the IPC contract,
+ * and the recall card is the one reader left.
+ *
+ * `modelPresent`, `enginePresent`, `modelPath` and `enginePath` are produced for
+ * every caller and read by none of them: the recall card asks `resolveRecallFiles`
+ * and `recallPiecesInstalled` for the same facts, because it has to tell "asked
+ * for and not downloaded" from "not asked for", and two booleans cannot say that.
+ * They stay because a status describes the files it was built from — "off" is not
+ * an answer without knowing which engine and which model were looked for.
+ */
+export interface EngineStatus {
+  state: 'off' | 'starting' | 'ready' | 'failed';
+  baseUrl?: string;
+  detail?: string;
+  modelPresent: boolean;
+  enginePresent: boolean;
+  modelPath: string;
+  enginePath: string;
+  command: string[];
+  log: string[];
 }
 
 type Child = Pick<
@@ -138,8 +147,8 @@ type Child = Pick<
 type Started = {ok: true; baseUrl: string} | {ok: false; problem: string};
 
 export class LocalModelService<
-  T extends EngineFiles = LocalModelFiles,
-  S extends EngineRunSpec<T> = EngineRunSpec<T>,
+  T extends EngineFiles,
+  S extends EngineRunSpec<T>,
 > {
   private child: Child | undefined;
   private starting: Promise<Started> | undefined;
@@ -272,15 +281,7 @@ export class LocalModelService<
    * model" and being able to run the same thing by hand and see what it says.
    */
   private command(spec: S): string[] {
-    return [
-      spec.files.engine,
-      ...this.args(spec, this.port ?? '<port>'),
-    ];
-  }
-
-  /** The argv this supervisor was configured with, or the chat model's. */
-  private args(spec: S, port: number | string): string[] {
-    return (this.options.args ?? chatArgs)(spec, port);
+    return [spec.files.engine, ...this.options.args(spec, this.port ?? '<port>')];
   }
 
   private async start(): Promise<Started> {
@@ -325,7 +326,7 @@ export class LocalModelService<
       return {ok: false, problem: 'The model was stopped.'};
     }
 
-    const args = this.args(spec, port);
+    const args = this.options.args(spec, port);
 
     const spawnImpl = this.options.spawnImpl ?? spawn;
     let child: Child;
@@ -591,19 +592,14 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Where the pid file lives, given a user-data directory.
+ * Where the recall engine's pid file lives, given a user-data directory.
  *
- * Two of these, and they must never be the same file. `reapPrevious` kills
- * whatever pid a file names before loading its own model, so one pid file shared
- * between the chat engine and the recall engine would have whichever started
- * second kill the other — an app that answers questions and cannot remember, or
- * the reverse, depending on the order a user happened to click things.
+ * `recall.pid` rather than a generic name, because `reapPrevious` SIGKILLs
+ * whatever pid the file names before loading its own model: the file has to be
+ * one only this engine writes. The directory is the user-data one both processes
+ * already resolve the same way, which is what lets the runner reap a window's
+ * engine that outlived a crash.
  */
-export function localModelPidFile(userData: string): string {
-  return join(userData, 'local-model.pid');
-}
-
-/** The recall engine's own, for the reason above. */
 export function embeddingPidFile(userData: string): string {
   return join(userData, 'recall.pid');
 }

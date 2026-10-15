@@ -1,17 +1,17 @@
 /**
  * Fetching the engine and the weights, verified and resumable.
  *
- * This is `scripts/local-model.mjs` moved inside the app, because the download
- * moved from package time to a user's first run. Four things about that move
- * change what the code has to do:
+ * It was a packaging script once, run on a build machine; it is a download a
+ * user's first run performs, which is the change that shapes everything below.
+ * Four things about it change what the code has to do:
  *
  * - **It runs on somebody else's machine, on their network, once.** So a failure
  *   has to be a sentence rather than a stack trace, and an interrupted download
- *   has to be resumable: 4.5 GB restarted from zero because a laptop slept is the
+ *   has to be resumable: 555 MB restarted from zero because a laptop slept is the
  *   kind of thing that makes somebody give up.
  * - **It must never leave a file that looks finished.** Every write goes to a
  *   `.part` beside the destination and is renamed only after the digest matches.
- *   A half-written 4.5 GB file that the resolver counts as installed is a start
+ *   A half-written 555 MB file that the resolver counts as installed is a start
  *   that fails with the engine complaining about a corrupt model.
  * - **A pin that changes has to be noticed.** The weights are checked by size
  *   against the manifest, so replacing the model in a later build re-downloads it
@@ -45,11 +45,8 @@ import type {
   EmbeddingPieceName,
   EngineAsset,
   EngineManifest,
-  LocalModelManifest,
-  ModelTier,
-  ModelTierName,
 } from './manifest.js';
-import {embeddingUrl, engineAssetFor, engineUrl, weightsUrl} from './manifest.js';
+import {embeddingUrl, engineAssetFor, engineUrl} from './manifest.js';
 import {engineBinaryName, engineDir} from './files.js';
 
 const run = promisify(execFile);
@@ -67,12 +64,11 @@ export interface DownloadProgress {
 /**
  * What every installer here needs: where, and how to reach the network.
  *
- * The manifest is deliberately *not* in here. There are three installers now and
- * they read three different documents — the engine, which lives in both model
- * manifests and needs nothing else; a chat tier, which needs the weights; and a
- * recall piece, which needs the projector table. A single `InstallOptions`
+ * The manifest is deliberately *not* in here. There are two installers and they
+ * read two different documents — the engine, which needs only the engine block,
+ * and a recall piece, which needs the piece table. A single `InstallOptions`
  * carrying a whole manifest would have made the engine installer's type claim it
- * needs a `weights.tiers` it never reads, and that is exactly the sort of claim
+ * needs a `weights.pieces` it never reads, and that is exactly the sort of claim
  * that lets a caller pass the wrong manifest and find out at run time.
  */
 export interface InstallOptions {
@@ -97,12 +93,6 @@ export interface EngineInstallOptions extends InstallOptions {
   manifest: {engine: EngineManifest};
 }
 
-/** A tier of the chat model. */
-export interface TierInstallOptions extends InstallOptions {
-  manifest: LocalModelManifest;
-  tier: ModelTierName;
-}
-
 /** One piece of the recall model. */
 export interface EmbeddingInstallOptions extends InstallOptions {
   manifest: EmbeddingManifest;
@@ -120,10 +110,9 @@ export class InstallError extends Error {
 /**
  * Fetches the engine unless the pinned one is already unpacked.
  *
- * The engine comes first and on its own, because it is the cheap half — 32 MB
- * against 2.7 GB — and because the probe needs it. A caller installs the engine,
- * asks what the machine has, and only then commits to a tier; that ordering is
- * what stops a first run downloading 4.5 GB a machine cannot use.
+ * The engine goes first and on its own: it is the cheap half — 32 MB against
+ * 310 MB for the backbone and 555 MB for the projector — and a platform this
+ * build has no engine for should be refused before either is fetched.
  */
 export async function installEngine(
   options: EngineInstallOptions,
@@ -167,42 +156,16 @@ export async function installEngine(
   return {installed: true};
 }
 
-/** Fetches one tier's weights, unless they are already there. */
-export async function installTier(
-  options: TierInstallOptions,
-): Promise<{installed: boolean}> {
-  const tier: ModelTier = options.manifest.weights.tiers[options.tier];
-  const destination = join(options.dir, tier.file);
-
-  if ((await sizeOf(destination)) === tier.bytes) {
-    return {installed: false};
-  }
-
-  await downloadVerified({
-    url: weightsUrl(options.manifest, tier),
-    destination,
-    sha256: tier.sha256,
-    label: `The ${tier.label} model`,
-    ...(options.onProgress === undefined
-      ? {}
-      : {onProgress: options.onProgress}),
-    ...(options.fetchImpl === undefined ? {} : {fetchImpl: options.fetchImpl}),
-    ...(options.signal === undefined ? {} : {signal: options.signal}),
-  });
-
-  return {installed: true};
-}
-
 /**
  * Fetches one piece of the recall model, unless it is already there.
  *
- * The same shape as `installTier` down to the size check, which is the point:
- * an interrupted 555 MB download that left a file behind is not an install, and
- * the test that catches it is the one the chat tiers have always used.
+ * The size check is the point: an interrupted 555 MB download that left a file
+ * behind is not an install, and counting it as one is a start that dies with the
+ * engine complaining about a corrupt model.
  *
- * The engine is *not* fetched here. It goes first and on its own, exactly as it
- * does for the chat model, because it is the cheap half and because a build that
- * cannot run on this platform should be refused before 310 MB is spent on it.
+ * The engine is *not* fetched here. It goes first and on its own, for the reason
+ * above: it is the cheap half, and a build that cannot run on this platform should
+ * be refused before 310 MB is spent on the backbone.
  */
 export async function installEmbeddingPiece(
   options: EmbeddingInstallOptions,
@@ -234,7 +197,7 @@ export async function installEmbeddingPiece(
  *
  * Resumable: a `.part` left by an interrupted attempt is continued with a `Range`
  * request rather than discarded, which for the weights is the difference between
- * losing a few seconds and losing four gigabytes. A server that ignores the range
+ * losing a few seconds and losing half a gigabyte. A server that ignores the range
  * is not a problem — the response is a 200 with the whole body, and the part is
  * truncated and started again.
  */
@@ -264,7 +227,7 @@ export async function downloadVerified(options: {
   /*
    * 416 means the part is already as long as the file. That happens when a
    * previous run verified the digest and died before the rename — the one moment
-   * where throwing away 4.5 GB would be most annoying. So it is hashed, and
+   * where throwing away 555 MB would be most annoying. So it is hashed, and
    * promoted if it is in fact the file we wanted.
    */
   if (response.status === 416) {

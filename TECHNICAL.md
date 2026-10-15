@@ -17,11 +17,6 @@ pnpm test
 # immediately, so it is safe to paste blindly.
 ./scripts/fix-linux-sandbox.sh
 
-# A model, for a checkout. A packaged app downloads its own on first run, so
-# this is only what a development run needs — 2.7 GB for the low tier.
-pnpm --filter @marimo/desktop model:fetch
-export MARIMO_MODEL_DIR="$PWD/apps/desktop/.model-cache/local-model"
-
 # Open the app
 pnpm --filter @marimo/desktop dev
 
@@ -29,13 +24,13 @@ pnpm --filter @marimo/desktop dev
 pnpm --filter @marimo/desktop smoke
 ```
 
-**A checkout has no weights in it, and `MARIMO_MODEL_DIR` is how it finds them.**
-Without it the app looks in its own user-data directory, finds nothing, and opens
-on the screen that offers to download a model — which is a state it has to handle
-anyway, and exactly what the smoke check exercises, since a check that needed a
-gigabyte of download would not run in CI. `model:fetch` prints a ready-to-paste
-`MARIMO_MODEL_DIR=... pnpm --filter @marimo/desktop dev` line when it finishes;
-`model:fetch high` fetches the larger tier instead.
+**A checkout answers with whatever service you point it at.** There is no chat
+model to fetch: the app carries none, and a development run configures a provider
+the way a user's does — except that a checkout usually points it at a llama.cpp
+server on the machine, which is the entry that needs no account and no network.
+The one download left is recall's; `MARIMO_MODEL_DIR` is how a live run finds
+those weights, and a run without them skips the two live tests rather than
+failing.
 
 Two environment quirks are worth knowing about up front, both covered in
 [AGENTS.md](./AGENTS.md):
@@ -70,7 +65,8 @@ pnpm build:web   # the renderer bundle — `build` alone leaves it stale
 
 | State       | Feature                                                                                                                                                                                                                                 |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Done        | The model: Qwen3.5-4B run by a llama.cpp engine the app owns, on loopback, with no account and no key. Two sizes — Q4_K_M on a 4 GB card, Q8_0 on a 6 GB one — chosen from what the GPU reports, and downloaded on first run            |
+| Done        | Five providers to answer with — DeepSeek, Google Gemini, OpenCode Go, OpenRouter, and a llama.cpp server of your own — each with its own address, model and key. The catalogue is data, the transport is one OpenAI-compatible client, and a key is encrypted unless you say otherwise |
+| Removed     | The model the app used to carry and run itself: Qwen3.5-4B on a llama.cpp engine it downloaded and supervised. Two tiers chosen from what the GPU reported, no account and no key — and 2.7 GB before the first answer |
 | Done        | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a workspace rail with the conversations filed under the folder they work in, light and dark following the OS or chosen                        |
 | Done        | Two sizes of app: a simple screen and a power screen, with one switch between them                                                                                                                                                      |
 | Done        | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming client over one backend, ~28 built-in tools of which the app offers the ones its services can carry out, skills, `memory.md`, JSONL conversations           |
@@ -112,72 +108,58 @@ because the model is a local engine and the runner dials no connectors. What the
 runner _does_ need is the same user-data directory the window is using, which is
 why the service definition bakes that path in.
 
-### The model the app downloads
+### What answers, and where the key is
 
-There is one model the app answers with, Qwen3.5-4B, run by a llama.cpp
-`llama-server` the app starts and supervises on loopback. No account, no key, no
-address to type, and nothing typed into the chat leaves the machine. There is no
-provider catalogue, no address to edit and no model list to fetch — a menu of
-services was three ways of describing a choice this app does not offer.
+**The app runs no chat model of its own, and that is a deliberate inversion.**
+For most of its life it downloaded a llama.cpp engine and a quantized Qwen, started
+it on loopback and answered from it — no account, no key, nothing typed into the
+chat leaving the machine. What that cost was 2.7 GB on a first run, a graphics
+card as a hard requirement, and a model whose ceiling was the machine it ran on.
+It now talks to a *provider*, and the honest consequence is on the first screen
+rather than hidden: a fresh install cannot answer until somebody picks one.
 
-**It comes in two sizes and the app picks one.** `low` is the model at Q4_K_M
-(2.7 GB, a 16K window) and `high` is the same weights at Q8_0 (4.5 GB, 32K). Both
-are the same model, the same chat template and the same tool calls; the only
-difference is how much of the weights survived quantization. Which one runs is
-decided from what the graphics card reports as free, and the Model card in
-Settings says which and why — in the plan's own words, because the number it was
-decided on is one a person can disagree with. The switch beside it is `auto`, the
-small one or the large one; an explicit choice is honoured and warned about rather
-than overruled.
+**Five of them, and one keeps the old promise.** DeepSeek, Google Gemini, OpenCode
+Go and OpenRouter are hosted services reached with an API key; a llama.cpp server
+you run yourself is reached at an address you type and is the entry that needs no
+account and sends nothing off the machine. The catalogue lives in
+`packages/protocol/src/providers.ts`, and it is plain data: label, blurb, default
+address, placeholder models, whether a key is required, and four facts about the
+*endpoint* — whether thinking arrives as `reasoning_content`, whether
+`stream_options.include_usage` may be sent, which header a gateway wants a
+conversation named in, and whether a key is needed at all.
 
-**The tier is chosen from free video memory, and the arithmetic is an estimate.**
-One tier wants its weights, a quantized cache at 16 KiB per token, a 384 MB compute
-buffer and a 384 MB safety margin. At its full window that comes to about 3.6 GB of
-free video memory for Low at 16K and about 5.4 GB for High at 32K. So the planner
-takes High at 32K on a card reporting 6 GB, Low at 16K on one reporting 4 GB, Low
-at the 8K floor on one reporting 3.5 GB, and refuses below about 2 GB or with no
-usable device. Those are judgements rather than measurements, which is why the
-override exists and why the reason string on the Model card shows the number the
-decision was made on.
+**One transport serves all five, which is why the flags matter.** Every one of
+these speaks the OpenAI chat-completions dialect, so switching provider is an
+address, a key and a model id. What is *not* uniform is which fields may be sent:
+Gemini's compatibility layer answers an unsupported `stream_options` with an error
+rather than ignoring it, so a transport that always asked for usage would fail
+every turn there, and one that never asked would leave the token counts blank
+everywhere else. Those decisions travel with the provider id, so the transport has
+no `if (provider === ...)` in it.
 
-**Nothing is bundled, and the first run downloads.** A packaged app carries no
-weights and no engine, because an installer with a gigabyte inside it is a
-gigabyte in every release and every rebuild. The first run downloads a 32 MB
-engine and then the tier the machine can use, verifying each against a pinned
-sha256 and resuming an interrupted download rather than starting it again. That is
-the one moment this app needs the network before it can answer, and the screen says
-so; the only download after it belongs to recall, and that one happens only if the
-user asks for the feature.
+**A key is encrypted, and the runner is the exception that proves it.** Secrets
+are one file per provider under `secrets/`, named from the catalogue by
+`paths.providerSecrets`, and encrypted with the OS keychain. The headless job
+runner has no `app` object and therefore no `safeStorage`, so it cannot decrypt
+anything — which is why each provider carries a `keyStorage` of `keychain` or
+`plaintext`, why the card has a box that says exactly what storing it readable
+means, and why a scheduled job whose agent needs an encrypted key fails with a
+sentence rather than a 401.
 
-**There is no CPU path.** Every engine asset is a GPU build — Vulkan on Linux and
-Windows, Metal on macOS — and a machine with no usable device is refused with a
-sentence rather than quietly run on a processor. A model this size on a CPU is a
-wait rather than an answer, and shipping the option would mean shipping a
-configuration nobody should be in. The deliberate exception is recall's embedding
-model below, which is small enough that the processor is the right home for it.
+**A model is a pair.** `{provider, model}` is the only shape stored or sent,
+because an id means nothing apart from the endpoint that serves it — and the
+resolution order is one function, `modelChoiceFor`: the conversation's choice,
+then its agent's, then the app's. Each level contributes its provider *and* its
+model id, because taking one from each is how a window comes to name a model the
+turn is not using.
 
-The engine's address is the one thing here that is _not_ an answer. It comes up on
-whatever port was free, so no address is stored anywhere: the resolver takes the
-live one from the process that started it, and a turn asked for without a running
-engine is refused with a sentence rather than sent to whichever process happens to
-be listening. That matters more than it looks — a conversation is not something to
-hand to a stranger.
-
-Both processes get the same answer from the same place. The pins are a module both
-of them _import_ rather than a file either of them has to find, and the model
-directory is the user-data directory [invariant 13](./AGENTS.md) is about — so a
-scheduled job runs the tier the window would, at the same context. When the two
-disagreed, nothing errored: a job quietly reported the model as not installed
-while the window answered questions.
-
-`--jinja` is the flag the whole feature rests on, and it is verified rather than
-assumed. Without it llama.cpp does not apply the model's own chat template, and
-Qwen3.5's template is the only thing that turns its `<tool_call>` block into a
-call this app can see — so the agent would be offered no tools, every request
-would succeed, and nothing would ever be called. The pinned build was checked
-end to end: a tool call arrives as a structured `tool_calls` delta with its
-arguments, the token counts arrive with it, and `enable_thinking:false` is
-honoured so thinking costs nothing on the questions that do not need it.
+**The one engine left is recall's.** It downloads its own embedding model and runs
+its own llama.cpp build under `model/recall/`, supervised by the same
+`LocalModelService` the chat engine used to use — kept precisely because recall
+still needs it. So the pin discipline, the verified resumable download and the
+never-leave-an-engine-behind rule all still apply; what is gone is the tier plan,
+the hardware probe and the chat weights, because nothing chooses a chat tier any
+more.
 
 ### Recall: finding things by meaning, on the machine that has them
 
@@ -509,7 +491,6 @@ trees/<session>.json    what the agent tried on each turn — only while the
                         creates no directory at all
 window-state.json       where the main window was left
 companion-state.json    where the moss was left
-local-model.pid         the engine this process started, so a crash cannot orphan it
 recall.pid              the embedding engine, for the same reason
 recall/                 the search index, when a profile has no folder to keep it in
 app.lock                the running app, so the headless runner leaves the jobs alone
@@ -519,13 +500,12 @@ The other half of memory is the project's, and it is not here: it is
 `<folder>/.marimo/<profile>/memory.md`, so a folder you put on a stick takes its
 own remembered conventions with it and none of your personal facts.
 
-The model is in there too, under `model/`: the chat engine, whichever tier was
-downloaded, and a marker naming the engine asset it was unpacked from so a build
-that moves to a new llama.cpp re-fetches it. The recall model and its own engine
-sit beside it in `model/recall/`. It is downloaded rather than bundled, which is
-why it lives beside the rest of the user's data instead of inside the app — and why
-`MARIMO_MODEL_DIR` points one process at a different copy, which is what a checkout
-does.
+The recall model is in there too, under `model/recall/`: its engine, its weights
+and a marker naming the engine asset they were unpacked from, so a build that
+moves to a new llama.cpp re-fetches rather than misloading. It is downloaded
+rather than bundled, which is why it lives beside the rest of the user's data
+instead of inside the app — and why `MARIMO_MODEL_DIR` points one process at a
+different copy, which is what a checkout and the live tests do.
 
 Each store document carries a `version`, and a file written by a _newer_ build is
 refused rather than overwritten — including the one holding your agents, which is

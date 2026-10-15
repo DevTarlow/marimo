@@ -1,8 +1,9 @@
 /**
  * Recall, in the window's process.
  *
- * The counterpart of `local-model.ts` for the second engine, and it differs from
- * it in three ways that are the whole of this file.
+ * It was the counterpart of a file that supervised the chat engine, and the three
+ * ways it differed from that one are now the three ways it differs from everything
+ * else here: it is the only thing in this process that starts an engine.
  *
  * **One service per profile and folder, kept.** The runtime drops its cached
  * runner whenever the service changes identity — a runner holds the tool closures

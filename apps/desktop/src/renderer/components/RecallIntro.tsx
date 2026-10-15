@@ -120,9 +120,9 @@ export function RecallIntro({
       </p>
 
       {installing !== undefined && (
-        <div className="model-progress">
+        <div className="recall-progress">
           <div
-            className="model-progress-bar"
+            className="recall-progress-bar"
             role="progressbar"
             aria-valuenow={installing.percent ?? 0}
             aria-valuemin={0}

@@ -18,6 +18,8 @@
  */
 import type {BaseTool} from '@google/adk';
 
+import type {ProviderId} from '@marimo/protocol';
+
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
 import {deskTools} from './desk-tools.js';
@@ -181,6 +183,15 @@ export function capabilityPresets(
 export function describeTools(options: {
   workspaceRoot: string;
   model: string;
+  /**
+   * The provider the model is served by, for the one tool that depends on it.
+   *
+   * `GOOGLE_SEARCH` is offered only to a Gemini model, and "is this Gemini" is a
+   * question about the provider rather than about the model id: a local server
+   * can be started with a file whose name happens to contain the word, and
+   * grounding is not something it can do.
+   */
+  provider: ProviderId;
   webSearch?: WebSearchProvider;
   /**
    * Which of the app's services are wired.
@@ -208,6 +219,15 @@ export function describeTools(options: {
     {
       baseUrl: '',
       model: options.model,
+      /*
+       * Copied through rather than invented: the provider decides whether
+       * `GOOGLE_SEARCH` exists at all, which is a fact about the *catalogue* —
+       * what the app would offer this install — and a placeholder here would
+       * list a Gemini tool for a machine that has never configured Gemini.
+       */
+      provider: options.provider,
+      // A stand-in for the same reason: building a tool reads no credential.
+      apiKey: '',
       temperature: 0,
       systemPrompt: '',
       workspaceRoot: options.workspaceRoot,
@@ -216,6 +236,7 @@ export function describeTools(options: {
     {
       memory: new MemoryStore({workspaceRoot: options.workspaceRoot}),
       model: options.model,
+      provider: options.provider,
       ...(options.webSearch ? {webSearch: options.webSearch} : {}),
       /*
        * Stand-ins. Nothing here is executed — a description is a property of the
@@ -323,8 +344,10 @@ const TOOL_BLURBS: Record<string, string> = {
 export interface ToolDependencies {
   /** Shared with the agent's instruction provider, so memory stays one file. */
   memory: MemoryStore;
-  /** Model the agent will call; decides whether Gemini grounding applies. */
+  /** Model the agent will call, which the transport sends as the request's. */
   model: string;
+  /** Which service serves that model; decides whether grounding applies. */
+  provider: ProviderId;
   /** Present only in the desktop app; without it `web_search` is not offered. */
   webSearch?: WebSearchProvider;
   /**
@@ -430,7 +453,7 @@ function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
   }
 
   tools.push(createShellTool({workspaceRoot: config.workspaceRoot}));
-  tools.push(...groundingTools(deps.model));
+  tools.push(...groundingTools(deps.provider));
 
   /*
    * The desk: the to-do list and the notes. Offered only when the app has the

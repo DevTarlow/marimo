@@ -19,8 +19,11 @@ import {PassThrough} from 'node:stream';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {LocalModelService, localModelPidFile} from './service.js';
-import type {LocalModelFiles, LocalModelSpec} from './files.js';
+import {LocalModelService, embeddingPidFile} from './service.js';
+import type {EngineFiles, EngineRunSpec} from './service.js';
+
+/** The least a spec can be: the files, and the window the argv is built from. */
+type TestSpec = EngineRunSpec<EngineFiles>;
 
 /** One child process, as much of it as the supervisor touches. */
 class FakeChild extends EventEmitter {
@@ -68,9 +71,8 @@ describe('LocalModelService', () => {
    * once per start rather than once per turn, and a promise here reads as a
    * missing file — the failure it would take an hour to trace.
    */
-  function files(): LocalModelFiles {
+  function files(): EngineFiles {
     return {
-      dir,
       engine: join(dir, 'engine', 'llama-server'),
       libraryDir: join(dir, 'engine'),
       model: join(dir, 'model.gguf'),
@@ -79,13 +81,25 @@ describe('LocalModelService', () => {
     };
   }
 
+  /**
+   * A command line of the test's own.
+   *
+   * The supervisor only ever passes argv through, so asserting on the recall
+   * engine's flags here would test `args.ts` a second time. What matters to this
+   * file is that the binary comes first and that the port is the one this start
+   * was given — including the placeholder, before there is one.
+   */
+  function argv(spec: TestSpec, port: number | string): string[] {
+    return ['--model', spec.files.model, '--port', String(port)];
+  }
+
   function service(options: {
     child?: FakeChild;
     health?: 'ok' | 'never' | 'slow';
-    files?: () => LocalModelFiles;
+    files?: () => EngineFiles;
     spawnCount?: {count: number};
     log?: string[];
-  }): LocalModelService<LocalModelFiles, LocalModelSpec> {
+  }): LocalModelService<EngineFiles, TestSpec> {
     const child = options.child ?? new FakeChild();
     const spawnImpl = ((): FakeChild => {
       if (options.spawnCount) {
@@ -109,21 +123,20 @@ describe('LocalModelService', () => {
     }) as unknown as typeof fetch;
 
     /*
-     * The spec is named rather than written inline, and it is the chat model's
-     * own type. The supervisor is generic over the spec it is handed — that is
-     * what lets one class run two engines — and an object literal would infer a
-     * spec type narrowed to this literal, which no other caller's spec could be
-     * assigned to.
+     * The spec is named rather than written inline. The supervisor is generic over
+     * what it is handed — it reads `files` and `contextSize` and asks `args` for
+     * everything else — so the honest thing to test it with is the minimum that
+     * satisfies that type, not the recall spec it meets in the app.
      */
-    const spec = (): LocalModelSpec => ({
+    const spec = (): TestSpec => ({
       files: (options.files ?? files)(),
       contextSize: 8192,
-      thinking: false,
     });
 
     return new LocalModelService({
       spec,
-      pidFile: localModelPidFile(dir),
+      args: argv,
+      pidFile: embeddingPidFile(dir),
       spawnImpl,
       fetchImpl,
       ...(options.log ? {log: (line: string) => options.log?.push(line)} : {}),
@@ -161,11 +174,11 @@ describe('LocalModelService', () => {
     expect(status.state).toBe('ready');
     expect(status.baseUrl).toBe(started.ok ? started.baseUrl : undefined);
     // The card shows the real port once there is one, so the command a power
-    // user copies is the command that ran.
-    expect(status.command).toContain(
+    // user copies is the command that ran — binary first, then the argv.
+    expect(status.command[status.command.indexOf('--port') + 1]).toBe(
       String(new URL(status.baseUrl ?? '').port),
     );
-    expect(status.command).toContain('--jinja');
+    expect(status.command[0]).toBe(files().engine);
     await engine.stop();
   });
 
@@ -346,9 +359,10 @@ describe('LocalModelService', () => {
     const engine = new LocalModelService({
       spec: async () => {
         await gate;
-        return {files: files(), contextSize: 8192, thinking: false};
+        return {files: files(), contextSize: 8192};
       },
-      pidFile: localModelPidFile(dir),
+      args: argv,
+      pidFile: embeddingPidFile(dir),
       spawnImpl: (() => {
         spawnCount.count += 1;
         return new FakeChild();
@@ -374,7 +388,7 @@ describe('LocalModelService', () => {
    */
   it('writes a pid file while it runs and clears it when it stops', async () => {
     const engine = service({});
-    const file = localModelPidFile(dir);
+    const file = embeddingPidFile(dir);
 
     expect(await readFile(file, 'utf8').catch(() => undefined)).toBeUndefined();
 
@@ -390,8 +404,8 @@ describe('LocalModelService', () => {
       spec: () => ({
         files: files(),
         contextSize: 8192,
-        thinking: false,
       }),
+      args: argv,
       spawnImpl: (() =>
         new FakeChild()) as unknown as typeof import('node:child_process').spawn,
       fetchImpl: (async () =>
@@ -408,7 +422,7 @@ describe('LocalModelService', () => {
    * obeyed, and a file full of nonsense costs nothing.
    */
   it('clears a pid file that names nothing real', async () => {
-    const file = localModelPidFile(dir);
+    const file = embeddingPidFile(dir);
     await writeFile(file, 'not-a-pid', 'utf8');
     const engine = service({});
 
@@ -419,7 +433,7 @@ describe('LocalModelService', () => {
   });
 
   it('ignores a pid file that names this process', async () => {
-    const file = localModelPidFile(dir);
+    const file = embeddingPidFile(dir);
     await writeFile(file, String(process.pid), 'utf8');
     const log: string[] = [];
     const engine = service({log});

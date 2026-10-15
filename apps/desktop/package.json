@@ -14,8 +14,6 @@
     "replay:dream": "node dist/runner/replay-dream.js",
     "typecheck": "tsc -b tsconfig.runner.json && tsc -p tsconfig.renderer.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.test.json",
     "test": "vitest run",
-    "model:fetch": "node scripts/local-model.mjs fetch",
-    "model:verify": "node scripts/local-model.mjs verify",
     "smoke": "node scripts/smoke.mjs",
     "jobs-check": "node scripts/jobs-check.mjs",
     "package": "pnpm build && electron-builder --linux AppImage",

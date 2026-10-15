@@ -2,24 +2,42 @@
  * Runtime configuration for the agent.
  *
  * Everything here comes from the active agent profile and the app's own
- * preferences: the engine's address (which only the process that started it
- * knows), the identity, the folder it works in, and the tools and skills it is
- * allowed to use. There is no credential: the app holds no model key at all.
+ * preferences: which service answers and where, the credential it is reached
+ * with, the identity, the folder it works in, and the tools and skills it is
+ * allowed to use.
  */
+import type {ProviderId} from '@marimo/protocol';
+
 import type {Skill} from './skills/types.js';
 
 export interface AgentConfig {
   /**
-   * Where the app's own engine is listening.
+   * The address requests go to.
    *
-   * The one address in this app that is not stored anywhere: the engine comes up
-   * on whatever port was free, so the live one is handed over by the process that
-   * started it. A caller that has none must refuse the turn rather than guess —
-   * a fixed port would send a conversation to whatever else is listening there.
+   * The whole of it is stored now: the app runs no backend of its own, so every
+   * provider's address is either the catalogue's default or something the user
+   * typed, and nothing here is a placeholder waiting for a live port.
    */
   baseUrl: string;
-  /** The request's model id, which is also the engine's `--alias`. */
+  /** The request's `model`, as the chosen provider names it. */
   model: string;
+  /**
+   * Which provider `baseUrl` belongs to.
+   *
+   * Carried beside the address rather than folded into it because the two are
+   * read by different things: the transport sends the address, and the provider id
+   * decides which *flags* travel with the request — whether usage may be streamed,
+   * whether a reasoning channel exists, and which header names the conversation.
+   */
+  provider: ProviderId;
+  /**
+   * The credential, already decrypted by the process that owns the keychain.
+   *
+   * Empty for a server that needs none, which is a real state rather than a
+   * missing one: the transport sends no `Authorization` header at all when this is
+   * empty, because an empty bearer token is refused where no header is ignored.
+   */
+  apiKey: string;
   temperature: number;
   maxOutputTokens?: number;
   /** The profile's identity: who this agent is. */

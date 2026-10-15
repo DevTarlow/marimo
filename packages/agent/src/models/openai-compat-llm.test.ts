@@ -1,12 +1,13 @@
 /**
  * The one OpenAI-compatible client, and what it puts on the wire.
  *
- * There is one backend now — the llama.cpp engine the app starts on loopback —
- * so the request shape is a fact rather than a choice: usage is always asked for,
- * and there is never an `Authorization` header because there is no credential.
- * Both used to travel with a provider descriptor, and both are the kind of
- * difference that is invisible until the wrong one is sent, so they are pinned
- * here rather than described.
+ * Every provider in the catalogue speaks this dialect, so this file is where the
+ * differences between them have to be pinned: whether usage may be asked for,
+ * whether a reasoning channel exists, which header a conversation is named in,
+ * and whether a key travels at all. Each is a fact about an *endpoint* rather
+ * than a preference, and each is invisible until the wrong one is sent — Gemini's
+ * compatibility layer answers an unsupported field with an error, so asking it
+ * for usage fails every turn rather than one.
  */
 import type {LlmRequest} from '@google/adk';
 import {describe, expect, it} from 'vitest';
@@ -34,6 +35,14 @@ const SSE_BODY = [
   'data: [DONE]\n',
 ];
 
+/** The same stream, with thinking arriving on the channel DeepSeek uses. */
+const REASONING_BODY = [
+  'data: {"choices":[{"delta":{"reasoning_content":"weighing it"}}]}\n',
+  'data: {"choices":[{"delta":{"content":"hi"}}]}\n',
+  'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n',
+  'data: [DONE]\n',
+];
+
 interface Captured {
   url: string;
   headers: Record<string, string>;
@@ -43,6 +52,7 @@ interface Captured {
 /** A client whose transport is replaced, plus what it was asked to send. */
 function client(
   options: Partial<ConstructorParameters<typeof OpenAiCompatLlm>[0]> = {},
+  sse: string[] = SSE_BODY,
 ): {llm: OpenAiCompatLlm; calls: Captured[]} {
   const calls: Captured[] = [];
   const fetchImpl = (async (url: unknown, init: RequestInit = {}) => {
@@ -51,7 +61,7 @@ function client(
       headers: (init.headers ?? {}) as Record<string, string>,
       body: JSON.parse(String(init.body)) as Record<string, unknown>,
     });
-    return new Response(streamOf(SSE_BODY), {status: 200});
+    return new Response(streamOf(sse), {status: 200});
   }) as unknown as typeof fetch;
 
   const llm = new OpenAiCompatLlm({
@@ -61,6 +71,24 @@ function client(
     ...options,
   });
   return {llm, calls};
+}
+
+/**
+ * Every part every chunk carried, reduced to the two fields these tests read.
+ *
+ * The stream yields partial chunks and then one aggregated response, so a caller
+ * that looked at the last chunk alone would miss the reasoning delta — which is
+ * exactly the shape of a test that passes while the feature is broken.
+ */
+function thoughtParts(
+  chunks: readonly unknown[],
+): Array<{text?: string; thought?: boolean}> {
+  return chunks.flatMap((chunk) => {
+    const parts =
+      (chunk as {content?: {parts?: Array<{text?: string; thought?: boolean}>}})
+        .content?.parts ?? [];
+    return parts.filter((part) => part.thought === true);
+  });
 }
 
 function request(model = 'test-model'): LlmRequest {
@@ -98,26 +126,96 @@ describe('OpenAiCompatLlm request shape', () => {
     );
   });
 
-  it('always asks for a trailing usage chunk', async () => {
-    const {llm, calls} = client();
+  /*
+   * Usage is asked for per provider, and the negative case is the one that
+   * matters: Gemini's compatibility layer documents no `stream_options` support
+   * and answers a request carrying it with an error rather than ignoring it, so
+   * this is a difference between a working chat and a broken one.
+   */
+  it('asks for a trailing usage chunk where the endpoint allows it', async () => {
+    const {llm, calls} = client({provider: 'deepseek'});
     await drain(llm);
 
     expect(calls[0]!.body['stream_options']).toEqual({include_usage: true});
   });
 
-  it('never sends an Authorization header', async () => {
-    const {llm, calls} = client();
+  it('does not ask for usage at an endpoint that refuses the field', async () => {
+    const {llm, calls} = client({provider: 'gemini'});
     await drain(llm);
 
-    // Not `Bearer ` with nothing after it, and not a key: the engine this app
-    // starts takes no credential, and an empty one is a claim that there is.
+    expect(calls[0]!.body).not.toHaveProperty('stream_options');
+  });
+
+  it('sends the key as a bearer token when there is one', async () => {
+    const {llm, calls} = client({provider: 'deepseek', apiKey: 'sk-secret'});
+    await drain(llm);
+
+    expect(calls[0]!.headers['Authorization']).toBe('Bearer sk-secret');
+  });
+
+  it('sends no Authorization header when there is no key', async () => {
+    const {llm, calls} = client({provider: 'llamacpp'});
+    await drain(llm);
+
+    // Not `Bearer ` with nothing after it, and not a key: a local server usually
+    // takes no credential, and an empty one is refused where an absent header is
+    // ignored.
     expect(calls[0]!.headers).not.toHaveProperty('Authorization');
   });
 
-  it('names the local model in an error the user will read', async () => {
-    const llm = new OpenAiCompatLlm({
+  /*
+   * The one gateway that routes and caches per conversation asks to be told which
+   * one this is. Read at send time rather than captured, because the client
+   * outlives the turn: a session id captured at construction would be the first
+   * conversation's for ever.
+   */
+  it('names the conversation to the provider that asks for it', async () => {
+    const {llm, calls} = client({
+      provider: 'opencode_go',
+      readSessionId: () => 'session-42',
+    });
+    await drain(llm);
+
+    expect(calls[0]!.headers['x-opencode-session']).toBe('session-42');
+  });
+
+  it('leaves the session header out when there is no conversation', async () => {
+    const {llm, calls} = client({
+      provider: 'opencode_go',
+      readSessionId: () => undefined,
+    });
+    await drain(llm);
+
+    // A lost prompt cache, which the catalogue says is the whole cost. What must
+    // not happen is the header going out empty, naming a conversation that does
+    // not exist.
+    expect(calls[0]!.headers).not.toHaveProperty('x-opencode-session');
+  });
+
+  /*
+   * Thinking arrives on a channel only some endpoints have, and the flag decides
+   * whether thinking that *did* arrive is kept. Reading an absent field costs
+   * nothing, so this is about not throwing away a thought part — and about not
+   * inventing one for an endpoint that never sent it.
+   */
+  it('keeps thinking that arrived as a thought part', async () => {
+    const {llm} = client({provider: 'deepseek'}, REASONING_BODY);
+    const parts = thoughtParts(await drain(llm));
+
+    expect(parts).toContainEqual({text: 'weighing it', thought: true});
+  });
+
+  it('has no thought part for an endpoint with no reasoning channel', async () => {
+    const {llm} = client({provider: 'gemini'}, REASONING_BODY);
+    const parts = thoughtParts(await drain(llm));
+
+    expect(parts).toEqual([]);
+  });
+
+  it('names the provider in an error the user will read', async () => {    const llm = new OpenAiCompatLlm({
       model: 'test-model',
       baseUrl: 'http://127.0.0.1:8137/v1',
+      provider: 'deepseek',
       fetchImpl: (async () =>
         new Response('model not loaded', {
           status: 429,
@@ -125,6 +223,6 @@ describe('OpenAiCompatLlm request shape', () => {
     });
 
     await expect(drain(llm)).rejects.toThrow(OpenAiCompatRequestError);
-    await expect(drain(llm)).rejects.toThrow(/The local model returned 429/);
+    await expect(drain(llm)).rejects.toThrow(/DeepSeek returned 429/);
   });
 });

@@ -5,9 +5,10 @@
  * read and edit. Reads are forgiving: an unknown or malformed field falls back
  * to its default instead of discarding every other setting.
  *
- * Everything in it is something the user chose, so all of it is patchable. It
- * used to hold a second kind — the model list an endpoint reported — and that
- * went with the endpoint: there is one model and nothing to ask.
+ * Two kinds of value live here and only one of them is patchable. The
+ * preferences are what the user chose; the model list each provider reported is a
+ * *fact*, kept beside them in the same document and written only by the call that
+ * fetched it — see `setAvailableModels`.
  */
 import {mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {dirname} from 'node:path';
@@ -23,6 +24,7 @@ import {
   companionSettingsSchema,
   defaultAppearance,
   defaultDreamSettings,
+  defaultProviders,
   defaultRecallSettings,
   defaultCompanionSettings,
   DEFAULT_MEMORY_REVIEW_EVENTS,
@@ -31,15 +33,47 @@ import {
   defaultDiscordSettings,
   discordSettingsSchema,
   dreamSettingsSchema,
+  fallbackModelsFor,
+  providerIdSchema,
   recallSettingsSchema,
   settingsPatchSchema,
   settingsSchema,
   windowStateSchema,
 } from '@marimo/protocol';
-import type {SettingsPatch, StoredSettings} from '@marimo/protocol';
+import type {
+  ProviderConfig,
+  ProviderId,
+  Providers,
+  ProvidersPatch,
+  SettingsPatch,
+  StoredSettings,
+} from '@marimo/protocol';
+
+/**
+ * The placeholder model list for each provider, before each has been asked.
+ *
+ * Derived from the catalogue rather than spelled out, because a provider missing
+ * from here is a provider whose picker opens on an empty select — the failure
+ * that looks like "the app has no models" rather than like a missing line.
+ */
+export function defaultAvailableModels(): Record<ProviderId, string[]> {
+  return Object.fromEntries(
+    providerIdSchema.options.map((id) => [id, fallbackModelsFor(id)]),
+  ) as Record<ProviderId, string[]>;
+}
 
 export function defaultStoredSettings(): StoredSettings {
   return {
+    /*
+     * Which service answers, and what each one was last set to.
+     *
+     * A real provider rather than a placeholder: the app runs no backend of its
+     * own, so a default that answered nothing would be a fresh install unable to
+     * reply until somebody found the right screen. DeepSeek is the entry a first
+     * run can explain in one sentence, and every other provider is one pick away.
+     */
+    providers: defaultProviders(),
+    availableModels: defaultAvailableModels(),
     /*
      * Power, which is the app in full — and deliberately not the friendly one.
      *
@@ -57,9 +91,6 @@ export function defaultStoredSettings(): StoredSettings {
     experienceMode: 'power',
     appearance: defaultAppearance(),
     temperature: 0.7,
-    // The app decides which tier this machine can run, which is the answer that
-    // cannot be wrong about somebody's hardware. The override is one field away.
-    modelTier: 'auto',
     allowPrivateNetworkFetch: false,
     mcpServers: [],
     // Discord is off until the user pastes a bot token, so a fresh install makes
@@ -194,7 +225,15 @@ export class SettingsStore {
         ...(raw as Record<string, unknown>),
       });
       if (upgraded.success) {
-        await this.write(upgraded.data);
+        await this.write({
+          ...upgraded.data,
+          // Derived from the raw file, exactly as the read path below does it:
+          // the parse cannot see it, and writing the defaults over what a
+          // previous build fetched would throw away every model list.
+          availableModels: readAvailableModels(
+            (raw as {availableModels?: unknown} | undefined)?.availableModels,
+          ),
+        });
       }
     }
 
@@ -283,6 +322,16 @@ export class SettingsStore {
             defaults.dream,
             rawObject['dream'],
           ),
+          /*
+           * The provider block, filled one provider at a time rather than whole.
+           *
+           * Deeper than `fillBlock` because the block holds a sub-object per
+           * provider: a typo in the Gemini address must not cost the user the
+           * provider they were actually using, nor the address they typed for
+           * their own server. It is also the one filler that has to read fields
+           * outside its own block — see `fillProviders`.
+           */
+          providers: fillProviders(rawObject),
         }
       : raw;
 
@@ -292,7 +341,21 @@ export class SettingsStore {
       : {...defaults};
 
     const result = settingsSchema.safeParse(candidate);
-    this.cache = result.success ? result.data : defaults;
+    /*
+     * The fetched lists are attached after the parse rather than inside it.
+     *
+     * They are derived from the raw file and never from a patch, so a malformed
+     * one falls back to the catalogue's placeholder instead of failing a document
+     * that holds every preference the user has.
+     */
+    this.cache = result.success
+      ? {
+          ...result.data,
+          availableModels: readAvailableModels(
+            (raw as {availableModels?: unknown} | undefined)?.availableModels,
+          ),
+        }
+      : defaults;
     return this.cache;
   }
 
@@ -323,6 +386,16 @@ export class SettingsStore {
       const dream = defined.dream
         ? {...current.dream, ...definedOnly(defined.dream)}
         : current.dream;
+      /*
+       * The provider block is merged per provider, not per block.
+       *
+       * Setting one base URL must not mean sending the other four addresses back:
+       * a window holding a copy from before another provider's edit would win, and
+       * the user's own server address would quietly revert to the catalogue's.
+       */
+      const providers = defined.providers
+        ? mergeProviders(current.providers, defined.providers)
+        : current.providers;
       const merged = settingsSchema.parse({
         ...current,
         ...defined,
@@ -331,10 +404,60 @@ export class SettingsStore {
         appearance,
         recall,
         dream,
+        providers,
       });
-      await this.write(merged);
-      this.cache = merged;
-      return merged;
+      const stored: StoredSettings = {
+        ...merged,
+        // Carried through, never patched: see `setAvailableModels`.
+        availableModels: current.availableModels,
+      };
+      await this.write(stored);
+      this.cache = stored;
+      return stored;
+    });
+  }
+
+  /**
+   * Records what one provider says it serves.
+   *
+   * A model the user had selected there may no longer exist, so that provider's
+   * default is moved to something the endpoint actually offers rather than left
+   * pointing at a retired name — which would fail the next turn for a reason
+   * nobody could see. A conversation's own choice is left alone: it was made on
+   * purpose, and the refusal it earns is a sentence about that model.
+   *
+   * No other provider is touched. The lists are answers about one endpoint each,
+   * and a store that rewrote its neighbours would be inventing answers.
+   */
+  async setAvailableModels(
+    provider: ProviderId,
+    models: string[],
+  ): Promise<StoredSettings> {
+    const unique = [...new Set(models.filter((id) => id.length > 0))];
+    if (unique.length === 0) {
+      return await this.load();
+    }
+
+    return await this.enqueue(async () => {
+      const current = await this.load();
+      const config = current.providers.configs[provider];
+      const stored: StoredSettings = {
+        ...current,
+        providers: {
+          ...current.providers,
+          configs: {
+            ...current.providers.configs,
+            [provider]: {
+              ...config,
+              model: chooseModel(unique, config.model),
+            },
+          },
+        },
+        availableModels: {...current.availableModels, [provider]: unique},
+      };
+      await this.write(stored);
+      this.cache = stored;
+      return stored;
     });
   }
 
@@ -412,4 +535,164 @@ function fillBlock<T extends object>(
 ): T {
   const parsed = schema.safeParse({...defaults, ...asRecord(raw)});
   return parsed.success && parsed.data ? parsed.data : defaults;
+}
+
+/** Keep the current model when it still exists; otherwise pick a fresh one. */
+export function chooseModel(available: string[], current: string): string {
+  if (available.includes(current)) {
+    return current;
+  }
+  /*
+   * Prefer a fast tier when the previous default has been retired: the cheap
+   * model is the least surprising thing to land on, and a provider that has
+   * dropped its flagship should not silently move somebody onto its most
+   * expensive one.
+   */
+  return (
+    available.find((id) => /flash|mini|lite|small|fast/i.test(id)) ??
+    available[0]!
+  );
+}
+
+/**
+ * The provider block, filled one provider at a time.
+ *
+ * Deeper than a single `fillBlock` because the block holds one sub-object per
+ * provider: a typo in the Gemini address must not cost the user the provider they
+ * were actually using, or the address they typed for their own server.
+ *
+ * This is also the one filler that reads fields outside its own block, and that
+ * is the whole reason it is a function rather than a `fillBlock` call. A settings
+ * file written by the build that had a provider catalogue holds a top-level
+ * `model` and `baseUrl` — the schema this build ships no longer declares them, so
+ * a lenient read would drop both — and those fields were DeepSeek's, because it
+ * was the only provider then. They fill DeepSeek's entry here, and their presence
+ * is what says such a file is *pointed* at DeepSeek rather than at this build's
+ * default. Without that second half, an upgrade would keep the user's address in
+ * a config nothing selects.
+ */
+function fillProviders(raw: Record<string, unknown>): Providers {
+  const defaults = defaultProviders();
+  const source = asRecord(raw['providers']);
+  const rawConfigs = asRecord(source['configs']);
+  const legacy: Partial<ProviderConfig> = {};
+  const legacyBaseUrl = raw['baseUrl'];
+  const legacyModel = raw['model'];
+  if (typeof legacyBaseUrl === 'string' && legacyBaseUrl.length > 0) {
+    legacy.baseUrl = legacyBaseUrl;
+  }
+  if (typeof legacyModel === 'string' && legacyModel.length > 0) {
+    legacy.model = legacyModel;
+  }
+
+  const active = providerIdSchema.safeParse(source['active']);
+  const configs = {} as Record<ProviderId, ProviderConfig>;
+  for (const id of providerIdSchema.options) {
+    configs[id] = fillProviderConfig(
+      defaults.configs[id],
+      rawConfigs[id],
+      id === 'deepseek' ? legacy : {},
+    );
+  }
+  return {
+    active: active.success
+      ? active.data
+      : Object.keys(legacy).length > 0
+        ? 'deepseek'
+        : defaults.active,
+    configs,
+  };
+}
+
+function fillProviderConfig(
+  defaults: ProviderConfig,
+  raw: unknown,
+  legacy: Partial<ProviderConfig> = {},
+): ProviderConfig {
+  const source = asRecord(raw);
+  return {
+    // The block's own value wins; a legacy top-level field only fills a gap.
+    baseUrl: firstNonEmpty([
+      source['baseUrl'],
+      legacy.baseUrl,
+      defaults.baseUrl,
+    ]),
+    model: firstNonEmpty([source['model'], legacy.model, defaults.model]),
+    /*
+     * A file from before this field existed has no answer, and the safe one is
+     * the keychain: a key that was encrypted stays encrypted, and a machine
+     * without one still refuses rather than writing a secret readable.
+     */
+    keyStorage: providerKeyStorageOrDefault(source['keyStorage'], defaults),
+  };
+}
+
+function providerKeyStorageOrDefault(
+  raw: unknown,
+  defaults: ProviderConfig,
+): ProviderConfig['keyStorage'] {
+  return raw === 'plaintext' || raw === 'keychain'
+    ? raw
+    : defaults.keyStorage;
+}
+
+function firstNonEmpty(candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+/**
+ * What each provider last reported.
+ *
+ * A provider with no stored list falls back to the placeholder, because the
+ * picker has to show *something* before the first refresh and an empty select is
+ * a worse answer than a name that may already be stale. A list stored before the
+ * catalogue was keyed by provider was a flat array, and it was DeepSeek's.
+ */
+function readAvailableModels(raw: unknown): Record<ProviderId, string[]> {
+  const byProvider = asRecord(raw);
+  const legacyDeepSeek = Array.isArray(raw) ? raw : undefined;
+  return Object.fromEntries(
+    providerIdSchema.options.map((id) => [
+      id,
+      storedModelList(
+        byProvider[id] ?? (id === 'deepseek' ? legacyDeepSeek : undefined),
+        id,
+      ),
+    ]),
+  ) as Record<ProviderId, string[]>;
+}
+
+function storedModelList(value: unknown, provider: ProviderId): string[] {
+  const list = Array.isArray(value)
+    ? value.filter(
+        (entry): entry is string =>
+          typeof entry === 'string' && entry.length > 0,
+      )
+    : [];
+  return list.length > 0 ? list : fallbackModelsFor(provider);
+}
+
+/**
+ * Applies a provider patch over what is stored.
+ *
+ * Each named provider is merged into its own config, so a patch that changes only
+ * the active provider leaves the other addresses exactly as they were.
+ */
+export function mergeProviders(
+  current: Providers,
+  patch: ProvidersPatch,
+): Providers {
+  const configs = {...current.configs};
+  for (const id of providerIdSchema.options) {
+    const next = patch.configs?.[id];
+    if (next) {
+      configs[id] = {...configs[id], ...definedOnly(next)};
+    }
+  }
+  return {active: patch.active ?? current.active, configs};
 }

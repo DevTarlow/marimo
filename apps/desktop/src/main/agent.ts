@@ -26,9 +26,16 @@ import {
   secretReaderFor,
 } from '@marimo/runtime';
 import type {ProcessLock} from '@marimo/runtime';
-import type {AppPaths, EmbeddingPart, MediaKind} from '@marimo/runtime';
-
 import type {
+  AppPaths,
+  EmbeddingPart,
+  MediaKind,
+  SecretRead,
+} from '@marimo/runtime';
+
+import {PROVIDERS, PROVIDER_IDS} from '@marimo/protocol';
+import type {
+  AgentModel,
   AgentProfile,
   AgentUiEvent,
   CompactResult,
@@ -37,6 +44,7 @@ import type {
   McpStatus,
   PendingGate,
   ProfileCatalog,
+  ProviderId,
   RecallModelStatus,
   RecallPiece,
   RecallQueryResult,
@@ -46,11 +54,11 @@ import type {
   Workspace,
   WorkspaceState,
 } from '@marimo/protocol';
+import {fetchProviderModels} from '@marimo/agent';
 import type {JobService} from '@marimo/agent';
 
-import {safeStorageCipher, secretStore} from './secrets.js';
+import {providerSecretStore, secretStore} from './secrets.js';
 import {BrowserSearchProvider} from './search/search-window.js';
-import {LocalModelHost} from './local-model.js';
 import {RecallHost} from './recall.js';
 import {MediaDecodingWindow} from './media/decode-window.js';
 import {mediaParts} from './media/parts.js';
@@ -122,21 +130,12 @@ export class AgentService {
   private readonly jobsStore: JobStore;
   private readonly scheduler: JobScheduler;
   /**
-   * The engine behind the model the app carries.
-   *
-   * Owned here rather than by the runtime, because starting a process is not
-   * something the shared package does — it asks whoever has one. This process
-   * has Electron, so it also has `process.resourcesPath`, which is where the
-   * shipped weights are.
-   */
-  private readonly localModel: LocalModelHost;
-  /**
    * The engine that finds things by meaning, and the indexes behind it.
    *
-   * Owned here for the reason the model is: starting a process is not something
-   * the shared package does. It is constructed unconditionally and does nothing
-   * until the setting is on — an object that waits, rather than a second code path
-   * for the installs that have it.
+   * Owned here rather than by the runtime, because starting a process is not
+   * something the shared package does. It is constructed unconditionally and does
+   * nothing until the setting is on — an object that waits, rather than a second
+   * code path for the installs that have it.
    */
   private readonly recall: RecallHost;
   /**
@@ -161,37 +160,6 @@ export class AgentService {
 
   constructor(private readonly options: AgentServiceOptions) {
     const {paths} = options;
-
-    this.localModel = new LocalModelHost({
-      paths,
-      /*
-       * Read per call rather than captured: the tier is a Settings switch, and a
-       * copy taken at startup would be one that only took effect after a restart.
-       */
-      readSettings: async () => await this.runtime.settings(),
-      /*
-       * A download is the one thing in this app somebody watches, so it reports
-       * as it goes rather than being polled for. The same event channel the turn
-       * stream uses, for the same reason: the window is already listening.
-       */
-      onProgress: (progress) => {
-        options.sendEvent({
-          type: 'model.progress',
-          label: progress.label,
-          receivedBytes: progress.receivedBytes,
-          totalBytes: progress.totalBytes,
-          ...(progress.percent === undefined
-            ? {}
-            : {percent: progress.percent}),
-        });
-      },
-      onInstalled: (tier) => {
-        options.sendEvent({type: 'model.installed', tier});
-      },
-      onFailed: (message) => {
-        options.sendEvent({type: 'model.failed', message});
-      },
-    });
 
     this.media = new MediaDecodingWindow();
 
@@ -258,10 +226,11 @@ export class AgentService {
       paths,
       webSearch: this.search,
       /*
-       * The engine, so a turn can be given an address before it starts. The
-       * runtime asks for one; this is the only process that knows how to answer.
+       * Which provider answers, and the key it answers with. The cipher is the
+       * only part of this the shared package cannot have: it exists in Electron
+       * and nowhere else, which is why the reader is a function it is given.
        */
-      localModel: this.localModel,
+      readSecret: async (provider) => await this.readSecret(provider),
       recall: {
         stop: async () => {
           await this.recall.stop();
@@ -382,41 +351,6 @@ export class AgentService {
     // when it quits, and an interval holding the loop open would turn a quit
     // into a hang.
     this.reconcile.unref?.();
-    this.warmLocalModel();
-  }
-
-  /**
-   * Loads the model in the background, so the first question is not the one that
-   * pays for it.
-   *
-   * Deliberately not awaited: mapping a gigabyte of weights takes seconds, and
-   * the window has to open and paint while that happens. Nor is the answer
-   * reported from here — a failure is a sentence in the Model card and in the
-   * conversation, both of which ask again when they are drawn.
-   *
-   * Started rather than left to the first turn because the alternative is a
-   * first answer that takes five seconds longer than every answer after it,
-   * which reads as the app being slow rather than as a model being loaded.
-   */
-  private warmLocalModel(): void {
-    void this.localModel
-      .ensureRunning()
-      .then((started) => {
-        if (!started.ok) {
-          /*
-           * Logged rather than shown. A machine with no model installed is a
-           * state the Model card explains properly, and an error banner over the
-           * conversation on every launch — for something the user may not have
-           * asked for yet — is noise.
-           */
-          console.log(
-            `[marimo] the built-in model is not ready: ${started.problem}`,
-          );
-        }
-      })
-      .catch((error: unknown) => {
-        console.log('[marimo] the built-in model could not be started:', error);
-      });
   }
 
   async stop(): Promise<void> {
@@ -431,17 +365,12 @@ export class AgentService {
     await this.appLock?.release();
     this.appLock = undefined;
     await this.mcp.stop();
-    // Stops the engine too, through the runner the runtime was given: a child
-    // still loading weights when its parent exits is a gigabyte of memory and a
-    // spinning fan with no window left to explain it.
+    // Stops the recall engine too, through the runner the runtime was given: a
+    // child still loading weights when its parent exits is memory and a spinning
+    // fan with no window left to explain it.
     await this.runtime.dispose();
     this.search.dispose();
     this.media.dispose();
-  }
-
-  /** The engine, for the calls that describe and drive it. */
-  get model(): LocalModelHost {
-    return this.localModel;
   }
 
   /**
@@ -455,9 +384,9 @@ export class AgentService {
   private async recallServiceFor(
     profileId: string,
     workspaceRoot?: string,
-  ): Promise<{recallService: Awaited<ReturnType<RecallHost['serviceFor']>>}> {
+  ): Promise<{recallService?: Awaited<ReturnType<RecallHost['serviceFor']>>}> {
     const service = await this.recall.serviceFor(profileId, workspaceRoot);
-    return service === undefined ? ({} as never) : {recallService: service};
+    return service === undefined ? {} : {recallService: service};
   }
 
   /**
@@ -893,16 +822,92 @@ export class AgentService {
   }
 
   /**
-   * Starts the model, so the first question is not the one that pays for it.
+   * One provider's key, for the runtime to answer a turn with.
    *
-   * Called when a window is shown rather than at boot, and the distinction is the
-   * whole reason this exists. The app is tray-resident, so "the process started"
-   * and "somebody is about to type" are different events — warming at boot would
-   * load gigabytes of weights for a user who never opened a window. A shown
-   * window is the closest thing to a signal that a question is coming.
+   * The `unreadable` case is passed through rather than flattened to an empty
+   * string: "no key yet" and "a key this machine cannot decrypt" are fixed in
+   * different places, and this is the read that decides which of them a turn is
+   * refused for.
    */
-  async warmModel(): Promise<void> {
-    await this.runtime.warmEngine();
+  async readSecret(providerId: ProviderId): Promise<SecretRead> {
+    return await providerSecretStore(this.options.paths, providerId).read();
+  }
+
+  /**
+   * Stores one provider's API key, or clears it with an empty string.
+   *
+   * Written the way the provider's own settings say to write it, which is the
+   * per-provider plaintext consent invariant 16 is about: the headless runner has
+   * no keychain, so a key it is meant to use has to be readable by a process that
+   * has none. A provider left on `keychain` refuses to write at all on a machine
+   * with no keychain, rather than quietly putting a secret in the clear.
+   */
+  async setApiKey(apiKey: string, providerId?: ProviderId): Promise<void> {
+    const settings = await this.runtime.settings();
+    const id = providerId ?? settings.providers.active;
+    await providerSecretStore(this.options.paths, id).set(apiKey, {
+      allowPlaintext: settings.providers.configs[id].keyStorage === 'plaintext',
+    });
+  }
+
+  /**
+   * Which providers have a key stored, by id.
+   *
+   * Booleans and never values, which is what keeps invariant 8 true through a new
+   * door: the window needs to know whether the field it draws is already filled,
+   * and `has` is the only question asked of the store here.
+   */
+  async providerKeys(): Promise<Partial<Record<ProviderId, boolean>>> {
+    const state: Partial<Record<ProviderId, boolean>> = {};
+    for (const id of PROVIDER_IDS) {
+      state[id] = await providerSecretStore(this.options.paths, id).has();
+    }
+    return state;
+  }
+
+  /**
+   * Asks a provider what it serves, and records the answer.
+   *
+   * The refusals come before the request on purpose. A key the user has not
+   * entered yet is not a network problem, and a `401` reported as "could not
+   * reach the endpoint" sends them to look at an address that was never wrong;
+   * the stored secret's own sentence is quoted for the same reason it exists.
+   *
+   * The list is written through the runtime rather than the settings store, so
+   * every host drops what it had applied — a default model the endpoint has
+   * retired is replaced before the next turn resolves, rather than after it
+   * fails.
+   */
+  async fetchModels(providerId?: ProviderId): Promise<void> {
+    const settings = await this.runtime.settings();
+    const id = providerId ?? settings.providers.active;
+    const config = settings.providers.configs[id];
+    const provider = PROVIDERS[id];
+
+    const secret = await providerSecretStore(this.options.paths, id).read();
+    if (secret.state === 'unreadable') {
+      throw new Error(`${secret.reason} Re-save it, then fetch its models.`);
+    }
+    if (provider.requiresApiKey && secret.state !== 'present') {
+      throw new Error(
+        `${provider.label} needs an API key before it can list its models.`,
+      );
+    }
+
+    const models = await fetchProviderModels({
+      provider: id,
+      apiKey: secret.state === 'present' ? secret.value : '',
+      /*
+       * The address as the user set it, so a server on their own network is
+       * asked rather than the catalogue's default for that provider — and the
+       * catalogue's when the field was cleared, because an empty string is a
+       * field somebody emptied rather than an instruction to request `/models`
+       * from nowhere.
+       */
+      baseUrl:
+        config.baseUrl.length > 0 ? config.baseUrl : provider.defaultBaseUrl,
+    });
+    await this.runtime.setAvailableModels(id, models);
   }
 
   mcpStatuses(): Record<string, McpStatus> {
@@ -984,6 +989,21 @@ export class AgentService {
     title: string,
   ): Promise<SessionSummary> {
     return await this.runtime.renameSession(profileId, sessionId, title);
+  }
+
+  /**
+   * Points one conversation at a model of its own, or back at its agent's.
+   *
+   * The choice belongs to the conversation rather than to the window that made
+   * it: a reloaded window, the companion, and a scheduled job all resolve the
+   * same entry, so "use the big model for this one question" survives all three.
+   */
+  async setSessionModel(
+    profileId: string,
+    sessionId: string,
+    model: AgentModel | null,
+  ): Promise<SessionSummary> {
+    return await this.runtime.setSessionModel(profileId, sessionId, model);
   }
 
   /** The folder a conversation works in, for judging an attached file. */
@@ -1174,9 +1194,4 @@ export class AgentService {
       }
     })();
   }
-}
-
-/** Whether an OS keychain is available to encrypt secrets on this machine. */
-export function canEncryptSecrets(): boolean {
-  return safeStorageCipher.available();
 }

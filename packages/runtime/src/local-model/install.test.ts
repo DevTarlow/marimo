@@ -9,7 +9,7 @@
  * and that the destination only ever appears once the digest has matched.
  *
  * Nothing here touches the network or spawns `tar`: both are injected, which is
- * what lets a test assert on a 4.5 GB download's *bookkeeping* in milliseconds.
+ * what lets a test assert on a 555 MB download's *bookkeeping* in milliseconds.
  */
 import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, readFile, readlink, rm, stat, symlink, writeFile} from 'node:fs/promises';
@@ -17,8 +17,8 @@ import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {parseEmbeddingManifest, parseManifest} from './manifest.js';
-import type {EmbeddingManifest, LocalModelManifest} from './manifest.js';
+import {parseEmbeddingManifest} from './manifest.js';
+import type {EmbeddingManifest} from './manifest.js';
 import {engineBinaryName, engineDir} from './files.js';
 import {
   downloadVerified,
@@ -26,11 +26,10 @@ import {
   InstallError,
   installEmbeddingPiece,
   installEngine,
-  installTier,
   unpackEngine,
 } from './install.js';
 
-const LOW_BODY = 'the low tier, which is not really 2.7 GB';
+const BODY = 'the recall model, which is not really 310 MB';
 
 function digestOf(text: string): string {
   return createHash('sha256').update(text).digest('hex');
@@ -79,12 +78,12 @@ describe('downloadVerified', () => {
     await downloadVerified({
       url: 'https://example.test/model.gguf',
       destination,
-      sha256: digestOf(LOW_BODY),
-      label: 'The Low model',
-      fetchImpl: fakeFetch(LOW_BODY),
+      sha256: digestOf(BODY),
+      label: 'The recall model',
+      fetchImpl: fakeFetch(BODY),
     });
 
-    expect(await readFile(destination, 'utf8')).toBe(LOW_BODY);
+    expect(await readFile(destination, 'utf8')).toBe(BODY);
     // And nothing left over beside it.
     await expect(stat(`${destination}.part`)).rejects.toThrow();
   });
@@ -100,8 +99,8 @@ describe('downloadVerified', () => {
         url: 'https://example.test/model.gguf',
         destination,
         sha256: digestOf('something else entirely'),
-        label: 'The Low model',
-        fetchImpl: fakeFetch(LOW_BODY),
+        label: 'The recall model',
+        fetchImpl: fakeFetch(BODY),
       }),
     ).rejects.toThrow(/did not match the pinned digest/u);
 
@@ -110,23 +109,23 @@ describe('downloadVerified', () => {
   });
 
   it('resumes a part file with a range request and appends to it', async () => {
-    const half = Math.floor(LOW_BODY.length / 2);
-    await writeFile(`${destination}.part`, LOW_BODY.slice(0, half), 'utf8');
+    const half = Math.floor(BODY.length / 2);
+    await writeFile(`${destination}.part`, BODY.slice(0, half), 'utf8');
 
     const calls: Array<{url: string; headers: Record<string, string>}> = [];
     await downloadVerified({
       url: 'https://example.test/model.gguf',
       destination,
-      sha256: digestOf(LOW_BODY),
-      label: 'The Low model',
-      fetchImpl: fakeFetch(LOW_BODY.slice(half), {
+      sha256: digestOf(BODY),
+      label: 'The recall model',
+      fetchImpl: fakeFetch(BODY.slice(half), {
         status: 206,
         calls,
       }),
     });
 
     expect(calls[0]?.headers['Range']).toBe(`bytes=${String(half)}-`);
-    expect(await readFile(destination, 'utf8')).toBe(LOW_BODY);
+    expect(await readFile(destination, 'utf8')).toBe(BODY);
   });
 
   /*
@@ -140,31 +139,31 @@ describe('downloadVerified', () => {
     await downloadVerified({
       url: 'https://example.test/model.gguf',
       destination,
-      sha256: digestOf(LOW_BODY),
-      label: 'The Low model',
-      fetchImpl: fakeFetch(LOW_BODY, {status: 200}),
+      sha256: digestOf(BODY),
+      label: 'The recall model',
+      fetchImpl: fakeFetch(BODY, {status: 200}),
     });
 
-    expect(await readFile(destination, 'utf8')).toBe(LOW_BODY);
+    expect(await readFile(destination, 'utf8')).toBe(BODY);
   });
 
   /*
-   * The moment where throwing away 4.5 GB would be most annoying: the download
+   * The moment where throwing away 555 MB would be most annoying: the download
    * finished, the digest matched, and the process died before the rename. The next
    * attempt gets a 416, and the part is promoted rather than discarded.
    */
   it('promotes a part file that is already the whole file', async () => {
-    await writeFile(`${destination}.part`, LOW_BODY, 'utf8');
+    await writeFile(`${destination}.part`, BODY, 'utf8');
 
     await downloadVerified({
       url: 'https://example.test/model.gguf',
       destination,
-      sha256: digestOf(LOW_BODY),
-      label: 'The Low model',
+      sha256: digestOf(BODY),
+      label: 'The recall model',
       fetchImpl: fakeFetch('', {status: 416}),
     });
 
-    expect(await readFile(destination, 'utf8')).toBe(LOW_BODY);
+    expect(await readFile(destination, 'utf8')).toBe(BODY);
   });
 
   it('discards a part file that is complete but wrong', async () => {
@@ -174,8 +173,8 @@ describe('downloadVerified', () => {
       downloadVerified({
         url: 'https://example.test/model.gguf',
         destination,
-        sha256: digestOf(LOW_BODY),
-        label: 'The Low model',
+        sha256: digestOf(BODY),
+        label: 'The recall model',
         fetchImpl: fakeFetch('', {status: 416}),
       }),
     ).rejects.toThrow(/did not match the pinned digest/u);
@@ -187,25 +186,25 @@ describe('downloadVerified', () => {
       downloadVerified({
         url: 'https://example.test/model.gguf',
         destination,
-        sha256: digestOf(LOW_BODY),
-        label: 'The High model',
+        sha256: digestOf(BODY),
+        label: 'The projector',
         fetchImpl: fakeFetch('', {status: 503}),
       }),
-    ).rejects.toThrow(/The High model could not be downloaded.*503/u);
+    ).rejects.toThrow(/The projector could not be downloaded.*503/u);
   });
 
   /*
    * A network failure has to say that the part is kept, because otherwise the
-   * reasonable thing to do is delete it and start again — which for the weights
-   * costs four gigabytes.
+   * reasonable thing to do is delete it and start again — which for the projector
+   * costs half a gigabyte.
    */
   it('says the part is kept when the network fails', async () => {
     await expect(
       downloadVerified({
         url: 'https://example.test/model.gguf',
         destination,
-        sha256: digestOf(LOW_BODY),
-        label: 'The Low model',
+        sha256: digestOf(BODY),
+        label: 'The recall model',
         fetchImpl: fakeFetch('', {failure: new Error('getaddrinfo ENOTFOUND')}),
       }),
     ).rejects.toThrow(/part already downloaded is kept/u);
@@ -216,15 +215,15 @@ describe('downloadVerified', () => {
     await downloadVerified({
       url: 'https://example.test/model.gguf',
       destination,
-      sha256: digestOf(LOW_BODY),
-      bytes: LOW_BODY.length,
-      label: 'The Low model',
+      sha256: digestOf(BODY),
+      bytes: BODY.length,
+      label: 'The recall model',
       // No content-length: the pinned size is the only thing that can say how far
       // along this is.
-      fetchImpl: fakeFetch(LOW_BODY, {headers: {}}),
+      fetchImpl: fakeFetch(BODY, {headers: {}}),
       onProgress: (progress) => {
-        expect(progress.label).toBe('The Low model');
-        expect(progress.totalBytes).toBe(LOW_BODY.length);
+        expect(progress.label).toBe('The recall model');
+        expect(progress.totalBytes).toBe(BODY.length);
         if (progress.percent !== undefined) {
           seen.push(progress.percent);
         }
@@ -235,68 +234,13 @@ describe('downloadVerified', () => {
   });
 });
 
-describe('installTier', () => {
-  let dir: string;
-  let manifest: LocalModelManifest;
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(process.cwd(), '.marimo-install-tier-'));
-    manifest = manifestFixture();
-  });
-
-  afterEach(async () => {
-    await rm(dir, {recursive: true, force: true});
-  });
-
-  it('downloads the tier from the pinned revision', async () => {
-    const calls: Array<{url: string; headers: Record<string, string>}> = [];
-    await installTier({
-      dir,
-      manifest,
-      tier: 'low',
-      fetchImpl: fakeFetch(LOW_BODY, {calls}),
-    });
-
-    expect(calls[0]?.url).toBe(
-      'https://huggingface.co/someone/model-GGUF/resolve/deadbeef/low.gguf',
-    );
-    expect(await readFile(join(dir, 'low.gguf'), 'utf8')).toBe(LOW_BODY);
-  });
-
-  /*
-   * A second launch must not re-download 2.7 GB. The check is the pinned byte
-   * count rather than the digest, for the reason the resolver gives: hashing
-   * gigabytes on every start is not an option.
-   */
-  it('does nothing when the tier is already the pinned size', async () => {
-    const tier = manifest.weights.tiers.low;
-    await writeFile(join(dir, tier.file), '', 'utf8');
-    const {truncate} = await import('node:fs/promises');
-    await truncate(join(dir, tier.file), tier.bytes);
-
-    let called = false;
-    const result = await installTier({
-      dir,
-      manifest,
-      tier: 'low',
-      fetchImpl: (async () => {
-        called = true;
-        return new Response('');
-      }) as unknown as typeof fetch,
-    });
-
-    expect(called).toBe(false);
-    expect(result.installed).toBe(false);
-  });
-});
-
 describe('the engine', () => {
   let dir: string;
-  let manifest: LocalModelManifest;
+  let manifest: EmbeddingManifest;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(process.cwd(), '.marimo-engine-'));
-    manifest = manifestFixture();
+    manifest = embeddingFixture();
   });
 
   afterEach(async () => {
@@ -436,36 +380,41 @@ describe('the engine', () => {
   });
 });
 
-/** The smallest manifest that exercises both tiers and the engine asset. */
-function manifestFixture(): LocalModelManifest {
-  return parseManifest({
+/**
+ * The recall model's manifest, small enough to write in a test.
+ *
+ * One fixture for both installers, because they read the same document: the
+ * engine asset is pinned to the digest the engine tests fetch, and the two pieces
+ * are strings a test can write to disk.
+ */
+function embeddingFixture(): EmbeddingManifest {
+  return parseEmbeddingManifest({
     engine: {
-      tag: 'b1',
+      tag: 'b2',
       baseUrl: 'https://example.test/dl',
       assets: {
         'linux-x64': {file: 'e.tar.gz', sha256: digestOf('archive-bytes')},
       },
-      backends: {'linux-x64': 'Vulkan'},
     },
     weights: {
-      repo: 'someone/model-GGUF',
-      revision: 'deadbeef',
+      repo: 'unsloth/embeddinggemma-2-GGUF',
+      revision: 'rev2',
       license: 'Apache-2.0',
-      kvBytesPerToken: 32768,
-      tiers: {
-        low: {
-          label: 'Low',
-          file: 'low.gguf',
-          sha256: digestOf(LOW_BODY),
-          bytes: LOW_BODY.length,
-          contextSize: 16384,
+      dims: 768,
+      contextSize: 8192,
+      pooling: 'mean',
+      pieces: {
+        text: {
+          label: 'The recall model',
+          file: 'text.gguf',
+          sha256: digestOf('the backbone'),
+          bytes: 'the backbone'.length,
         },
-        high: {
-          label: 'High',
-          file: 'high.gguf',
-          sha256: digestOf('the high tier'),
-          bytes: 13,
-          contextSize: 32768,
+        media: {
+          label: 'The encoder',
+          file: 'mmproj.gguf',
+          sha256: digestOf('the encoders'),
+          bytes: 'the encoders'.length,
         },
       },
     },
@@ -482,10 +431,10 @@ describe('InstallError', () => {
 /**
  * The recall model's two pieces.
  *
- * The same downloader as the chat tiers, so what is asserted here is only what
+ * The same downloader the engine uses, so what is asserted here is only what
  * differs: a piece is fetched from the recall repository at the pinned revision,
- * and a second piece — the projector — is a separate download that can be
- * present or absent entirely without the first being re-fetched.
+ * and the projector is a separate download that can be present or absent entirely
+ * without the backbone being re-fetched.
  */
 describe('installEmbeddingPiece', () => {
   let dir: string;
@@ -570,36 +519,3 @@ describe('installEmbeddingPiece', () => {
   });
 });
 
-/** A recall manifest whose pieces are small enough to write in a test. */
-function embeddingFixture(): EmbeddingManifest {
-  return parseEmbeddingManifest({
-    engine: {
-      tag: 'b2',
-      baseUrl: 'https://example.test/dl',
-      assets: {'linux-x64': {file: 'e.tar.gz', sha256: 'a'.repeat(64)}},
-      backends: {'linux-x64': 'Vulkan'},
-    },
-    weights: {
-      repo: 'unsloth/embeddinggemma-2-GGUF',
-      revision: 'rev2',
-      license: 'Apache-2.0',
-      dims: 768,
-      contextSize: 8192,
-      pooling: 'mean',
-      pieces: {
-        text: {
-          label: 'The recall model',
-          file: 'text.gguf',
-          sha256: digestOf('the backbone'),
-          bytes: 'the backbone'.length,
-        },
-        media: {
-          label: 'The encoder',
-          file: 'mmproj.gguf',
-          sha256: digestOf('the encoders'),
-          bytes: 'the encoders'.length,
-        },
-      },
-    },
-  });
-}

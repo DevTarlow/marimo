@@ -21,6 +21,7 @@ import {
 } from '@google/adk';
 import type {Content, Part} from '@google/genai';
 import type {
+  AgentModel,
   AgentUiEvent,
   CompactResult,
   PendingGate,
@@ -422,7 +423,15 @@ export class AgentHost {
   updateConfig(config: AgentConfig): void {
     const affectsRuns =
       config.model !== this.config.model ||
+      config.provider !== this.config.provider ||
       config.baseUrl !== this.config.baseUrl ||
+      /*
+       * The key is compared too, and that is not paranoia: a user who pastes a
+       * new key because the old one was refused must have the turn they are
+       * retrying use it, and a cached runner would otherwise keep sending the
+       * credential that just failed.
+       */
+      config.apiKey !== this.config.apiKey ||
       config.temperature !== this.config.temperature ||
       config.maxOutputTokens !== this.config.maxOutputTokens ||
       config.systemPrompt !== this.config.systemPrompt ||
@@ -639,6 +648,37 @@ export class AgentHost {
       sessionId,
       workspaceId,
     );
+    if (!entry) {
+      throw new Error(`Unknown session: ${sessionId}`);
+    }
+    return toSummary(entry);
+  }
+
+  /**
+   * The model a conversation was pointed at, or nothing when it follows the app.
+   *
+   * A read of the index entry, exactly like `sessionWorkspaceId` above and for
+   * the same reason: the window draws what a conversation will answer with before
+   * any turn runs, and reading the conversation's event log for one field would
+   * make opening a chat cost a scan of everything on disk.
+   */
+  async sessionModel(sessionId: string): Promise<AgentModel | undefined> {
+    return (await this.sessionService.getIndexEntry(sessionId))?.model;
+  }
+
+  /**
+   * Points a conversation at a model of its own, or back at its agent's.
+   *
+   * Ownership is asserted like every other path that touches a conversation, so a
+   * window cannot re-point another profile's chat by guessing at an id.
+   */
+  async setSessionModel(
+    sessionId: string,
+    model: AgentModel | undefined,
+    profileId?: string,
+  ): Promise<SessionSummary> {
+    await this.assertOwned(sessionId, profileId);
+    const entry = await this.sessionService.setSessionModel(sessionId, model);
     if (!entry) {
       throw new Error(`Unknown session: ${sessionId}`);
     }
@@ -1089,7 +1129,16 @@ export class AgentHost {
     return new OpenAiCompatLlm({
       model,
       baseUrl: this.config.baseUrl,
+      provider: this.config.provider,
+      apiKey: this.config.apiKey,
       temperature: this.config.temperature,
+      /*
+       * Read at send time rather than captured, for the reason the option
+       * documents: this client is cached per model and outlives the turn that
+       * built it, so the conversation it names has to be the one being answered
+       * now.
+       */
+      readSessionId: () => this.activeSessionId(),
       ...(this.config.maxOutputTokens !== undefined
         ? {maxOutputTokens: this.config.maxOutputTokens}
         : {}),
@@ -1210,9 +1259,18 @@ export class AgentHost {
     this.active = undefined;
   }
 
-  /** The runner for a model, built on first use and reused afterwards. */
+  /**
+   * The runner for a model, built on first use and reused afterwards.
+   *
+   * Keyed by provider *and* model, not by the model alone. Two conversations can
+   * be pointed at two services that happen to serve a model of the same name —
+   * `glm-5.3-flash` at OpenCode Go and the same name on somebody's own server —
+   * and a cache keyed on the name alone would hand one of them the other one's
+   * address and credential.
+   */
   private runnerFor(model: string): Runner {
-    const cached = this.runners.get(model);
+    const key = `${this.config.provider}\u0000${model}`;
+    const cached = this.runners.get(key);
     if (cached) {
       return cached;
     }
@@ -1220,12 +1278,7 @@ export class AgentHost {
     const agent = new LlmAgent({
       name: MAIN_AGENT_NAME,
       description: 'Marimo, a local desktop assistant.',
-      model: new OpenAiCompatLlm({
-        model,
-        baseUrl: this.config.baseUrl,
-        temperature: this.config.temperature,
-        maxOutputTokens: this.config.maxOutputTokens,
-      }),
+      model: this.llmFor(model),
       instruction: async () =>
         composeInstruction({
           base: this.config.systemPrompt,
@@ -1268,6 +1321,7 @@ export class AgentHost {
           ? {}
           : {recallService: this.recallService}),
         model,
+        provider: this.config.provider,
         ...(this.webSearch ? {webSearch: this.webSearch} : {}),
         ...(this.jobService ? {jobService: this.jobService} : {}),
         ...(this.discordService ? {discordService: this.discordService} : {}),
@@ -1324,7 +1378,7 @@ export class AgentHost {
           : new RepeatedToolCallPlugin(),
       ],
     });
-    this.runners.set(model, runner);
+    this.runners.set(key, runner);
     return runner;
   }
 
@@ -1826,6 +1880,7 @@ function toSummary(entry: {
   messageCount: number;
   workspaceId?: string;
   source?: SessionSource;
+  model?: AgentModel;
 }): SessionSummary {
   return {
     id: entry.id,
@@ -1835,6 +1890,7 @@ function toSummary(entry: {
     messageCount: entry.messageCount,
     ...(entry.workspaceId ? {workspaceId: entry.workspaceId} : {}),
     ...(entry.source ? {source: entry.source} : {}),
+    ...(entry.model ? {model: entry.model} : {}),
   };
 }
 

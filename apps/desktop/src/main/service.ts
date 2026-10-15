@@ -3,19 +3,26 @@
  *
  * The plan and the install live in `@marimo/runtime`, which knows nothing about
  * Electron. This file is the part that can only be answered here: which binary to
- * name, and where the runner script is.
- *
- * It used to answer a third question — whether the keys this install held were
- * ones a process without a keychain could read — and that went with the keys. A
- * background run needs no secret: the model is a local engine and the runner does
- * not dial connectors, so switching the service on is a plain choice now.
+ * name, where the runner script is, and — the one that is easy to get wrong —
+ * whether the provider a scheduled job would use is one a process with no
+ * keychain can actually read.
  */
 import {join} from 'node:path';
 
-import {installService, nodeServiceHost, serviceState, uninstallService} from '@marimo/runtime';
+import {
+  installService,
+  nodeServiceHost,
+  serviceState,
+  uninstallService,
+} from '@marimo/runtime';
 import type {AppPaths, ServiceSpec} from '@marimo/runtime';
 
-import type {ServiceChange, ServiceStatus} from '@marimo/protocol';
+import {activeProvider, PROVIDERS} from '@marimo/protocol';
+import type {
+  ServiceChange,
+  ServiceStatus,
+  StoredSettings,
+} from '@marimo/protocol';
 
 import {PRODUCT_NAME} from '../shared/product.js';
 
@@ -36,14 +43,39 @@ export interface ServiceContext {
   appPath: string;
   home: string;
   configHome: string;
+  /**
+   * The settings as they are on disk.
+   *
+   * Injected rather than read from `context.paths.settings` here, because the
+   * answer has to be the one the app is actually running under: a second reader
+   * of the same file would be a second answer to "which provider is active",
+   * and the one the card showed would be the wrong one.
+   */
+  readSettings: () => Promise<StoredSettings>;
+}
+
+/**
+ * Whether the active provider is one a process with no keychain could use.
+ *
+ * That process is the runner, and the question decides whether switching the
+ * service on is honest: a provider that needs no key — a llama.cpp server on the
+ * user's own machine — has nothing to decrypt, and one whose key the user chose
+ * to store readable can be read by anything. Anything else is a job that would
+ * be refused at the first turn, which is what the card has to say beforehand
+ * rather than after somebody has relied on it overnight.
+ */
+export function keysReadableIn(settings: StoredSettings): boolean {
+  const {id, keyStorage} = activeProvider(settings.providers);
+  return !PROVIDERS[id].requiresApiKey || keyStorage === 'plaintext';
 }
 
 /** The service definition for this install. */
 export function serviceSpec(context: ServiceContext): ServiceSpec {
   return {
-    platform: process.platform === 'darwin' || process.platform === 'win32'
-      ? process.platform
-      : 'linux',
+    platform:
+      process.platform === 'darwin' || process.platform === 'win32'
+        ? process.platform
+        : 'linux',
     execPath: context.execPath,
     /*
      * Inside the app, so the service runs the code that shipped with it rather
@@ -58,12 +90,15 @@ export function serviceSpec(context: ServiceContext): ServiceSpec {
   };
 }
 
-export async function statusOf(context: ServiceContext): Promise<ServiceStatus> {
+export async function statusOf(
+  context: ServiceContext,
+): Promise<ServiceStatus> {
   const spec = serviceSpec(context);
   const state = await serviceState(spec, nodeServiceHost());
   return {
     installed: state.installed,
     definitionPath: state.definitionPath,
+    keysReadable: keysReadableIn(await context.readSettings()),
   };
 }
 
@@ -85,7 +120,10 @@ export async function enable(context: ServiceContext): Promise<ServiceChange> {
 }
 
 export async function disable(context: ServiceContext): Promise<ServiceChange> {
-  const outcome = await uninstallService(serviceSpec(context), nodeServiceHost());
+  const outcome = await uninstallService(
+    serviceSpec(context),
+    nodeServiceHost(),
+  );
   return {
     installed: (await statusOf(context)).installed,
     notes: outcome.notes,

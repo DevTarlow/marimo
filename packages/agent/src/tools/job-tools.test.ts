@@ -117,6 +117,8 @@ describe('scheduling tools', () => {
     return {
       baseUrl: 'http://127.0.0.1:1',
       model: 'deepseek-chat',
+      provider: 'deepseek',
+      apiKey: '',
       temperature: 0,
       systemPrompt: 'test',
       profileId: 'profile-1',
@@ -130,6 +132,7 @@ describe('scheduling tools', () => {
       const tools = createTools(config(), {
         memory: new MemoryStore({workspaceRoot: workDir}),
         model: 'deepseek-chat',
+        provider: 'deepseek',
       });
       expect(tools.map((tool) => tool.name)).not.toContain('create_job');
     });
@@ -138,6 +141,7 @@ describe('scheduling tools', () => {
       const tools = createTools(config(), {
         memory: new MemoryStore({workspaceRoot: workDir}),
         model: 'deepseek-chat',
+        provider: 'deepseek',
         jobService: fakeJobs(),
       });
       expect(tools.map((tool) => tool.name).slice(9)).toEqual([

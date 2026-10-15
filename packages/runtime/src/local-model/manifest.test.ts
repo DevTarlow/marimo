@@ -10,55 +10,49 @@
 import {describe, expect, it} from 'vitest';
 
 import {
-  backendNameFor,
   embeddingUrl,
   engineAssetFor,
   engineUrl,
   ManifestError,
   parseEmbeddingManifest,
-  parseManifest,
   platformKey,
-  weightsUrl,
 } from './manifest.js';
-import {EMBEDDING_PINS, MODEL_PINS} from './pins.js';
+import {EMBEDDING_PINS} from './pins.js';
 
-/** The smallest document that is a valid manifest. */
+/** The smallest document that is a valid recall manifest. */
 function fixture(): Record<string, unknown> {
   return {
     engine: {
-      tag: 'b1',
+      tag: 'b2',
       baseUrl: 'https://example.test/dl',
-      assets: {
-        'linux-x64': {file: 'engine.tar.gz', sha256: 'a'.repeat(64)},
-      },
-      backends: {'linux-x64': 'vulkan'},
+      assets: {'linux-x64': {file: 'engine.tar.gz', sha256: 'a'.repeat(64)}},
     },
     weights: {
-      repo: 'someone/model-GGUF',
+      repo: 'unsloth/embeddinggemma-2-GGUF',
       revision: 'deadbeef',
       license: 'Apache-2.0',
-      kvBytesPerToken: 32768,
-      tiers: {
-        low: {
-          label: 'Low',
-          file: 'low.gguf',
+      dims: 768,
+      contextSize: 8192,
+      pooling: 'mean',
+      pieces: {
+        text: {
+          label: 'The recall model',
+          file: 'text.gguf',
           sha256: 'b'.repeat(64),
-          bytes: 2_740_937_888,
-          contextSize: 16384,
+          bytes: 10,
         },
-        high: {
-          label: 'High',
-          file: 'high.gguf',
+        media: {
+          label: 'The encoder',
+          file: 'mmproj.gguf',
           sha256: 'c'.repeat(64),
-          bytes: 4_482_403_488,
-          contextSize: 32768,
+          bytes: 20,
         },
       },
     },
   };
 }
 
-/** The fixture with one path replaced, for the refusal cases. */
+/** The fixture with one path deleted, for the refusal cases. */
 function without(path: string): Record<string, unknown> {
   const copy = structuredClone(fixture());
   const parts = path.split('.');
@@ -82,35 +76,26 @@ function withValue(path: string, value: unknown): Record<string, unknown> {
   return copy;
 }
 
-describe('parseManifest', () => {
-  it('reads the tiers, with their sizes and context targets', () => {
-    const manifest = parseManifest(fixture());
+describe('parseEmbeddingManifest', () => {
+  it('reads the document and names each piece', () => {
+    const manifest = parseEmbeddingManifest(fixture());
 
-    expect(manifest.weights.tiers.low).toMatchObject({
-      name: 'low',
-      label: 'Low',
-      file: 'low.gguf',
-      bytes: 2_740_937_888,
-      contextSize: 16384,
-    });
-    expect(manifest.weights.tiers.high.contextSize).toBe(32768);
-    expect(manifest.weights.kvBytesPerToken).toBe(32768);
-  });
-
-  it('reads the engine tag and base URL that the URLs are built from', () => {
-    const manifest = parseManifest(fixture());
-    expect(manifest.engine.tag).toBe('b1');
-    expect(manifest.engine.baseUrl).toBe('https://example.test/dl');
+    expect(manifest.weights.dims).toBe(768);
+    expect(manifest.weights.contextSize).toBe(8192);
+    expect(manifest.weights.pooling).toBe('mean');
+    expect(manifest.weights.pieces.text.name).toBe('text');
+    expect(manifest.weights.pieces.media.file).toBe('mmproj.gguf');
+    expect(manifest.engine.tag).toBe('b2');
   });
 
   it('refuses a document that is not an object at all', () => {
-    expect(() => parseManifest(null)).toThrow(ManifestError);
-    expect(() => parseManifest([])).toThrow(/not an object/u);
-    expect(() => parseManifest('nope')).toThrow(/not an object/u);
+    expect(() => parseEmbeddingManifest(null)).toThrow(ManifestError);
+    expect(() => parseEmbeddingManifest([])).toThrow(/not an object/u);
+    expect(() => parseEmbeddingManifest('nope')).toThrow(/not an object/u);
   });
 
   it('refuses an empty asset list, which would fetch nothing', () => {
-    expect(() => parseManifest(withValue('engine.assets', {}))).toThrow(
+    expect(() => parseEmbeddingManifest(withValue('engine.assets', {}))).toThrow(
       /engine\.assets is empty/u,
     );
   });
@@ -122,68 +107,80 @@ describe('parseManifest', () => {
   it('refuses a digest that is not a sha256', () => {
     for (const bad of ['', 'abc', 'A'.repeat(64), `${'a'.repeat(63)}z`]) {
       expect(() =>
-        parseManifest(withValue('engine.assets.linux-x64.sha256', bad)),
+        parseEmbeddingManifest(withValue('engine.assets.linux-x64.sha256', bad)),
       ).toThrow(/sha256/u);
     }
     expect(() =>
-      parseManifest(withValue('weights.tiers.low.sha256', 'nope')),
-    ).toThrow(/weights\.tiers\.low\.sha256 is not a sha256/u);
+      parseEmbeddingManifest(withValue('weights.pieces.text.sha256', 'nope')),
+    ).toThrow(/weights\.pieces\.text\.sha256 is not a sha256/u);
+  });
+
+  /*
+   * A pooling the engine does not have is a start that fails with a usage
+   * message, so it is caught here where the message can name the field.
+   */
+  it('refuses a pooling this build does not know', () => {
+    expect(() =>
+      parseEmbeddingManifest(withValue('weights.pooling', 'average')),
+    ).toThrow(/weights\.pooling/u);
   });
 
   it('refuses a size that is not a positive whole number', () => {
     expect(() =>
-      parseManifest(withValue('weights.tiers.high.bytes', 0)),
+      parseEmbeddingManifest(withValue('weights.pieces.text.bytes', 0)),
     ).toThrow(/bytes is not a positive whole number/u);
     expect(() =>
-      parseManifest(withValue('weights.tiers.high.bytes', 1.5)),
+      parseEmbeddingManifest(withValue('weights.pieces.text.bytes', 1.5)),
     ).toThrow(/bytes is not a positive whole number/u);
     expect(() =>
-      parseManifest(withValue('weights.tiers.high.contextSize', -1)),
+      parseEmbeddingManifest(withValue('weights.contextSize', -1)),
     ).toThrow(/contextSize is not a positive whole number/u);
   });
 
-  it('refuses a tier the build expects but the file does not carry', () => {
-    expect(() => parseManifest(without('weights.tiers.high'))).toThrow(
-      /weights\.tiers\.high is not an object/u,
-    );
-  });
-
-  /*
-   * An asset with no backend name is a platform whose engine cannot be described
-   * to a user, and the sentence the refusal produces is the whole product in that
-   * case — so the two have to be declared together.
-   */
-  it('refuses an asset with no backend name beside it', () => {
-    expect(() => parseManifest(withValue('engine.backends', {}))).toThrow(
-      /engine\.assets\.linux-x64 has no engine\.backends entry/u,
+  it('refuses a piece the build expects but the file does not carry', () => {
+    expect(() => parseEmbeddingManifest(without('weights.pieces.media'))).toThrow(
+      /weights\.pieces\.media is not an object/u,
     );
   });
 
   it('refuses a missing field rather than defaulting it', () => {
-    expect(() => parseManifest(without('engine.tag'))).toThrow(
+    expect(() => parseEmbeddingManifest(without('engine.tag'))).toThrow(
       /engine\.tag is missing or empty/u,
     );
-    expect(() => parseManifest(without('weights.repo'))).toThrow(
+    expect(() => parseEmbeddingManifest(without('weights.repo'))).toThrow(
       /weights\.repo is missing or empty/u,
     );
-    expect(() => parseManifest(without('weights.kvBytesPerToken'))).toThrow(
-      /weights\.kvBytesPerToken/u,
+    expect(() => parseEmbeddingManifest(without('weights.dims'))).toThrow(
+      /weights\.dims/u,
     );
   });
 
-  it('ignores the prose beside a map, which is for a reader', () => {
-    const withNote = withValue('engine.backends', {
-      note: 'why vulkan',
-      'linux-x64': 'vulkan',
-    });
-    expect(parseManifest(withNote).engine.backends).toEqual({
-      'linux-x64': 'vulkan',
-    });
+  /*
+   * The width is written into every vector file, and a vector of the wrong width
+   * does not throw anywhere — it quietly scores against nothing, which reads as a
+   * search that finds nothing. So it is required rather than defaulted.
+   */
+  it('refuses a width that is not a positive whole number', () => {
+    expect(() => parseEmbeddingManifest(withValue('weights.dims', 0))).toThrow(
+      /weights\.dims/u,
+    );
+  });
+
+  /*
+   * The revision is in the URL rather than the branch name, which is what stops
+   * a re-uploaded file changing what the app ships.
+   */
+  it('pins each piece to a revision, not a branch', () => {
+    const manifest = parseEmbeddingManifest(fixture());
+
+    expect(embeddingUrl(manifest, manifest.weights.pieces.media)).toBe(
+      'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/deadbeef/mmproj.gguf',
+    );
   });
 });
 
 describe('looking an engine up', () => {
-  const manifest = parseManifest(fixture());
+  const manifest = parseEmbeddingManifest(fixture());
 
   it('finds the asset for a platform it was pinned for', () => {
     const found = engineAssetFor(manifest, {platform: 'linux', arch: 'x64'});
@@ -192,8 +189,8 @@ describe('looking an engine up', () => {
   });
 
   /*
-   * `undefined` is a real answer: a platform with no engine is one where the app
-   * cannot run its model, and the caller writes the sentence for that.
+   * `undefined` is a real answer: a platform with no engine is one where this
+   * feature cannot run, and the caller writes the sentence for that.
    */
   it('answers undefined for a platform this build does not ship', () => {
     expect(
@@ -205,114 +202,15 @@ describe('looking an engine up', () => {
     expect(platformKey('win32', 'x64')).toBe('win32-x64');
     expect(platformKey('darwin', 'arm64')).toBe('darwin-arm64');
   });
-
-  it('names the backend so a sentence can say Vulkan rather than GPU', () => {
-    expect(backendNameFor(manifest, {platform: 'linux', arch: 'x64'})).toBe(
-      'vulkan',
-    );
-    expect(
-      backendNameFor(manifest, {platform: 'darwin', arch: 'arm64'}),
-    ).toBeUndefined();
-  });
 });
 
 describe('the URLs a download uses', () => {
-  const manifest = parseManifest(fixture());
+  const manifest = parseEmbeddingManifest(fixture());
 
   it('puts the tag between the base URL and the file', () => {
     const found = engineAssetFor(manifest, {platform: 'linux', arch: 'x64'})!;
     expect(engineUrl(manifest, found.asset)).toBe(
-      'https://example.test/dl/b1/engine.tar.gz',
-    );
-  });
-
-  /*
-   * The revision is in the URL rather than the branch name, which is what stops
-   * a re-uploaded file changing what the app ships.
-   */
-  it('pins the weights to a revision, not a branch', () => {
-    expect(weightsUrl(manifest, manifest.weights.tiers.high)).toBe(
-      'https://huggingface.co/someone/model-GGUF/resolve/deadbeef/high.gguf',
-    );
-  });
-});
-
-/**
- * The recall model's pins.
- *
- * Separate from the chat manifest rather than a third tier of it, so the parse
- * is separate too — and the field it checks that the other one does not is
- * `dims`. A vector of the wrong width does not fail anywhere: it scores against
- * nothing, which reads as a search that finds nothing rather than as two files
- * that do not belong together. So the width is pinned, and the two pieces are
- * named rather than implied, because the projector is the difference between a
- * picture being indexable and a media request being one the engine cannot serve.
- */
-function embeddingFixture(): unknown {
-  return {
-    engine: {
-      tag: 'b2',
-      baseUrl: 'https://example.test/dl',
-      assets: {'linux-x64': {file: 'e.tar.gz', sha256: 'a'.repeat(64)}},
-      backends: {'linux-x64': 'Vulkan'},
-    },
-    weights: {
-      repo: 'unsloth/embeddinggemma-2-GGUF',
-      revision: 'deadbeef',
-      license: 'Apache-2.0',
-      dims: 768,
-      contextSize: 8192,
-      pooling: 'mean',
-      pieces: {
-        text: {label: 'The recall model', file: 'text.gguf', sha256: 'b'.repeat(64), bytes: 10},
-        media: {label: 'The encoder', file: 'mmproj.gguf', sha256: 'c'.repeat(64), bytes: 20},
-      },
-    },
-  };
-}
-
-describe('parseEmbeddingManifest', () => {
-  it('reads the document and names each piece', () => {
-    const manifest = parseEmbeddingManifest(embeddingFixture());
-
-    expect(manifest.weights.dims).toBe(768);
-    expect(manifest.weights.contextSize).toBe(8192);
-    expect(manifest.weights.pooling).toBe('mean');
-    expect(manifest.weights.pieces.text.name).toBe('text');
-    expect(manifest.weights.pieces.media.file).toBe('mmproj.gguf');
-    expect(manifest.engine.tag).toBe('b2');
-  });
-
-  /*
-   * A pooling the engine does not have is a start that fails with a usage
-   * message, so it is caught here where the message can name the field.
-   */
-  it('refuses a pooling this build does not know', () => {
-    const broken = embeddingFixture() as {weights: {pooling: string}};
-    broken.weights.pooling = 'average';
-
-    expect(() => parseEmbeddingManifest(broken)).toThrow(/weights\.pooling/u);
-  });
-
-  it('refuses a document with a piece missing', () => {
-    const broken = embeddingFixture() as {weights: {pieces: Record<string, unknown>}};
-    delete broken.weights.pieces['media'];
-
-    expect(() => parseEmbeddingManifest(broken)).toThrow(/weights\.pieces\.media/u);
-  });
-
-  it('refuses a width that is not a positive whole number', () => {
-    const broken = embeddingFixture() as {weights: {dims: number}};
-    broken.weights.dims = 0;
-
-    expect(() => parseEmbeddingManifest(broken)).toThrow(/weights\.dims/u);
-  });
-
-  it('pins each piece to a revision, not a branch', () => {
-    const manifest = parseEmbeddingManifest(embeddingFixture());
-
-    expect(embeddingUrl(manifest, manifest.weights.pieces.media)).toBe(
-      'https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/deadbeef/mmproj.gguf',
+      'https://example.test/dl/b2/engine.tar.gz',
     );
   });
 });
@@ -333,20 +231,13 @@ describe('EMBEDDING_PINS', () => {
   });
 
   /*
-   * The recall model needs an engine that knows `gemma-embedding2`, and the one
-   * the chat model runs on does not: b11429 answers "unknown model architecture:
-   * 'gemma-embedding2'" and exits. Two different tags is the whole reason this
-   * pin exists beside the other one, so it is asserted rather than commented.
+   * The model is `gemma-embedding2`, which llama.cpp only learned to load after
+   * the stable build that was current when the model was published — that build
+   * answers "unknown model architecture" and exits. Bumping the tag is therefore a
+   * change to the binary the whole feature runs on, and the flags in `args.ts`
+   * were verified against this one.
    */
-  it('runs on a newer engine than the chat model, and says so', () => {
-    expect(EMBEDDING_PINS.engine.tag).not.toBe(MODEL_PINS.engine.tag);
+  it('pins the engine tag the model was verified against', () => {
     expect(EMBEDDING_PINS.engine.tag).toBe('b11557');
-    expect(MODEL_PINS.engine.tag).toBe('b11429');
-  });
-
-  it('has an engine build for every platform the chat model has', () => {
-    expect(Object.keys(EMBEDDING_PINS.engine.assets).sort()).toEqual(
-      Object.keys(MODEL_PINS.engine.assets).sort(),
-    );
   });
 });

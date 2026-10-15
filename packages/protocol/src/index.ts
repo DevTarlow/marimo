@@ -11,6 +11,12 @@ import {z} from 'zod';
 
 import {parseCron} from './cron.js';
 import {mcpServerSchema, mcpServersAreDistinct} from './mcp.js';
+import {
+  providerIdSchema,
+  providersPatchSchema,
+  providersSchema,
+} from './providers.js';
+import type {ProviderId} from './providers.js';
 
 export {describeCron, nextCronRun, nextRunAfter, parseCron} from './cron.js';
 export type {CronSpec} from './cron.js';
@@ -39,71 +45,41 @@ export type {McpSecretRef, McpServer, McpTransport} from './mcp.js';
 import type {McpServer} from './mcp.js';
 
 /* -------------------------------------------------------------------------- */
-/* Settings                                                                    */
+/* Providers                                                                   */
 /* -------------------------------------------------------------------------- */
 
-/**
- * The one model this app answers with, as the name every request carries.
+/*
+ * The model backends this app can talk to, their descriptors, the settings
+ * schemas that choose one, and the rules about how a key is kept.
  *
- * There is no catalogue any more. The app runs exactly one model — Qwen3.5-4B, by
- * a llama.cpp engine it supervises on loopback — so a provider menu, per-endpoint
- * addresses and per-provider keys were three ways of describing a choice that no
- * longer exists. The app has no account and no key; that is the whole point of
- * carrying its own model.
- *
- * The id is not the file name, deliberately. It is what this app passes as the
- * request's `model` and what the engine is started with as its `--alias`: a label
- * between two processes of this app, whereas the name of a quantization on disk is
- * an implementation detail. It lives here because both the agent package (the
- * request body) and the runtime (the engine argv) need it, and this is the one
- * package they share.
+ * It is its own module rather than a block in this file because it is a
+ * catalogue with its own shape and its own tests, and because this file is the
+ * IPC contract: what every provider *is* belongs beside the shapes that carry it
+ * rather than in the middle of them.
  */
-export const LOCAL_MODEL_ID = 'qwen3.5-4b';
-
-/**
- * The two quantizations of that model, smallest first.
- *
- * Not two models: the same weights, the same chat template and the same tool
- * calls, differing in how much survived quantization and therefore in how much
- * memory they need. That is what makes choosing one a memory decision rather than
- * a capability one.
- */
-export const MODEL_TIERS = ['low', 'high'] as const;
-export const modelTierSchema = z.enum(MODEL_TIERS);
-export type ModelTier = z.infer<typeof modelTierSchema>;
-
-/**
- * Which tier to run: one of them, or let the app decide.
- *
- * `auto` is the default and is a real answer rather than a placeholder — the app
- * probes the graphics card and picks the largest tier that fits. The other two are
- * the override, and they exist because that probe is an *estimate*: weights, a
- * quantized cache and a compute buffer with a margin, not a measurement. Somebody
- * whose card can hold more than the estimate thinks should be able to say so.
- */
-export const MODEL_TIER_CHOICES = ['auto', ...MODEL_TIERS] as const;
-export const modelTierChoiceSchema = z.enum(MODEL_TIER_CHOICES);
-export type ModelTierChoice = z.infer<typeof modelTierChoiceSchema>;
-
-/**
- * One tier as the window draws it: what it is, what it costs, whether it is here.
- *
- * The size and the context travel to the renderer rather than being computed
- * there, because they come from the pins the main process reads — and a second
- * copy of "how big is the large model" in the window is a number that can disagree
- * with the one being downloaded.
- */
-export interface ModelTierSummary {
-  name: ModelTier;
-  /** What the picker shows. */
-  label: string;
-  /** What it would download, in bytes. */
-  bytes: number;
-  /** The context window it is started with. */
-  contextSize: number;
-  /** Whether its weights are already on disk. */
-  installed: boolean;
-}
+export {
+  activeProvider,
+  DEFAULT_PROVIDER_ID,
+  defaultProviders,
+  fallbackModelsFor,
+  PROVIDER_IDS,
+  PROVIDER_KEY_STORAGE,
+  providerConfigSchema,
+  providerDescriptor,
+  providerIdSchema,
+  providerKeyStorageSchema,
+  PROVIDERS,
+  providersPatchSchema,
+  providersSchema,
+} from './providers.js';
+export type {
+  ProviderConfig,
+  ProviderDescriptor,
+  ProviderId,
+  ProviderKeyStorage,
+  Providers,
+  ProvidersPatch,
+} from './providers.js';
 
 /**
  * The things the window can do to a conversation itself, as opposed to things
@@ -829,15 +805,18 @@ export const settingsSchema = z.object({
    */
   temperature: z.number().min(0).max(2),
   /**
-   * Which tier of the model to run, or `auto` to let the app decide.
+   * Which service answers, and what each one was last set to.
    *
-   * `.catch` rather than a plain enum, for the reason `experienceMode` has it: a
-   * hand-edited file with a typo in this one word must cost the choice its own
-   * value, not fail the whole settings parse and reset everything else. What it
-   * falls back to is the app deciding, which is the answer that cannot be wrong
-   * about somebody's hardware.
+   * The app's default, and the fallback for an agent that has no model of its
+   * own: an agent may name its own provider and model, and a conversation may
+   * override both, but every request resolves through this block when neither
+   * says anything.
+   *
+   * It is here rather than per profile because a provider key is one key for the
+   * install: a second agent using the same service must not need a second copy of
+   * the credential.
    */
-  modelTier: modelTierChoiceSchema.catch('auto'),
+  providers: providersSchema,
   maxOutputTokens: z.number().int().positive().optional(),
   /** Opt-in escape hatch for `http_fetch` hitting loopback/private hosts. */
   allowPrivateNetworkFetch: z.boolean(),
@@ -1018,6 +997,7 @@ export const settingsPatchSchema = settingsSchema.partial().extend({
   /* Any subset of the block, merged over what is stored — the reason above. */
   recall: recallSettingsSchema.partial().optional(),
   dream: dreamSettingsSchema.partial().optional(),
+  providers: providersPatchSchema.optional(),
 });
 
 /*
@@ -1028,16 +1008,29 @@ export const settingsPatchSchema = settingsSchema.partial().extend({
  */
 export type Settings = z.infer<typeof settingsSchema>;
 export type SettingsPatch = z.infer<typeof settingsPatchSchema>;
+
 /**
- * The settings as they are on disk.
+ * What an endpoint last said it serves, per provider.
  *
- * It used to be `Settings` plus `availableModels` — the model list an endpoint
- * reported, kept out of the patchable half so a stale window could not overwrite
- * it with a guess. There is no endpoint to report a list any more, so the two
- * types are one, and the name survives only so the stores and the payload keep
- * saying which of them they mean.
+ * Out of the patchable half on purpose, and that is the whole reason this type
+ * exists beside `Settings`: a list a provider reported is a *fact* rather than a
+ * preference, and a window holding a copy from before a refresh would otherwise
+ * be able to overwrite the newer list with its guess — silently, because both
+ * writes succeed.
  */
-export type StoredSettings = Settings;
+export interface AvailableModels {
+  /** Fetched from `GET /models`, replacing the catalogue's placeholders. */
+  [provider: string]: string[];
+}
+
+/**
+ * The settings as they are on disk: the preferences, plus what was fetched.
+ *
+ * The split matters at exactly one boundary — the patch. A caller may write any
+ * preference through `settings.set`; the fetched lists are written only by the
+ * call that fetched them.
+ */
+export type StoredSettings = Settings & {availableModels: AvailableModels};
 
 /* -------------------------------------------------------------------------- */
 /* Agent profiles and workspaces                                               */
@@ -1132,6 +1125,25 @@ export const DEFAULT_AGENT_IDENTITY = [
 ].join('\n');
 
 /**
+ * What an agent answers with, when it does not want the app's default.
+ *
+ * Absent means "the provider block in settings decides", which is what every
+ * agent written before this field existed gets — and it stays the right answer
+ * for the agent most people use: one default, chosen once.
+ *
+ * A pair rather than a model id alone, because a model id means nothing apart
+ * from the endpoint that serves it: `glm-5.3-flash` at OpenCode Go and a file of
+ * the same name on somebody's llama.cpp server are two different models, and a
+ * bare string would let the app pick the wrong one silently.
+ */
+export const agentModelSchema = z.object({
+  provider: providerIdSchema,
+  model: z.string().trim().min(1),
+});
+
+export type AgentModel = z.infer<typeof agentModelSchema>;
+
+/**
  * An agent: its identity (the system prompt) and the tools and skills it is
  * allowed to use. Switching profile is what makes the app feel like a different
  * agent, so each one also owns its conversations.
@@ -1166,6 +1178,16 @@ export const agentProfileSchema = z.object({
   enabledTools: z.array(z.string()),
   /** Skill names this profile carries, from `profiles.catalog`. */
   enabledSkills: z.array(z.string()),
+  /**
+   * What this agent answers with, when it is not the app's default.
+   *
+   * Optional for the reason `preferences` above is optional, and the reason is
+   * not tidiness: a required field here would fail this schema for every agent
+   * that already exists, and `ProfileStore.parseFile` skips a profile it cannot
+   * parse — a file whose profiles were all skipped is renamed aside and replaced
+   * with a fresh agent. The whole roster would be lost to an upgrade.
+   */
+  model: agentModelSchema.optional(),
 });
 
 export const profilePatchSchema = z.object({
@@ -1175,6 +1197,15 @@ export const profilePatchSchema = z.object({
   preferences: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
   enabledSkills: z.array(z.string()).optional(),
+  /**
+   * The agent's own model, or `null` to go back to the app's default.
+   *
+   * Where every other field here says "absent leaves it alone", this one has to
+   * be able to *unset*: an agent moved back to the default is a real answer, and
+   * without a null there would be no way to express it — the picker would only
+   * ever move an agent off the default, never back onto it.
+   */
+  model: agentModelSchema.nullable().optional(),
 });
 
 /** One entry in the pick-lists Settings renders, reported by the agent. */
@@ -1255,116 +1286,56 @@ export function emptySkillsFile(): SkillsFile {
 }
 
 /**
- * How the built-in model is doing, as the window draws it.
- *
- * One shape for one card, and it carries the *paths* rather than only a verdict,
- * because the failure it exists for is a file that is not where the app looked:
- * "the built-in model is not installed" is a complaint about nothing until it
- * says which file it wanted. `command` is the same fact for a power user — the
- * exact argv the app hands the engine, so it can be run by hand and compared
- * against whatever the user's own server does.
- */
-export interface EngineStatus {
-  state: 'off' | 'starting' | 'ready' | 'failed';
-  /** Where requests go, once it is up. Absent before that, and after a stop. */
-  baseUrl?: string;
-  /** Why it is not ready, in a sentence somebody can act on. */
-  detail?: string;
-  /** Whether the chosen tier's weights are where the app looks for them. */
-  modelPresent: boolean;
-  /** Whether the engine binary is. Reported apart from the weights because
-   *  they come from different places and are fixed in different ways. */
-  enginePresent: boolean;
-  /** The file the engine would be given. */
-  modelPath: string;
-  /** The engine binary. */
-  enginePath: string;
-  /** Exactly what the app runs to start it. */
-  command: string[];
-  /** The last lines the engine printed, oldest first. */
-  log: string[];
-}
-
-/**
- * The process, and the decision about which process to run.
- *
- * Split because two different things answer them: the supervisor knows what it
- * started and where the files are, and the resolver knows what the machine can
- * take and why. Only the window needs both at once, and a supervisor that had to
- * carry a plan it did not make would be a second place that could disagree about
- * the tier.
- */
-export interface LocalModelStatus extends EngineStatus {
-  /**
-   * Which tier the app would run, at which window, and why.
-   *
-   * The whole plan rather than just the answer, because the two things a person
-   * can do with it are disagree with it and understand it: `reason` is the
-   * sentence the card shows verbatim, and `tiers` is what the picker draws.
-   */
-  tier: ModelTier;
-  tierLabel: string;
-  contextSize: number;
-  /** What this platform's GPU backend is called, e.g. `Vulkan`. */
-  backend?: string;
-  /**
-   * Whether the machine can run any tier at all.
-   *
-   * False means the probe found no usable device, or a card too small for even
-   * the small tier — and then `problem` is the sentence to show instead of a
-   * download button.
-   */
-  runnable: boolean;
-  /** Why not, when it cannot. Absent when it can. */
-  problem?: string;
-  /** The plan's own sentence, for the card to show. */
-  reason: string;
-  /** Whether the estimate says the chosen tier fits. False is a warning. */
-  fits: boolean;
-  /** Both tiers, as the picker draws them. */
-  tiers: ModelTierSummary[];
-  /**
-   * What is being downloaded right now, when something is.
-   *
-   * On the status as well as on the event channel, because a window that opened
-   * mid-download has missed every event and would otherwise draw an idle card
-   * over a download in progress.
-   */
-  installing?: {
-    label: string;
-    receivedBytes: number;
-    totalBytes: number;
-    percent?: number;
-  };
-}
-
-/**
  * What the renderer is allowed to see.
  *
- * No credential is here and none can be: the app holds no model key at all, and
- * the only secrets it keeps are connector tokens, which never cross this
- * boundary. What the window *does* need is the one fact only the main process
- * has — whether the model could answer a question right now.
+ * No credential is here and none can be: the window is told whether a key is
+ * *set* for a provider, never what it is. What it does need is the two facts only
+ * the main process has — whether the app could answer a question right now, and
+ * whether this machine can encrypt a key at all.
  */
 export type PublicSettings = Settings & {
   /**
    * Whether the app can answer at all, right now.
    *
-   * A fact only the process that looked can supply: the model needs no key and no
-   * address, so what decides this is whether the weights and the engine are where
-   * the app looks and whether an engine started. A window that guessed from what
-   * it can see would open a chat on a machine that cannot reply.
+   * A fact only the process that resolved it can supply: it is true when the
+   * active provider's model is known and its key is either unnecessary or stored
+   * and readable. A window that guessed from what it can see would open a chat on
+   * a machine that cannot reply.
    */
   modelReady: boolean;
   /**
    * Why not, when it is not — the sentence the welcome screen shows.
    *
    * A reason rather than a boolean, because the failures have nothing in common:
-   * a missing engine, a missing file and an engine that refused are fixed in
+   * no key, an unreadable key and a provider this build does not know are fixed in
    * different places, and a screen that said "not ready" for all of them would be
    * a dead end for each.
    */
   modelProblem?: string;
+  /**
+   * Which providers have a key stored, by id. Never the key.
+   *
+   * A provider that needs no key reports `false` here and is not thereby
+   * unusable; this says what is stored, and `requiresApiKey` on the descriptor
+   * says whether that matters.
+   */
+  providerKeys: Partial<Record<ProviderId, boolean>>;
+  /**
+   * Whether this machine can encrypt a key at rest.
+   *
+   * False is not a failure to report as one — a local server needs no key — but
+   * it is what the key card has to say before a user types a secret into a field
+   * whose storage is about to refuse it.
+   */
+  encryptionAvailable: boolean;
+  /**
+   * What the active provider last said it serves, or its catalogue placeholder.
+   *
+   * The *active* provider's list, because that is the one a model picker is
+   * choosing within; every provider's stored list is in the settings document the
+   * window already has.
+   */
+  availableModels: string[];
   /**
    * The last discovery-log write that failed, or nothing.
    *
@@ -1426,6 +1397,15 @@ export interface SessionSummary {
    * and never under a folder, whatever `workspaceId` happens to say.
    */
   source?: SessionSource;
+  /**
+   * The model this conversation was pointed at, when it has one of its own.
+   *
+   * Absent means "whatever the agent answers with", which is the state every
+   * conversation starts in and the state most stay in. A conversation is the
+   * right place for this rather than a second agent: "answer this one question
+   * with the big model" is a decision about a question, not about a bot.
+   */
+  model?: AgentModel;
 }
 
 export interface ToolCallRecord {
@@ -2348,30 +2328,11 @@ export type AgentUiEvent =
    * which is precisely the moment they are most likely to go looking for it.
    */
   | {type: 'skills.changed'}
-  /**
-   * A model download is under way, and how far along.
-   *
-   * An event rather than a polled field, because a 4.5 GB download is the one
-   * thing in this app a person watches: the number has to move while they look at
-   * it, and a card that re-read the status on a timer would be a poll for
-   * something that only happens once.
-   */
-  | {
-      type: 'model.progress';
-      label: string;
-      receivedBytes: number;
-      totalBytes: number;
-      percent?: number;
-    }
-  /** A download finished, so whatever needed it can be re-read. */
-  | {type: 'model.installed'; tier: ModelTier}
-  /** A download failed, with the sentence that says why. */
-  | {type: 'model.failed'; message: string}
   /*
-   * The recall model's own four, shaped like the model's above and separate from
-   * them on purpose: the card that draws them has different words to say, and a
-   * `model.progress` carrying an embedding download would make two unrelated
-   * things one event with a string in it to tell them apart.
+   * The recall model's own four, shaped like a download's and separate from
+   * everything else on purpose: the card that draws them has different words to
+   * say, and a shared progress event carrying an embedding download would make
+   * two unrelated things one event with a string in it to tell them apart.
    */
   | {
       type: 'recall.progress';
@@ -2527,6 +2488,17 @@ export interface ServiceStatus {
   installed: boolean;
   /** The definition's location, shown so a user can go and look. */
   definitionPath: string;
+  /**
+   * Whether a process with no keychain could use the agent's provider.
+   *
+   * The runner has no `app` object and therefore no `safeStorage`, so a key is
+   * readable to it only when the user said so. True here means "a scheduled job
+   * would work with this provider as configured": the provider needs no key, or
+   * its key was stored readable. False is not a fault — it is the state a user
+   * is in before they answer the question, and it is what the switch's own copy
+   * has to say rather than leaving a job to fail on the night it was needed.
+   */
+  keysReadable: boolean;
 }
 
 export interface AppInfo {
@@ -2553,14 +2525,6 @@ export interface AppInfo {
    * between the two is a real and otherwise invisible failure.
    */
   userData: string;
-  /**
-   * Whether an OS keychain is available to encrypt secrets.
-   *
-   * False is not an error. It is what makes "run jobs while the app is closed"
-   * need the plain-text opt-in, so the window has to know before it offers the
-   * toggle.
-   */
-  secretsEncrypted: boolean;
   /**
    * Something wrong that the user has to know about but that has not stopped
    * the app working.
@@ -2838,33 +2802,41 @@ export const agentCallSchemas = {
   'service.disable': z.object({}),
 
   /*
-   * The model the app runs itself.
+   * The provider a request goes to.
    *
-   * `status` is a read — the card asks again every time it is drawn — and the
-   * other two are the buttons beside it. They are calls rather than a settings
-   * write because they start and stop a process: a settings patch that quietly
-   * spawned an engine would report success for something that had not happened.
+   * `settings.set` carries every *preference* about it — which provider is
+   * active, each one's address, its model, and how its key is stored — because
+   * those are values in a document. The two calls here are not: one writes a
+   * secret, and one reaches the network. A settings patch that quietly did either
+   * would report success for work it had not done.
    */
-  'localModel.status': z.object({}),
-  'localModel.start': z.object({}),
-  'localModel.stop': z.object({}),
+  'settings.setApiKey': z.object({
+    apiKey: z.string(),
+    /* Absent means the active provider, which is what the key card is about. */
+    provider: providerIdSchema.optional(),
+  }),
   /*
-   * Fetches the engine and the chosen tier, reporting progress on the event
-   * channel. A call rather than a settings write for the reason the two above are:
-   * it reaches the network for gigabytes, and a write that quietly did that would
-   * report success for work it had not finished.
+   * Asks one provider what it serves: `GET /models`, with its key.
    *
-   * It answers as soon as the download has *started*, because that is what the
-   * window is waiting for — the progress arrives as events, and a call that
-   * blocked for four gigabytes would be an invoke nobody can cancel.
+   * A call rather than a patch because the answer is a fact about an endpoint
+   * rather than a preference, and because it can fail in ways the user has to be
+   * told about — an unreachable host, a refused key, an empty list. The stored
+   * list it returns is written by the store, with a provider's own list replaced
+   * rather than merged.
    */
-  'localModel.install': z.object({}),
+  'providers.fetch': z.object({provider: providerIdSchema.optional()}),
   /*
-   * Stops a download in flight. Not a nicety: the large tier is 4.5 GB, and a
-   * download with no way to stop it is one somebody closes the app to escape.
-   * What has arrived is kept, so the next attempt resumes rather than restarts.
+   * One conversation's own model, or `null` to follow the agent again.
+   *
+   * A call rather than a profile patch for the obvious reason: it is a fact about
+   * a conversation, and the conversation may not be the one the agent's card is
+   * about.
    */
-  'localModel.cancel': z.object({}),
+  'sessions.setModel': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+    model: agentModelSchema.nullable(),
+  }),
 
   /*
    * Recall: the model that finds things by meaning.
@@ -2981,11 +2953,9 @@ export interface AgentCallResults {
   'service.status': ServiceStatus;
   'service.enable': ServiceChange;
   'service.disable': ServiceChange;
-  'localModel.status': LocalModelStatus;
-  'localModel.start': LocalModelStatus;
-  'localModel.stop': LocalModelStatus;
-  'localModel.install': {started: boolean};
-  'localModel.cancel': {cancelled: boolean};
+  'settings.setApiKey': {settings: PublicSettings};
+  'providers.fetch': {settings: PublicSettings};
+  'sessions.setModel': {session: SessionSummary};
   'recall.status': RecallModelStatus;
   'recall.install': {started: boolean};
   'recall.cancel': {cancelled: boolean};

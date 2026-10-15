@@ -24,7 +24,7 @@ import {
 } from 'electron';
 import type {OpenDialogOptions} from 'electron';
 
-import {agentCallSchemas, IPC_CALL_CHANNEL} from '@marimo/protocol';
+import {agentCallSchemas, IPC_CALL_CHANNEL, PROVIDERS} from '@marimo/protocol';
 import type {
   AgentCallMethod,
   AgentCallParams,
@@ -106,8 +106,9 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
   /**
    * The settings a window may see.
    *
-   * No credential is here and none can be: the app holds no model key, and the
-   * only secrets it keeps are connector tokens, which never cross this boundary.
+   * No credential is here and none can be. A provider is reported as a *boolean* —
+   * a key is set for it or it is not — and the one secret this app stores besides
+   * the connector tokens never crosses this boundary in any other form.
    */
   async function publicSettings(): Promise<PublicSettings> {
     const service = dependencies.agent();
@@ -116,7 +117,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     }
     const settings = await service.settings();
     const profiles = await service.profiles();
-    const readiness = await modelReadiness(service);
+    const readiness = await providerReadiness(service);
     const dreamProblem = service.dreamProblem();
 
     return {
@@ -125,6 +126,15 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       ...(readiness.problem === undefined
         ? {}
         : {modelProblem: readiness.problem}),
+      providerKeys: await service.providerKeys(),
+      /*
+       * Asked every time rather than cached: on Linux a keyring that was locked
+       * at launch can become usable later in the session, and the key card has to
+       * know before it offers a field whose storage will refuse it.
+       */
+      encryptionAvailable: safeStorageCipher.available(),
+      availableModels:
+        settings.availableModels[settings.providers.active] ?? [],
       ...(dreamProblem === undefined ? {} : {dreamProblem}),
       profiles: profiles.profiles,
       activeProfileId: profiles.activeProfileId,
@@ -134,47 +144,51 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
   /**
    * Whether this install could answer a question right now.
    *
-   * A fact only this process has: the model needs no key and no address, so what
-   * decides it is whether the machine has a usable GPU, whether what that GPU can
-   * take has been downloaded, and whether an engine started. A window that guessed
-   * would open a chat on a machine that cannot reply.
+   * A fact only the main process has: the window holds the catalogue but not the
+   * keys, so "there is a key for the provider this build is pointed at, and this
+   * process can read it" is not something it can work out for itself. A window
+   * that guessed would open a chat on a machine that cannot reply.
    *
-   * The order is the order of the fixes. Nothing downloaded is a download; a
-   * machine whose engine is here but has no usable device is a dead end, and its
-   * sentence comes from the plan rather than from this function — that is the one
-   * place that knows what the card reported.
+   * The order is the order of the fixes. A provider nobody chose is a choice; a
+   * provider with no key is a key; and a key this process cannot decrypt is not
+   * the same problem as a key that was never entered, which is why the store's
+   * own sentence is passed through rather than replaced with "add a key" — that
+   * would send somebody to re-enter a key they already have.
    *
-   * The engine is *not* started to answer this: the question is asked every time
-   * the settings are read, and loading gigabytes of weights to report on them would
-   * be a spinner on every turn.
+   * `modelReady` and `modelProblem` keep their names because the window's gate
+   * reads them; what answers them is a provider now rather than an engine.
    */
-  async function modelReadiness(
+  async function providerReadiness(
     service: AgentService,
   ): Promise<{ok: boolean; problem?: string}> {
-    const status = await service.model.status();
-    if (status.state === 'failed') {
-      return {ok: false, problem: status.detail ?? 'The model did not start.'};
-    }
-    if (!status.enginePresent) {
+    const settings = await service.settings();
+    const provider = PROVIDERS[settings.providers.active];
+    /*
+     * Only reachable through a document naming a service this build has never
+     * heard of, which every schema in the protocol refuses — a hand-edited file
+     * is the one way in, and a dereference of `undefined.label` would be a crash
+     * rather than a sentence.
+     */
+    if (provider === undefined) {
       return {
         ok: false,
         problem:
-          'The model has not been downloaded yet. It needs a graphics card, and ' +
-          'the download is about 3 GB.',
+          'The selected service is not one this version of the app knows. ' +
+          'Choose a provider in Settings.',
       };
     }
-    if (!status.runnable) {
+    const secret = await service.readSecret(settings.providers.active);
+    if (secret.state === 'unreadable') {
+      return {ok: false, problem: secret.reason};
+    }
+    if (provider.requiresApiKey && secret.state !== 'present') {
       return {
         ok: false,
-        problem: status.problem ?? 'This machine cannot run the model.',
+        problem: `${provider.label} needs an API key. Add one in Settings.`,
       };
     }
-    if (!status.modelPresent) {
-      return {
-        ok: false,
-        problem: `The ${status.tierLabel} model has not been downloaded yet.`,
-      };
-    }
+    // A provider that needs no key is ready: a local server is the case this
+    // exists for, and its address is set by default.
     return {ok: true};
   }
 
@@ -281,10 +295,6 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       node: process.versions['node'] ?? '',
       platform: process.platform,
       userData: dependencies.paths.userData,
-      // Asked every time rather than cached: on Linux a keyring that was locked
-      // at launch can become usable later in the session, and the answer decides
-      // whether the window can offer to run jobs while the app is closed.
-      secretsEncrypted: safeStorageCipher.available(),
       ...(dependencies.warning === undefined
         ? {}
         : {warning: dependencies.warning}),
@@ -297,6 +307,36 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       dependencies.onSettingsChanged?.();
       return {settings: await publicSettings()};
     },
+
+    /*
+     * A key is written here rather than through `settings.set`, because it is not
+     * a preference: it goes into a secret file through the keychain, and a patch
+     * that quietly did that would report success for a write the store may have
+     * refused.
+     */
+    'settings.setApiKey': async (params) => {
+      await agent().setApiKey(params.apiKey, params.provider);
+      return {settings: await publicSettings()};
+    },
+
+    /*
+     * Reaches the network, and may fail in ways the user has to be told about —
+     * an unreachable host, a refused key, a list this build cannot read. The
+     * failure is thrown rather than returned, which is where Electron puts it:
+     * the button that asked sees the sentence.
+     */
+    'providers.fetch': async (params) => {
+      await agent().fetchModels(params.provider);
+      return {settings: await publicSettings()};
+    },
+
+    'sessions.setModel': async (params) => ({
+      session: await agent().setSessionModel(
+        params.profileId,
+        params.sessionId,
+        params.model,
+      ),
+    }),
 
     'mcp.set': async (params) => {
       const servers = await agent().setMcpServer(params.server);
@@ -396,12 +436,6 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       }
       if (params.visible) {
         await window.show();
-        /*
-         * Showing the moss is the other signal that somebody is about to ask
-         * something — and the only one there is when the app is running from the
-         * tray with the main window closed. Best-effort, like the window's.
-         */
-        void dependencies.agent()?.warmModel();
       } else {
         window.hide();
       }
@@ -423,7 +457,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'service.status': async () =>
       dependencies.service === undefined
-        ? {installed: false, definitionPath: ''}
+        ? {installed: false, definitionPath: '', keysReadable: true}
         : await statusOf(dependencies.service),
 
     'service.enable': async () =>
@@ -436,42 +470,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
         ? {installed: false, notes: [], failures: []}
         : await disable(dependencies.service),
 
-    /*
-     * The model the app runs itself.
-     *
-     * A read and two buttons, rather than a settings patch that starts
-     * something: a write that quietly spawned an engine would report success for
-     * work it had not done. The status is asked for every time the card is
-     * drawn, so a failure that has since been fixed stops being reported.
-     */
-    'localModel.status': async () => await agent().model.status(),
-
-    /*
-     * Started and stopped explicitly, which is what the buttons are for. Neither
-     * is awaited into a timeout: a start loads a gigabyte of weights, and the
-     * card shows what the supervisor is doing while it does — `starting` is one
-     * of its states for exactly this reason.
-     */
-    'localModel.start': async () => {
-      await agent().model.ensureRunning();
-      return await agent().model.status();
-    },
-
-    'localModel.stop': async () => {
-      await agent().model.stop();
-      return await agent().model.status();
-    },
-
-    /*
-     * Fetches the engine and the chosen tier. Answers `started`, not `finished`:
-     * the download reports itself as `model.progress` events, and an invoke that
-     * waited for four gigabytes would be one nobody could cancel.
-     */
-    'localModel.install': async () => await agent().model.install(),
-
-    'localModel.cancel': async () => agent().model.cancel(),
-
-    /* Recall: a read and four buttons, on the same terms as the model's. */
+    /* Recall: a read and four buttons. */
     'recall.status': async () => await agent().recallStatus(),
     'recall.install': async (params) =>
       await agent().recallInstall(params.piece),

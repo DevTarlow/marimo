@@ -20,6 +20,7 @@ import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
 import {toOpenAiTools} from '../models/openai-mapping.js';
 import {createTools} from '../tools/index.js';
+import type {ToolDependencies} from '../tools/index.js';
 import {McpServerConnection} from './client.js';
 import {buildMcpTools, McpToolNameError} from './tools.js';
 
@@ -31,6 +32,8 @@ function config(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     baseUrl: 'http://127.0.0.1:1',
     model: 'deepseek-chat',
+    provider: 'deepseek',
+    apiKey: '',
     temperature: 0,
     systemPrompt: 'test',
     workspaceRoot: process.cwd(),
@@ -53,10 +56,11 @@ function server(overrides: Partial<McpServer> = {}): McpServer {
 }
 
 /** Everything `createTools` needs for the tools that do not need a service. */
-function baseDeps() {
+function baseDeps(): Pick<ToolDependencies, 'memory' | 'model' | 'provider'> {
   return {
     memory: new MemoryStore({workspaceRoot: process.cwd()}),
     model: 'deepseek-chat',
+    provider: 'deepseek',
   };
 }
 

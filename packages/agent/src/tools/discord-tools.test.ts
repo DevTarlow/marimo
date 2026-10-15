@@ -254,6 +254,8 @@ describe('Discord tools', () => {
       return {
         baseUrl: 'http://127.0.0.1:1',
         model: 'deepseek-chat',
+        provider: 'deepseek',
+        apiKey: '',
         temperature: 0,
         systemPrompt: 'test',
         profileId: 'profile-1',
@@ -265,6 +267,7 @@ describe('Discord tools', () => {
     it('offers no Discord tools when the app has no connection', () => {
       const tools = createTools(config(), {
         memory: new MemoryStore({workspaceRoot: workDir}),
+        provider: 'deepseek',
         model: 'deepseek-chat',
       });
       expect(tools.map((tool) => tool.name)).not.toContain(
@@ -283,6 +286,7 @@ describe('Discord tools', () => {
       };
       const tools = createTools(config(), {
         memory: new MemoryStore({workspaceRoot: workDir}),
+        provider: 'deepseek',
         model: 'deepseek-chat',
         jobService: jobs,
         discordService: harness().service,

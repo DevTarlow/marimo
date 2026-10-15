@@ -232,15 +232,42 @@ describe('the filing calls', () => {
     ).toBe(false);
   });
 
-  it('has no call for choosing a conversation’s model', () => {
+  it('names the model a conversation is pointed at, or says to stop', () => {
     /*
-     * Asserted rather than merely deleted. There is one model, so a per-chat
-     * choice is a control that cannot change anything — and the way that comes
-     * back is somebody re-adding a call "for symmetry" without noticing that the
-     * thing it would write has no reader.
+     * A conversation may answer with a model of its own — the app's default, its
+     * agent's, or this one question's — and the call has to be able to express all
+     * three. `null` is the third: "follow the agent again", which a schema that
+     * only took a model would have no way to say.
      */
-    expect(agentCallSchemas).not.toHaveProperty('sessions.setModel');
-    expect(agentCallSchemas).not.toHaveProperty('settings.setApiKey');
-    expect(agentCallSchemas).not.toHaveProperty('models.fetch');
+    expect(
+      agentCallSchemas['sessions.setModel'].safeParse({
+        profileId: 'p',
+        sessionId: 's',
+        model: {provider: 'deepseek', model: 'deepseek-v4-pro'},
+      }).success,
+    ).toBe(true);
+    expect(
+      agentCallSchemas['sessions.setModel'].safeParse({
+        profileId: 'p',
+        sessionId: 's',
+        model: null,
+      }).success,
+    ).toBe(true);
+    // A bare model id is refused: it means nothing without the endpoint, and a
+    // guess at which provider it belonged to is how a chat silently changes
+    // provider.
+    expect(
+      agentCallSchemas['sessions.setModel'].safeParse({
+        profileId: 'p',
+        sessionId: 's',
+        model: 'deepseek-v4-pro',
+      }).success,
+    ).toBe(false);
+    expect(
+      agentCallSchemas['sessions.setModel'].safeParse({
+        sessionId: 's',
+        model: null,
+      }).success,
+    ).toBe(false);
   });
 });

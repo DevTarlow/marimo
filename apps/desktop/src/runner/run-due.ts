@@ -15,11 +15,11 @@
  * so it cannot be the thing a boot-time timer launches. Running as Node means
  * this works over SSH, in a container, and at login before any compositor is up.
  *
- * **No `safeStorage`, and nothing that needs it.** There is no `app` object in
- * Node mode, so an encrypted secret cannot be decrypted — which stopped
- * mattering when the app stopped having a model key. A background run needs no
- * secret at all: the model is a local engine, and this process dials no
- * connectors.
+ * **No `safeStorage`, and the one thing that needs it.** There is no `app` object
+ * in Node mode, so a secret encrypted by the window cannot be decrypted here.
+ * That is why a provider's key can be stored readable — per provider, by the
+ * user's own choice — and why a job on an encrypted one fails with a sentence
+ * naming the setting rather than with a failed request. See `readSecret` below.
  *
  * **No web search.** That runs in a browser engine, and there is none here.
  * `web_search` is simply not offered, and the operating rules have the model say
@@ -34,19 +34,16 @@ import {pathToFileURL} from 'node:url';
 
 import {RecallHost} from '../main/recall.js';
 
+import {PROVIDERS} from '@marimo/protocol';
 import {
   AgentRuntime,
   createJobRunner,
   defaultUserDataDir,
+  FileSecretStore,
   holdProcessLock,
   isProcessHeld,
   JobScheduler,
   JobStore,
-  LocalModelService,
-  localModelPidFile,
-  localModelSpecFor,
-  MODEL_PINS,
-  modelDir,
   resolveAppPaths,
 } from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
@@ -130,31 +127,6 @@ export async function runDue(options: {
   }
 
   /*
-   * The model, started only if a job actually needs it.
-   *
-   * The same resolver the window calls, over the same pins and the same user-data
-   * directory — so a scheduled job runs the tier the window would, at the same
-   * context. Getting that wrong is the silent kind of failure: the window answers
-   * questions while a job reports the model as not installed, or runs a different
-   * model from the one the user chose.
-   */
-  const modelDirectory = modelDir({userData: paths.userData});
-  const localModel = new LocalModelService({
-    spec: async () =>
-      (
-        await localModelSpecFor({
-          dir: modelDirectory,
-          manifest: MODEL_PINS,
-          choice: 'auto',
-        })
-      ).spec,
-    pidFile: localModelPidFile(paths.userData),
-    log: (line) => {
-      process.stdout.write(`${line}\n`);
-    },
-  });
-
-  /*
    * Recall, in its read-only form.
    *
    * A scheduled job may search an index the window built and may never write one:
@@ -192,7 +164,20 @@ export async function runDue(options: {
   const agent: AgentRuntime = new AgentRuntime({
     paths,
     appName: PRODUCT_NAME,
-    localModel,
+    /*
+     * No cipher, deliberately, and it is the whole of invariant 16 from this
+     * side. There is no `app` object in Node mode and therefore no `safeStorage`,
+     * so a key encrypted for the window could not be decrypted here even if this
+     * asked nicely. A key the user made readable is read, and an encrypted one
+     * comes back `unreadable` with the store's own sentence — which the job
+     * records against itself, so the failure a person sees names the setting that
+     * fixes it rather than arriving as a `401`.
+     */
+    readSecret: async (provider) =>
+      await new FileSecretStore(
+        paths.providerSecrets[provider],
+        `${PROVIDERS[provider].label} API key`,
+      ).read(),
     recall: {
       stop: async () => {
         await recall.stop();

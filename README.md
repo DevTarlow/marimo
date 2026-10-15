@@ -57,9 +57,22 @@ self-contained AppImage; the Windows and macOS installers are not built. If
 someone gave you the app, or you built it yourself, this is what happens when you
 open it.
 
-The first time you start it, it downloads the model it needs. The screen shows
-the size before you agree, and you can stop and continue later. That is the one
-time it uses the network unless you ask it to search or fetch something.
+The first time you start it, it asks which service should answer, because this
+app does not carry a model of its own. There are five to choose from, and one of
+them is the one that keeps everything on your machine: a
+[llama.cpp](https://github.com/ggml-org/llama.cpp) server you run yourself, at an
+address you type. The others — DeepSeek, Google Gemini, OpenCode Go, OpenRouter —
+need an account and an API key, and their screens say what that key is and where
+to get it. Whichever you pick, the card has a **Fetch Models** button that asks
+the service what it serves, so you choose from the list it reports rather than
+from a list this app guessed at.
+
+Keys are kept in your operating system's keychain, encrypted. The card also has
+one box you may never need: **let the background runner read this key**. A
+scheduled task runs without a window, so it has no keychain to unlock — if you
+want a task to run on a service rather than on your own server, that box is what
+makes it possible, and it means the key sits on disk readable. It is off unless
+you tick it.
 
 Then give it a folder to work in. It can read there and nowhere else, and a chat
 is filed under the folder it started in so you can keep projects apart.
@@ -71,9 +84,6 @@ any time.
 Anything that changes something on your machine, such as writing a file or
 running a command, shows you what it wants to do and waits for your approval.
 That request survives a restart, so closing the window does not lose it.
-
-If the app cannot run the model, it says so on the first screen. The model needs
-a graphics card and there is no slower fallback.
 
 Closing the window does not quit the app. It stays in the system tray so the moss
 ball and any scheduled tasks keep working, and you quit it from the tray menu.
@@ -91,8 +101,10 @@ the bar underneath, and change how long its answers are or whether it stays on
 top in Settings.
 
 There are two versions of the settings screen. Simple has the agent's name, one
-choice about what it may do, and the model. Power user shows everything, including
-the temperature and every tool as its own switch. One switch in Settings moves
+choice about what it may do. Power user shows everything, including the
+temperature and every tool as its own switch. Which service answers is on both,
+because an app with no model of its own has to be fixable from the screen a first
+run lands on. One switch in Settings moves
 between them, and neither is a different app.
 
 When a conversation gets long, you can compact the older half into a summary from
@@ -101,16 +113,20 @@ being sent them.
 
 ## Your files and privacy
 
-The model runs on this computer, so your conversations are not sent anywhere. Two
-things do go over the network, and only when you use them: a web search sends your
-query to DuckDuckGo and reads the results, and a connector you set up talks to the
-server you configured.
+**What answers decides where your words go, and the app says which.** If you
+picked a llama.cpp server on your own machine, nothing you type leaves it. If you
+picked one of the hosted services, your conversations go to that service under
+your own account and its terms — which is the trade the app makes visible on the
+provider card rather than in a footnote. Two other things go over the network,
+and only when you use them: a web search sends your query to DuckDuckGo and reads
+the results, and a connector you set up talks to the server you configured.
 
 Your data lives in one folder. On Linux that is `~/.config/Marimo Agent`. It holds
-your conversations, the folders you have loaded, your settings, and the model it
-downloaded. You can move it with the `MARIMO_USER_DATA_DIR` environment variable,
-and you can delete it to start over. The model downloads again the next time you
-open the app. If you turned the recording on, that folder also holds one file per
+your conversations, the folders you have loaded, your settings and your keys. You
+can move it with the `MARIMO_USER_DATA_DIR` environment variable, and you can
+delete it to start over — the service you chose is asked for its key again the
+next time you open the app, which is also what makes this folder safe to hand to
+somebody else once the key files are gone. If you turned the recording on, that folder also holds one file per
 conversation of what the agent tried; a conversation's file is moved aside when
 you delete the conversation, so the record does not outlive the chat it is about.
 

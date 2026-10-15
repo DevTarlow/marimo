@@ -11,11 +11,12 @@
  *
  * A secret file says which it is in its own prefix:
  *
- * - `encrypted:<base64>` — written when a cipher was available. The only thing
- *   this store writes now.
- * - `plaintext:<base64>` — read, never written. A build that had a "store
- *   secrets as plain text" opt-in wrote these so a process with no keychain could
- *   read them, and an install that took that offer must go on working.
+ * - `encrypted:<base64>` — written when a cipher was available, and the only
+ *   thing this store writes unless it is asked otherwise.
+ * - `plaintext:<base64>` — written only under the per-provider opt-in that lets
+ *   the headless job runner read a key. A build that had a global version of that
+ *   opt-in wrote these too, and an install that took the offer must go on working,
+ *   so they are read whatever wrote them.
  *
  * Reads are three-valued on purpose. "No secret yet" and "a secret I cannot
  * decrypt" are different facts, and only the second one is a problem the user has
@@ -52,6 +53,18 @@ export type SecretRead =
    * no cipher, or one encrypted under a keychain that is no longer readable.
    */
   | {state: 'unreadable'; reason: string};
+
+/**
+ * Whether a write may put the secret on disk in a form anything can read.
+ *
+ * A named option rather than a positional boolean, so a call site says which
+ * choice it is making: `set(key, {allowPlaintext: true})` is legible in a diff
+ * and `set(key, true)` is not.
+ */
+export interface SecretWriteOptions {
+  /** Off unless asked for. See `set` for the one caller that asks. */
+  allowPlaintext?: boolean;
+}
 
 /**
  * One secret in one file.
@@ -143,16 +156,24 @@ export class FileSecretStore {
   }
 
   /**
-   * Stores a secret, encrypted.
+   * Stores a secret, encrypted unless the user asked for it readable.
    *
-   * There is no plain-text path any more, and no option to ask for one: the
-   * opt-in existed so a windowless process could read a key, and the app no
-   * longer has a key that one needs. A machine with no keychain therefore cannot
-   * store a connector token at all, which is said plainly rather than papered
-   * over — writing it readable would be deciding for the user that a token is
-   * not worth encrypting.
+   * `allowPlaintext` is the one case where a secret is written to disk in a form
+   * anything can read, and it exists for exactly one reason: the headless job
+   * runner has no `app` object, so it has no keychain and cannot decrypt. Without
+   * the opt-in, a scheduled job could never use a hosted provider — and the
+   * alternative, refusing every job that is not on a local server, would be a
+   * feature that silently does not work. It is per provider rather than one
+   * switch for the app: trusting one vendor's key to disk is not trusting all of
+   * them, and the choice is recorded in the settings document beside the
+   * provider it is about.
+   *
+   * Consent beats the keychain, deliberately. A machine *with* a keychain that
+   * has been asked for a readable key is a user who has understood the trade and
+   * wants their scheduled job to work; silently encrypting anyway would be the
+   * app deciding it knows better, and the job would fail without saying why.
    */
-  async set(value: string): Promise<void> {
+  async set(value: string, options: SecretWriteOptions = {}): Promise<void> {
     const trimmed = value.trim();
     if (trimmed.length === 0) {
       await this.clear();
@@ -160,6 +181,15 @@ export class FileSecretStore {
     }
 
     await mkdir(dirname(this.file), {recursive: true});
+
+    if (options.allowPlaintext === true) {
+      await writeFile(
+        this.file,
+        `${PLAINTEXT_PREFIX}${Buffer.from(trimmed, 'utf8').toString('base64')}\n`,
+        {encoding: 'utf8', mode: 0o600},
+      );
+      return;
+    }
 
     if (!this.isEncryptionAvailable()) {
       throw new Error(

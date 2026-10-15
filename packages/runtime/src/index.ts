@@ -76,17 +76,16 @@ export {
 export type {FileLockOptions, ProcessLock, ProcessLockOptions} from './lock.js';
 
 /*
- * The model the app runs itself.
+ * The recall model: its pins, its download, and the engine that serves it.
  *
  * Here rather than in the desktop app because both halves of the app need it —
- * the window to answer a question, the headless runner to run a job with the
- * window closed — and this is the package both of them already share.
+ * the window to search while somebody is looking, the headless runner to answer
+ * a scheduled job with the window closed — and this is the package both of them
+ * already share. It is the only model left: the chat model this app used to
+ * download and supervise is gone, and what remains of that machinery is the
+ * generic engine supervisor below, which recall is the only user of.
  */
 export {
-  backendNameFor,
-  CONTEXT_FLOOR,
-  contextThatFits,
-  downloadVerified,
   EMBEDDING_ALIAS,
   EMBEDDING_PIECES,
   EMBEDDING_PINS,
@@ -94,52 +93,30 @@ export {
   embeddingArgs,
   embeddingPidFile,
   embeddingUrl,
-  engineArgs,
   engineAssetFor,
   engineBinaryName,
   engineDir,
-  engineInstalled,
   engineIsPinned,
   engineUrl,
-  estimatedResidentBytes,
-  formatBytes,
   freePort,
   installEmbeddingPiece,
   installEngine,
   InstallError,
-  installedTiers,
-  installTier,
   LocalModelService,
-  localModelPidFile,
-  localModelSpec,
-  localModelSpecFor,
   ManifestError,
   MODEL_DIR_ENV,
   MODEL_DIR_NAME,
-  MODEL_PINS,
-  MODEL_TIERS,
   modelDir,
-  parseDevices,
   parseEmbeddingManifest,
-  parseManifest,
-  planTier,
   platformKey,
-  probeDevices,
   RECALL_DIR_NAME,
   recallDir,
   recallPiecesInstalled,
   recallSpec,
-  requiredFreeBytes,
-  resolveLocalModelFiles,
   resolveRecallFiles,
-  resolveTier,
-  SAFETY_MARGIN_BYTES,
-  systemMemoryBytes,
   unpackEngine,
-  weightsUrl,
 } from './local-model/index.js';
 export type {
-  DeviceProbe,
   DownloadProgress,
   EmbeddingInstallOptions,
   EmbeddingManifest,
@@ -152,19 +129,11 @@ export type {
   EngineInstallOptions,
   EngineManifest,
   EngineRunSpec,
-  EngineSpec,
+  EngineStatus,
   InstallOptions,
-  LocalModelFiles,
-  LocalModelManifest,
   LocalModelOptions,
-  LocalModelSpec,
-  ModelTier,
-  ModelTierName,
-  ProbedDevice,
-  ResolveTierOptions,
-  TierChoice,
-  TierPlan,
-  TierPlanInput,
+  RecallFiles,
+  RecallSpec,
 } from './local-model/index.js';
 
 /*

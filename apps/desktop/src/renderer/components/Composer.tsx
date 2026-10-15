@@ -9,13 +9,15 @@
  * the control you reach for next is where the one you just pressed was.
  *
  * The foot row is where the actions that act on the *message* live: `+` on the
- * left and the keyboard hint beside it. The textarea grows with what is in it up
- * to a point, because a prompt worth sending is often more than one line and a
- * box that scrolls after two lines hides the question the user is still writing.
+ * left, the keyboard hint in the middle, the model picker on the right. The
+ * textarea grows with what is in it up to a point, because a prompt worth
+ * sending is often more than one line and a box that scrolls after two lines
+ * hides the question the user is still writing.
  *
- * There is no model picker here any more. There was one, for a conversation's own
- * choice of model, and it went with the second model: a control that cannot
- * change what answers is a control that wastes a look.
+ * The model picker is here rather than in Settings because it is a fact about
+ * *this* conversation: which model answers the question being typed. It chooses
+ * for the conversation only, and the popover offers the way back to the agent's
+ * model, so using it once does not pin the chat for good.
  *
  * `+` is on the left of the same row, for the things a message can carry that
  * are not typed: a file to hand over, and the commands that act on the
@@ -30,10 +32,16 @@
  */
 import {useEffect, useRef, useState} from 'react';
 
-import type {CommandId, PickedFile, SkippedFile} from '@marimo/protocol';
+import type {
+  AgentModel,
+  CommandId,
+  PickedFile,
+  SkippedFile,
+} from '@marimo/protocol';
 
 import {composeMessage, describeSkipped} from '../attachments.js';
 import {describe} from '../describe.js';
+import {ModelPicker} from './ModelPicker.js';
 import {Popover, PopoverItem} from './Popover.js';
 import type {PopoverAnchor} from './Popover.js';
 
@@ -42,6 +50,10 @@ export function Composer({
   onStop,
   busy,
   disabled,
+  models,
+  model,
+  inherited,
+  onSelectModel,
   onPickFiles,
   commands,
   onRunCommand,
@@ -58,6 +70,28 @@ export function Composer({
   onStop: () => void;
   busy: boolean;
   disabled: boolean;
+  /** What this model's provider offers. Must contain `model.model`. */
+  models: readonly string[];
+  /**
+   * The model that will answer, as a pair.
+   *
+   * A pair rather than an id because the id means nothing without the endpoint
+   * serving it: choosing from this list pins the conversation to *that*
+   * provider, which is the one the list came from.
+   *
+   * Absent until the settings naming it have been read, and the picker is then
+   * not drawn at all — a trigger with an empty value and an empty list is a
+   * control that cannot do anything.
+   */
+  model?: AgentModel;
+  /**
+   * Where a model this conversation did not choose came from — the agent, or
+   * the app. Absent means the conversation has a choice of its own, which is
+   * also the only state in which giving it up changes anything.
+   */
+  inherited?: string;
+  /** `null` gives up the choice, so the conversation follows its agent again. */
+  onSelectModel: (model: AgentModel | null) => Promise<void>;
   /**
    * Asks for files, judged against the folder this conversation works in.
    *
@@ -158,6 +192,13 @@ export function Composer({
         : note !== null
           ? note.text
           : 'Enter to send, Shift+Enter for a new line';
+
+  /*
+   * A `const`, so the narrowing survives into the picker's callbacks: a
+   * parameter may be reassigned, and TypeScript will not carry "not undefined"
+   * into a closure for one.
+   */
+  const chosen = model;
 
   return (
     <div className="composer">
@@ -265,6 +306,36 @@ export function Composer({
           >
             {hint}
           </span>
+
+          {chosen !== undefined && (
+            <div className="composer-model">
+              <ModelPicker
+                models={models}
+                value={chosen.model}
+                disabled={disabled}
+                // Upwards: this box is at the bottom of the window.
+                placement="above"
+                /*
+                 * One or the other, never both: a model this conversation chose
+                 * has no source to name, and one it did not choose has nothing to
+                 * give up.
+                 */
+                {...(inherited === undefined
+                  ? {
+                      defaultChoice: {
+                        label: 'Follow the agent',
+                        onUse: () => {
+                          void onSelectModel(null);
+                        },
+                      },
+                    }
+                  : {note: inherited})}
+                onChange={(next) => {
+                  void onSelectModel({provider: chosen.provider, model: next});
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
 

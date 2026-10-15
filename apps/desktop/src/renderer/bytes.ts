@@ -4,8 +4,8 @@
  * The renderer's own copy, because the renderer cannot import from
  * `@marimo/runtime` — that package is Node-side and pulls in `node:fs`. It is
  * deliberately the same rule as `formatBytes` there, so a size shown on the
- * welcome screen and the same size shown in the Model card are the same number:
- * a download that said "4.5 GB" on one screen and "4.2 GB" on the other would look
+ * first-run card and the same size shown in Settings are the same number: a
+ * download that said "310 MB" on one screen and "296 MB" on the other would look
  * like two different files.
  */
 export function formatBytes(bytes: number): string {

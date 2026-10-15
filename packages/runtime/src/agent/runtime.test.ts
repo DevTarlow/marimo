@@ -2,60 +2,69 @@
  * The runtime, from the outside.
  *
  * What is tested here is mostly what happens when the agent *cannot* start,
- * because that is the path a user actually meets: an engine that is not
- * installed, one that refused to start, a folder nobody has chosen yet. Each of
- * those has to arrive as a sentence in the conversation rather than as a
- * spinner, an empty screen, or an exception the window never sees.
+ * because that is the path a user actually meets: no key for the provider the
+ * install is pointed at, a folder nobody has chosen yet, a conversation read back
+ * without anything to answer with. Each of those has to arrive as a sentence in
+ * the conversation rather than as a spinner, an empty screen, or an exception the
+ * window never sees.
  *
- * The successful path needs a model, and a model is a process — so the tests
- * that need one inject the engine, and the ones about refusal simply do not.
+ * The installed engine those cases used to be built around is gone with the
+ * app's own model, so there is nothing to inject in its place: a turn needs a
+ * provider and a provider needs a credential, which is the one thing the tests
+ * below supply. The two answers a real install can give — a key that is present
+ * and one that is not — are both a stub away, and no test touches a keychain.
  */
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {FileSessionService, MAX_MEMORY_BYTES, resolveMemoryFile} from '@marimo/agent';
+import {
+  FileSessionService,
+  MAX_MEMORY_BYTES,
+  resolveMemoryFile,
+} from '@marimo/agent';
 import type {AdkEvent} from '@marimo/agent';
 import {
   DEFAULT_AGENT_IDENTITY,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
 } from '@marimo/protocol';
+import type {AgentModel, ProviderId} from '@marimo/protocol';
 
 import {resolveAppPaths} from '../paths.js';
 import type {AppPaths} from '../paths.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
 import {ProfileStore} from '../profiles.js';
+import type {SecretRead} from '../secrets.js';
 import {WorkspaceStore} from '../workspaces.js';
 import {AgentRuntime} from './runtime.js';
-import type {AgentRuntimeOptions, LocalModelRunner} from './runtime.js';
+import type {AgentRuntimeOptions} from './runtime.js';
+
+/** A key, so a turn can resolve: the whole of what an injected engine used to be. */
+const keyPresent = async (): Promise<SecretRead> => ({
+  state: 'present',
+  value: 'test-key',
+});
 
 /**
- * An engine that answers, and remembers whether it was asked.
+ * No key at all, for the describes about refusal.
  *
- * The runtime never starts one itself — starting a process is the window's or
- * the runner's job — so every test that needs a working turn injects this, and
- * every test about refusal simply leaves it out.
+ * The sentence it produces is the one a fresh install meets — the provider's own
+ * label and the Settings card that fixes it — which is why the assertions below
+ * are about those rather than about an engine that would not start.
  */
-function engine(options: {problem?: string} = {}): LocalModelRunner & {
-  starts: number;
-  stops: number;
-} {
-  const runner = {
-    starts: 0,
-    stops: 0,
-    async ensureRunning() {
-      runner.starts += 1;
-      return options.problem === undefined
-        ? {ok: true as const, baseUrl: 'http://127.0.0.1:49500/v1'}
-        : {ok: false as const, problem: options.problem};
-    },
-    async stop() {
-      runner.stops += 1;
-    },
-  };
-  return runner;
-}
+const noKey = async (): Promise<SecretRead> => ({state: 'absent'});
+
+/**
+ * An address that answers nothing.
+ *
+ * A test that let a request reach the service the catalogue names would be making
+ * a network call: slow when it works, flaky when it does not, and about somebody
+ * else's uptime rather than about this code. Loopback on a port nothing listens on
+ * is the same trick the injected engine used to play, and one test needs the
+ * *ask* to fail rather than to answer.
+ */
+const DEAD_ADDRESS = 'http://127.0.0.1:1/v1';
 
 /**
  * Gives the install a folder to work in.
@@ -100,7 +109,9 @@ describe('AgentRuntime', () => {
   function runtime(
     options: Partial<Omit<AgentRuntimeOptions, 'paths'>> = {},
   ): AgentRuntime {
-    return new AgentRuntime({paths, ...options});
+    // A key by default, because most of what a runtime does needs a config that
+    // resolves; the cases about refusal pass `noKey` deliberately.
+    return new AgentRuntime({paths, readSecret: keyPresent, ...options});
   }
 
   /*
@@ -134,10 +145,12 @@ describe('AgentRuntime', () => {
     /*
      * A readout is not a reason to dial an MCP server. Answering from settings
      * and the file is the same answer by construction, and it keeps the dialog
-     * working on an install with no API key yet.
+     * working on an install with no API key yet — which is what the second
+     * assertion pins: a turn here genuinely cannot be configured, and the size
+     * control still answers.
      */
     it('answers without building a host', async () => {
-      const agent = runtime();
+      const agent = runtime({readSecret: noKey});
       await agent.updateSettings({memorySoftLimitBytes: 4 * 1024});
       expect(await agent.memoryUsage(profileId)).toMatchObject({
         limitBytes: 4 * 1024,
@@ -148,10 +161,15 @@ describe('AgentRuntime', () => {
 
   describe('when the agent cannot start', () => {
     it('says so from `host` rather than throwing', async () => {
-      const result = await runtime().host(profileId);
+      const result = await runtime({readSecret: noKey}).host(profileId);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.problem).toMatch(/no engine/u);
+        // The sentence names the service and the screen, not "no API key":
+        // somebody who has just picked a provider needs to know which one is
+        // asking and where to answer it.
+        expect(result.problem).toContain('DeepSeek');
+        expect(result.problem).toMatch(/API key/u);
+        expect(result.problem).toContain('Settings');
       }
     });
 
@@ -161,7 +179,7 @@ describe('AgentRuntime', () => {
      * is looking — an exception would be a console line they never see.
      */
     it('reports a turn it cannot start as a failed turn', async () => {
-      const agent = runtime();
+      const agent = runtime({readSecret: noKey});
       const events = [];
       for await (const event of agent.run(profileId, 'session-1', 'hello')) {
         events.push(event);
@@ -174,7 +192,7 @@ describe('AgentRuntime', () => {
         code: 'not-configured',
       });
       if (events[0]?.type === 'turn.failed') {
-        expect(events[0].message).toMatch(/no engine/u);
+        expect(events[0].message).toMatch(/API key/u);
       }
     });
 
@@ -194,13 +212,15 @@ describe('AgentRuntime', () => {
    */
   describe('conversations without a provider', () => {
     it('can be started anyway', async () => {
-      const session = await runtime().createSession(profileId);
+      const session = await runtime({readSecret: noKey}).createSession(
+        profileId,
+      );
       expect(session).toBeDefined();
       expect(session?.id.length).toBeGreaterThan(0);
     });
 
     it('are filed under the agent that started them', async () => {
-      const agent = runtime();
+      const agent = runtime({readSecret: noKey});
       await agent.createSession(profileId);
 
       expect(await agent.listSessions(profileId)).toHaveLength(1);
@@ -213,7 +233,7 @@ describe('AgentRuntime', () => {
     });
 
     it('has a place to record a gate even with no key', async () => {
-      const agent = runtime();
+      const agent = runtime({readSecret: noKey});
       const session = await agent.createSession(profileId);
       expect(await agent.pendingGates(profileId, session?.id ?? '')).toEqual(
         [],
@@ -259,7 +279,14 @@ describe('AgentRuntime', () => {
    * first thing said in a long conversation is simply never remembered.
    */
   it('reads a long conversation in stretches instead of marking it all read', async () => {
-    const agent = runtime({localModel: engine()});
+    const agent = runtime();
+    /*
+     * Pointed at an address nothing answers on, so the look below fails instead
+     * of reaching a real service from a unit test.
+     */
+    await agent.updateSettings({
+      providers: {configs: {deepseek: {baseUrl: DEAD_ADDRESS}}},
+    });
     const summary = await agent.createSession(profileId);
     const sessionId = summary?.id ?? '';
 
@@ -297,10 +324,10 @@ describe('AgentRuntime', () => {
     expect(before).toEqual({reviewed: 0, total: events});
 
     /*
-     * The model is not running, so the look finds nothing to propose. That is
-     * the point: the watermark is about what was *read*, not about what was
-     * found, and an ask that failed still moved it — otherwise a failing prompt
-     * would be re-sent on every idle moment.
+     * The ask fails, so the look finds nothing to propose. That is the point: the
+     * watermark is about what was *read*, not about what was found, and an ask
+     * that failed still moved it — otherwise a failing request would be re-sent
+     * on every idle moment.
      */
     await agent.reviewMemory(profileId, sessionId);
     let progress = await agent.reviewProgress(profileId, sessionId);
@@ -331,9 +358,9 @@ describe('AgentRuntime', () => {
    * entirely. A write is made first so there is a date to answer with.
    */
   it('reports when a remembered fact was written', async () => {
-    // The engine, because accepting builds a host: the fact has to be written by
-    // an agent, not merely proposed.
-    const agent = runtime({localModel: engine()});
+    // A resolvable configuration, because accepting builds a host: the fact has
+    // to be written by an agent, not merely proposed.
+    const agent = runtime();
     // And a folder, because a host is built for the conversation's workspace.
     await agent.addWorkspace(join(dir, 'alpha'));
     const session = await agent.createSession(profileId);
@@ -449,7 +476,7 @@ describe('the catalogue', () => {
   });
 
   function runtime(): AgentRuntime {
-    return new AgentRuntime({paths});
+    return new AgentRuntime({paths, readSecret: keyPresent});
   }
 
   it('lists the tools by the name and wording the model is given', async () => {
@@ -544,7 +571,7 @@ describe('changing an agent', () => {
   });
 
   function runtime(): AgentRuntime {
-    return new AgentRuntime({paths});
+    return new AgentRuntime({paths, readSecret: keyPresent});
   }
 
   it('records a new grant', async () => {
@@ -610,7 +637,7 @@ describe('the identity a new agent gets', () => {
   });
 
   function runtime(): AgentRuntime {
-    return new AgentRuntime({paths});
+    return new AgentRuntime({paths, readSecret: keyPresent});
   }
 
   it('starts the first agent on the shipped identity', async () => {
@@ -726,12 +753,19 @@ describe('reading a conversation without a working provider', () => {
   });
 
   function runtime(): AgentRuntime {
-    return new AgentRuntime({paths});
+    // No key at all: the describe is about what still works when nothing can
+    // answer, so the refusal is the premise rather than an accident.
+    return new AgentRuntime({paths, readSecret: noKey});
   }
 
-  it('refuses the turn, because there is no engine to start', async () => {
+  it('refuses the turn, because there is no key to answer with', async () => {
     // The premise: this install genuinely cannot answer.
-    expect((await runtime().host(profileId)).ok).toBe(false);
+    const result = await runtime().host(profileId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problem).toContain('DeepSeek');
+      expect(result.problem).toMatch(/API key/u);
+    }
   });
 
   it('still reads the stored conversation', async () => {
@@ -744,7 +778,7 @@ describe('reading a conversation without a working provider', () => {
   });
 
   it('answers with nothing for an agent that does not exist', async () => {
-    const runtime = new AgentRuntime({paths});
+    const runtime = new AgentRuntime({paths, readSecret: keyPresent});
     const {messages, pending} = await runtime.transcript(
       'no-such-agent',
       sessionId,
@@ -753,16 +787,16 @@ describe('reading a conversation without a working provider', () => {
     expect(pending).toEqual([]);
   });
 
-  it('refuses to compact with the sentence about the model', async () => {
+  it("refuses to compact with the configuration's own sentence", async () => {
     /*
      * Thrown rather than answered with `{compacted: false}`: the difference the
      * two carry is the difference between "there was nothing to do" and "this
      * install cannot do it at all", and only the second is worth a red banner.
-     * The sentence is the configuration's own, so it names the card that fixes
-     * it rather than a stack.
+     * The sentence is the configuration's own, so it names the provider and the
+     * card that fixes it rather than a stack.
      */
     await expect(runtime().compact(profileId, sessionId)).rejects.toThrow(
-      /no engine/u,
+      /API key/u,
     );
   });
 });
@@ -800,12 +834,12 @@ describe('folders and filing', () => {
   });
 
   /*
-   * These turns actually run, so the install needs an engine. It is injected by
-   * default here — the refusal cases have their own describe, where there is
-   * none on purpose.
+   * Every configuration below has to resolve, so the install needs a key — the
+   * injected engine that used to stand here went with the app's own model. The
+   * refusal cases have their own describes, where there is deliberately none.
    */
-  function runtime(model: LocalModelRunner = engine()): AgentRuntime {
-    return new AgentRuntime({paths, localModel: model});
+  function runtime(): AgentRuntime {
+    return new AgentRuntime({paths, readSecret: keyPresent});
   }
 
   /** Writes what an agent would have remembered in one folder. */
@@ -1086,24 +1120,20 @@ describe('folders and filing', () => {
 });
 
 /*
- * The model the app runs itself.
+ * The model a turn answers with, as a pair.
  *
- * The runtime is the one place both processes pass through, so it is where
- * "start the engine before asking it for an address" has to be true — and the
- * failure this guards against is the quiet one: resolving against the stored
- * placeholder address would send a conversation to whatever happens to be
- * listening on that port rather than to refuse.
- *
- * A stub stands in for the engine. Nothing here loads a model, and the stub is
- * also how each refusal is produced on demand.
+ * `{provider, model}` is the only shape this app stores or sends, because a model
+ * id means nothing without the endpoint that serves it — and the two halves move
+ * for different reasons. A provider's list is a *fact*, recorded by the refresh
+ * that fetched it; a conversation's choice is a decision about one question.
  */
-describe('the built-in model', () => {
+describe('the model a turn answers with', () => {
   let dir: string;
   let paths: AppPaths;
   let profileId: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(process.cwd(), '.marimo-builtin-'));
+    dir = await mkdtemp(join(process.cwd(), '.marimo-model-choice-'));
     paths = resolveAppPaths(dir);
     await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
@@ -1114,160 +1144,168 @@ describe('the built-in model', () => {
     });
     await profiles.load();
     profileId = (await profiles.activeProfile()).id;
-    // No seeding: a fresh install is pointed at the built-in model, and that is
-    // the state these tests are about.
   });
 
   afterEach(async () => {
     await rm(dir, {recursive: true, force: true});
   });
 
-  function runtime(localModel?: LocalModelRunner): AgentRuntime {
+  function runtime(
+    options: Partial<Omit<AgentRuntimeOptions, 'paths'>> = {},
+  ): AgentRuntime {
+    return new AgentRuntime({paths, readSecret: keyPresent, ...options});
+  }
+
+  /*
+   * The provider's own default moves with the list, and that is the half worth
+   * pinning: a model the endpoint has retired would fail the next turn for a
+   * reason nobody could see from the picker.
+   */
+  it('stores what a provider serves and moves its default off a retired name', async () => {
+    const agent = runtime();
+    const before = await agent.settings();
+    // The catalogue's placeholder, which the endpoint no longer serves.
+    expect(before.providers.configs.deepseek.model).toBe('deepseek-flash');
+
+    const after = await agent.setAvailableModels('deepseek', [
+      'deepseek-v4-pro',
+    ]);
+
+    expect(after.availableModels.deepseek).toEqual(['deepseek-v4-pro']);
+    expect(after.providers.configs.deepseek.model).toBe('deepseek-v4-pro');
+    // No other endpoint's answer is invented: each list is about one service, and
+    // a store that rewrote its neighbours would be making facts up.
+    expect(after.availableModels.gemini).toEqual(before.availableModels.gemini);
+    expect(after.providers.configs.gemini).toEqual(
+      before.providers.configs.gemini,
+    );
+  });
+
+  /*
+   * A conversation's own choice, which outranks its agent's and the app's.
+   *
+   * The observable proof that the resolver honours it is which provider's key the
+   * turn asks for, and `null` is the way back — without it, a chat that once
+   * picked a model could never follow its agent again.
+   */
+  it('gives a conversation a model of its own, and takes it back with null', async () => {
+    const asked: ProviderId[] = [];
+    const agent = runtime({
+      readSecret: async (provider) => {
+        asked.push(provider);
+        return {state: 'present', value: 'test-key'};
+      },
+    });
+    const session = await agent.createSession(profileId);
+    const id = session?.id ?? '';
+    const chosen: AgentModel = {provider: 'gemini', model: 'gemini-3.1-pro'};
+
+    expect((await agent.setSessionModel(profileId, id, chosen)).model).toEqual(
+      chosen,
+    );
+    await agent.host(profileId, id);
+    expect(asked).toEqual(['gemini']);
+
+    expect(
+      (await agent.setSessionModel(profileId, id, null)).model,
+    ).toBeUndefined();
+    await agent.host(profileId, id);
+    // Back on the app's own provider. Absent means "follow the agent" rather than
+    // "nothing was chosen", which is why giving it up is an answer of its own.
+    expect(asked).toEqual(['gemini', 'deepseek']);
+  });
+});
+
+/*
+ * Recall, as the runtime sees it: a setting, a service, and a process.
+ *
+ * The runtime does not own the engine — the window does — so what is tested here
+ * is the two things this layer decides: whether the capability is offered at all,
+ * and whether the process outlives the app. This is the *recall* engine, the one
+ * left: it downloads its own weights under `model/recall/`.
+ */
+describe('recall', () => {
+  let dir: string;
+  let paths: AppPaths;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-recall-runtime-'));
+    paths = resolveAppPaths(dir);
+    await seedWorkspaces(paths, dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  /*
+   * Built here rather than through a helper in this file: the other describes'
+   * runtimes take an options object or nothing, and this one exists to hand in the
+   * single process the runtime can be told to stop. Being explicit costs three
+   * lines and cannot be read wrongly.
+   */
+  function withRecall(recall?: {stop: () => Promise<void>}): AgentRuntime {
     return new AgentRuntime({
       paths,
-      ...(localModel === undefined ? {} : {localModel}),
+      readSecret: keyPresent,
+      ...(recall === undefined ? {} : {recall}),
     });
   }
 
-  it('starts the engine before it resolves the turn', async () => {
-    const model = engine();
-    const result = await runtime(model).host(profileId);
+  /*
+   * The switch has to exist before it can be turned on, and it must not exist on
+   * an install that has no recall — a tick-box that grants nothing is worse than
+   * no tick-box, because the user believes they granted something.
+   */
+  it('lists the recall tool only when the feature is switched on', async () => {
+    const agent = withRecall();
+    const before = await agent.catalog();
+    expect(before.tools.map((tool) => tool.name)).not.toContain('recall');
 
+    await agent.updateSettings({recall: {enabled: true}});
+
+    const after = await agent.catalog();
+    expect(after.tools.map((tool) => tool.name)).toContain('recall');
     /*
-     * Called once, and the host came back — which is the observable half of "the
-     * address in the configuration is the live one". The resolver's own test
-     * holds the other half, because the host does not hand its configuration out.
+     * Listed, and not granted by default: a default the catalogue only
+     * sometimes shows is a preset that stops matching, which is what the smoke
+     * check found when recall was added to `SAFE_DEFAULT_TOOLS`.
      */
-    expect(model.starts).toBe(1);
-    expect(result.ok).toBe(true);
-    expect(result.ok && result.profile.id).toBe(profileId);
+    const entry = after.tools.find((tool) => tool.name === 'recall');
+    expect(entry?.byDefault).toBe(false);
+    expect(entry?.blurb).toContain('mean');
   });
 
-  it('hands the engine’s own sentence to the user when it will not start', async () => {
-    const result = await runtime(
-      engine({
-        problem: 'The model file is not installed. It should be at /x.gguf.',
-      }),
-    ).host(profileId);
+  it('takes the switch back off when it is turned off again', async () => {
+    const agent = withRecall();
+    await agent.updateSettings({recall: {enabled: true}});
+    await agent.updateSettings({recall: {enabled: false}});
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.problem).toContain('/x.gguf');
-    }
+    expect(
+      (await agent.catalog()).tools.map((tool) => tool.name),
+    ).not.toContain('recall');
   });
 
   /*
-   * The caller with no engine — a test, a command that only reads stored
-   * conversations. The refusal names the situation rather than resolving against
-   * some assumed address, which is the difference between a sentence and a
-   * conversation sent to whatever is listening on that port.
+   * The recall engine is 400 MB of weights and a fan, and this is the last moment
+   * anything can stop it. The window's own service owns the process; the runtime
+   * only knows to tell it.
    */
-  it('refuses rather than guessing when no engine can be started', async () => {
-    const result = await runtime().host(profileId);
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.problem).toContain('no engine');
-    }
-  });
-
-  /*
-   * The engine is a process, and the process outliving the app is the failure
-   * nobody can explain: a gigabyte of memory and a spinning fan with no window
-   * attached. Disposal is where it is stopped, and disposal is awaited by both
-   * callers on their way out.
-   */
-  it('stops the engine when the runtime is disposed', async () => {
-    const model = engine();
-    const agent = runtime(model);
-    await agent.host(profileId);
-    expect(model.stops).toBe(0);
+  it('stops the recall engine on the way out', async () => {
+    let stops = 0;
+    const agent = withRecall({
+      stop: async () => {
+        stops += 1;
+      },
+    });
 
     await agent.dispose();
-    expect(model.stops).toBe(1);
+
+    expect(stops).toBe(1);
   });
-  /*
-   * Recall, as the runtime sees it: a setting, a service, and a process.
-   *
-   * The runtime does not own the engine — the window does — so what is tested
-   * here is the two things this layer decides: whether the capability is offered
-   * at all, and whether the process outlives the app.
-   */
-  describe('recall', () => {
-    const model: LocalModelRunner = {
-      ensureRunning: async () => ({ok: true, baseUrl: 'http://127.0.0.1:1/v1'}),
-      stop: async () => undefined,
-    };
 
-    /*
-     * Built here rather than through a helper in this file: two describes above
-     * have a `runtime` of their own with a different shape, and the one this block
-     * landed inside takes a model rather than an options object. Being explicit
-     * costs three lines and cannot be read wrongly.
-     */
-    function withRecall(recall?: {stop: () => Promise<void>}): AgentRuntime {
-      return new AgentRuntime({
-        paths,
-        localModel: model,
-        ...(recall === undefined ? {} : {recall}),
-      });
-    }
-
-    /*
-     * The switch has to exist before it can be turned on, and it must not exist on
-     * an install that has no recall — a tick-box that grants nothing is worse than
-     * no tick-box, because the user believes they granted something.
-     */
-    it('lists the recall tool only when the feature is switched on', async () => {
-      const agent = withRecall();
-      const before = await agent.catalog();
-      expect(before.tools.map((tool) => tool.name)).not.toContain('recall');
-
-      await agent.updateSettings({recall: {enabled: true}});
-
-      const after = await agent.catalog();
-      expect(after.tools.map((tool) => tool.name)).toContain('recall');
-      /*
-       * Listed, and not granted by default: a default the catalogue only
-       * sometimes shows is a preset that stops matching, which is what the smoke
-       * check found when recall was added to `SAFE_DEFAULT_TOOLS`.
-       */
-      const entry = after.tools.find((tool) => tool.name === 'recall');
-      expect(entry?.byDefault).toBe(false);
-      expect(entry?.blurb).toContain('mean');
-    });
-
-    it('takes the switch back off when it is turned off again', async () => {
-      const agent = withRecall();
-      await agent.updateSettings({recall: {enabled: true}});
-      await agent.updateSettings({recall: {enabled: false}});
-
-      expect(
-        (await agent.catalog()).tools.map((tool) => tool.name),
-      ).not.toContain('recall');
-    });
-
-    /*
-     * The engine is 400 MB of weights and a fan, and this is the last moment
-     * anything can stop it. The window's own service owns the process; the runtime
-     * only knows to tell it.
-     */
-    it('stops the recall engine on the way out', async () => {
-      let stops = 0;
-      const agent = withRecall({
-        stop: async () => {
-          stops += 1;
-        },
-      });
-
-      await agent.dispose();
-
-      expect(stops).toBe(1);
-    });
-
-    it('does not require a recall engine to be there at all', async () => {
-      const agent = withRecall();
-      await expect(agent.dispose()).resolves.toBeUndefined();
-    });
+  it('does not require a recall engine to be there at all', async () => {
+    const agent = withRecall();
+    await expect(agent.dispose()).resolves.toBeUndefined();
   });
 });

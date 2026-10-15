@@ -45,9 +45,10 @@ import {
   DEFAULT_AGENT_IDENTITY,
   DEFAULT_DREAM_KEEP_LOGS,
   DEFAULT_DREAM_RESULT_BYTES,
-  LOCAL_MODEL_ID,
 } from '@marimo/protocol';
+import type {ProviderId} from '@marimo/protocol';
 import type {
+  AgentModel,
   AgentProfile,
   AgentUiEvent,
   CatalogEntry,
@@ -75,6 +76,7 @@ import {DreamStore} from '../dream-store.js';
 import {ProfileStore} from '../profiles.js';
 import {FeedbackStore} from '../feedback.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
+import type {SecretRead} from '../secrets.js';
 import {SettingsStore} from '../settings.js';
 import {SkillStore} from '../skills.js';
 import {WorkspaceStore, workspaceRootFor} from '../workspaces.js';
@@ -101,28 +103,21 @@ export interface RuntimeServices {
   recallService?: RecallLookup;
 }
 
-/**
- * The engine the app carries, as the runtime needs it.
- *
- * Two methods, and deliberately not the supervisor's `status`: this package
- * starts an engine and stops one, and the card that *describes* it belongs to
- * the window that draws the card. An interface here rather than the class,
- * because the two processes answer it differently — the window keeps an engine
- * warm, the runner starts one for the length of a job — and neither answer
- * belongs in this file. It also means no test of this package loads a gigabyte
- * of weights.
- */
-export interface LocalModelRunner {
-  ensureRunning(): Promise<
-    {ok: true; baseUrl: string} | {ok: false; problem: string}
-  >;
-  stop(): Promise<void>;
-}
-
 export interface AgentRuntimeOptions {
   paths: AppPaths;
   /** Present in the window, absent in the runner, which has no browser. */
   webSearch?: WebSearchProvider;
+  /**
+   * Reads one provider's key, already decrypted by the process that owns the
+   * keychain.
+   *
+   * A function rather than a store, because the cipher is injected and the two
+   * processes answer differently: the window has `safeStorage`, and the headless
+   * runner has none — so a key stored for the runner is read by the runner and an
+   * encrypted one comes back `unreadable`, with a sentence the caller can show.
+   * Neither answer belongs in this file.
+   */
+  readSecret: (provider: ProviderId) => Promise<SecretRead>;
   /**
    * The rest of the app's tools, resolved per profile and folder.
    *
@@ -148,14 +143,6 @@ export interface AgentRuntimeOptions {
    */
   mcpServers?: () => readonly McpToolsetSource[];
   appName?: string;
-  /**
-   * The engine the app carries.
-   *
-   * Absent in a caller that cannot have one — a test, or a command that only
-   * reads stored conversations — and in that case a turn is refused with a
-   * sentence rather than half-answered.
-   */
-  localModel?: LocalModelRunner;
   /**
    * The recall engine, so the app can stop it on the way out.
    *
@@ -311,9 +298,20 @@ export class AgentRuntime {
       this.options.paths.defaultWorkspace;
     const settings = await this.settingsStore.load();
 
+    /*
+     * The catalogue is drawn for the *app's* provider rather than for whichever
+     * agent is selected, and that is the honest answer to what this call asks:
+     * it is what this install could offer, and an agent's own model is a choice
+     * made inside that. The one tool it decides is `GOOGLE_SEARCH`, which a
+     * Gemini agent gets and the catalogue would not have listed — so it is listed
+     * whenever the app's own provider is Gemini, and an agent pointed at Gemini
+     * while the app is on DeepSeek is the one case where the switch is missing.
+     */
+    const provider = settings.providers.active;
     const tools = describeTools({
       workspaceRoot,
-      model: LOCAL_MODEL_ID,
+      model: settings.providers.configs[provider].model,
+      provider,
       ...(this.options.webSearch ? {webSearch: this.options.webSearch} : {}),
       /*
        * The switch for recall exists exactly when recall does, which is the rule
@@ -872,6 +870,53 @@ export class AgentRuntime {
     );
   }
 
+  /**
+   * Points a conversation at a model of its own, or back at its agent's.
+   *
+   * The next turn in that conversation resolves through `host()`, which reads the
+   * entry this writes — so this is a write and nothing else. No host is rebuilt
+   * and no turn is interrupted: choosing a model is a decision about the *next*
+   * question, and a user who changes it mid-answer has not asked for the answer
+   * they are reading to be thrown away.
+   *
+   * `null` means "follow the agent", which is a real answer rather than an absent
+   * one: without it there would be no way to move a conversation back off a
+   * choice it once made.
+   */
+  async setSessionModel(
+    profileId: string,
+    sessionId: string,
+    model: AgentModel | null,
+  ): Promise<SessionSummary> {
+    const host = await this.ensureHost(profileId);
+    return await host.setSessionModel(sessionId, model ?? undefined, profileId);
+  }
+
+  /**
+   * Records what a provider says it serves.
+   *
+   * The store does the writing, including moving that provider's default model
+   * off a name the endpoint no longer offers. What this adds is the consequence
+   * the store cannot have: every host drops what it had applied, so the next turn
+   * resolves again — a conversation that was about to answer with a retired model
+   * answers with the replacement instead of failing for a reason nobody can see.
+   */
+  async setAvailableModels(
+    provider: ProviderId,
+    models: string[],
+  ): Promise<StoredSettings> {
+    const stored = await this.settingsStore.setAvailableModels(provider, models);
+    /*
+     * The applied signatures are dropped and the hosts are left standing: the
+     * placeholder-config host holds conversations and their file positions, so
+     * rebuilding it would be work done to no purpose. What has to go is this
+     * cache of "which config has this host been given", because the answer just
+     * changed.
+     */
+    this.applied.clear();
+    return stored;
+  }
+
   async renameSession(
     profileId: string,
     sessionId: string,
@@ -1033,21 +1078,6 @@ export class AgentRuntime {
     }
 
     /*
-     * The engine, before the configuration that points at it.
-     *
-     * Deliberately first: starting it takes seconds, and a resolution that
-     * happened before it was up would produce a configuration with no address
-     * and a refusal the user cannot act on. Starting it *here* rather than in a
-     * caller is what makes the two processes the same code — the window and the
-     * headless runner both arrive at `host`, and neither has to know that the
-     * model is a process.
-     */
-    const engine = await this.startEngine();
-    if (!engine.ok) {
-      return engine;
-    }
-
-    /*
      * The host next, because it is what reads the conversation index — and a
      * placeholder-config host is exactly what `transcript` and `approve`
      * already build. Resolving the configuration first would mean reading the
@@ -1062,13 +1092,21 @@ export class AgentRuntime {
       await this.workspaceStore.load(),
       filed,
     );
+    /*
+     * The conversation's own model, when it has one. Read here rather than in the
+     * caller because this is the one place that already has the host — which is
+     * what reads the index — and the folder it is about to resolve against.
+     */
+    const sessionModel =
+      sessionId === undefined ? undefined : await host.sessionModel(sessionId);
 
     const resolved = await resolveAgentConfig({
       settings,
       profile,
+      readSecret: this.options.readSecret,
       skills: await this.skillsFor(profile),
       ...(workspaceRoot === undefined ? {} : {workspaceRoot}),
-      ...(engine.baseUrl === undefined ? {} : {engineBaseUrl: engine.baseUrl}),
+      ...(sessionModel === undefined ? {} : {sessionModel}),
     });
     if (!resolved.ok) {
       return resolved;
@@ -1230,63 +1268,11 @@ export class AgentRuntime {
     }
     this.hosts.clear();
     this.applied.clear();
-    await this.options.localModel?.stop();
-    // Its own engine, and gigabytes of nobody's business if it is left behind —
-    // 400 MB of weights and a fan with no window to explain them.
+    /*
+     * The one engine left, and gigabytes of nobody's business if it is left
+     * behind — 400 MB of weights and a fan with no window to explain them.
+     */
     await this.options.recall?.stop();
-  }
-
-  /**
-   * Starts the model before anybody has asked anything.
-   *
-   * The first turn of a session would otherwise pay for loading the weights, and
-   * on a 2.7 GB model that is the longest silence in the app — longer than the
-   * answer, on a short question. This moves the wait to the moment a window is
-   * shown, where the user can see the app is up and has not yet typed.
-   *
-   * Deliberately silent. There is nothing to tell the user: a warm-up that fails
-   * — no model installed, no usable device, a supervisor that threw — is a fact
-   * the first turn will report properly, and reporting it twice, once before
-   * they asked, is noise. Called best-effort by the process that owns a window.
-   */
-  async warmEngine(): Promise<void> {
-    try {
-      await this.startEngine();
-    } catch {
-      // See above: the first turn is where this becomes an answer.
-    }
-  }
-
-  /**
-   * Starts the app's own engine.
-   *
-   * Answers with the live address, or with the sentence explaining why not —
-   * a fact about the install, discovered before the turn starts rather than
-   * halfway through it.
-   */
-  private async startEngine(): Promise<
-    {ok: true; baseUrl?: string} | {ok: false; problem: string}
-  > {
-    const runner = this.options.localModel;
-    if (runner === undefined) {
-      /*
-       * A caller with no engine — a test, or a command that only reads stored
-       * conversations. Said plainly rather than resolved against some assumed
-       * address, which would send a conversation to whatever happens to be
-       * listening on that port.
-       */
-      return {
-        ok: false,
-        problem:
-          'The built-in model runs inside the app, and this process has no ' +
-          'engine to start it with.',
-      };
-    }
-
-    const started = await runner.ensureRunning();
-    return started.ok
-      ? {ok: true, baseUrl: started.baseUrl}
-      : {ok: false, problem: started.problem};
   }
 
   private async profileFor(
@@ -1349,6 +1335,15 @@ export class AgentRuntime {
       config: {
         baseUrl: '',
         model: '',
+        /*
+         * The placeholder pair, for the same reason the address is empty: host()
+         * replaces all of it before a turn runs, and a provider named here would
+         * be a second answer to which service this agent uses. DeepSeek is the
+         * catalogue's default, so a turn that somehow ran against this would be
+         * refused for a missing key rather than sent somewhere nobody chose.
+         */
+        provider: 'deepseek',
+        apiKey: '',
         temperature: 0,
         systemPrompt: '',
         profileId,

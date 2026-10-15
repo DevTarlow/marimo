@@ -29,6 +29,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
 import type {
+  AgentModel,
   AgentProfile,
   ThemeMode,
   AgentUiEvent,
@@ -49,21 +50,6 @@ import {describe} from '../describe.js';
  * the two are swapped. `ok` being absent is what says "still running".
  */
 export type LiveToolCall = ToolCallRecord;
-
-/**
- * A model download in flight, as the two screens that draw it need it.
- *
- * The same shape the main process reports and the protocol carries, restated here
- * because the renderer cannot import a type from the runtime package and the
- * alternative — inferring it from an event union — would break the moment a field
- * moved.
- */
-export interface ModelProgress {
-  label: string;
-  receivedBytes: number;
-  totalBytes: number;
-  percent?: number;
-}
 
 /** The turn in flight, assembled from the stream. */
 export interface LiveTurn {
@@ -138,16 +124,12 @@ export interface AgentController {
    * different values, or the second one opens nothing.
    */
   openSettings: number;
-  /** A download in flight, or null. Drawn by the welcome screen and the card. */
-  modelProgress: ModelProgress | null;
   /** Suggestions that have arrived since the panel was last opened. */
   memoryWaiting: number;
   /** What the last background look at the conversation read, and found. */
   lastReview: {events: number; found: number} | null;
   /** Clears that, when the panel opens and the user is looking at them. */
   clearMemoryWaiting: () => void;
-  /** Changes whenever the model files do, so a reader knows to re-read. */
-  modelRevision: number;
   /** The stored theme preference, kept in step with the settings file. */
   themeMode: ThemeMode;
   newSession: (workspaceId?: string) => Promise<void>;
@@ -174,6 +156,17 @@ export interface AgentController {
     workspaceId: string | null,
   ) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
+  /**
+   * Points one conversation at a model of its own, or `null` to stop.
+   *
+   * The pair, never an id: the caller is the composer, whose list came from one
+   * provider's catalogue, and a bare id would let a model from one endpoint be
+   * stored against another.
+   */
+  setSessionModel: (
+    sessionId: string,
+    model: AgentModel | null,
+  ) => Promise<void>;
   /** Deletes a conversation, and lands somewhere sensible if it was open. */
   removeSession: (sessionId: string) => Promise<void>;
 }
@@ -190,13 +183,6 @@ export function useAgent(): AgentController {
   const [outbox, setOutbox] = useState<string | null>(null);
   const [openSettings, setOpenSettings] = useState(0);
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
-  /*
-   * A model download, which is the one thing in this app that happens over
-   * minutes and has to be watched. Kept in the hook rather than in the card that
-   * draws it, because two things draw it: the welcome screen on a first run and
-   * the Model card in Settings, and neither should own the stream.
-   */
-  const [modelProgress, setModelProgress] = useState<ModelProgress | null>(null);
   /**
    * How many suggestions have arrived since the user last looked at the panel.
    *
@@ -218,8 +204,6 @@ export function useAgent(): AgentController {
   const [lastReview, setLastReview] = useState<{events: number; found: number} | null>(
     null,
   );
-  /** Bumped when the model files change, so whoever is looking re-reads them. */
-  const [modelRevision, setModelRevision] = useState(0);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(
     null,
@@ -465,33 +449,13 @@ export function useAgent(): AgentController {
       }
 
       /*
-       * The model downloading. Handled here, before the conversation filter
-       * below, because a download belongs to the install rather than to any
-       * conversation — and a card that had to subscribe separately would be a
-       * second listener for one stream.
-       */
-      if (event.type === 'model.progress') {
-        setModelProgress({
-          label: event.label,
-          receivedBytes: event.receivedBytes,
-          totalBytes: event.totalBytes,
-          ...(event.percent === undefined ? {} : {percent: event.percent}),
-        });
-        return;
-      }
-      if (event.type === 'model.installed') {
-        setModelProgress(null);
-        setModelRevision((count) => count + 1);
-        return;
-      }
-      /*
        * A background look at the conversation found something worth remembering.
        *
-       * Handled before the conversation filter for the same reason the model
-       * download is: a proposal belongs to the *agent* rather than to whichever
-       * chat is on screen, and the event carries no session id to be filtered by.
-       * Counted rather than replaced, because two looks since the user last
-       * opened the panel are two more suggestions waiting, not the latest one.
+       * Handled before the conversation filter because a proposal belongs to the
+       * *agent* rather than to whichever chat is on screen, and the event carries
+       * no session id to be filtered by. Counted rather than replaced, because
+       * two looks since the user last opened the panel are two more suggestions
+       * waiting, not the latest one.
        */
       if (event.type === 'memory.proposed') {
         setMemoryWaiting((count) => count + event.count);
@@ -499,13 +463,6 @@ export function useAgent(): AgentController {
       }
       if (event.type === 'memory.reviewed') {
         setLastReview({events: event.events, found: event.found});
-        return;
-      }
-
-      if (event.type === 'model.failed') {
-        setModelProgress(null);
-        // The banner the window already has for a failure the user must read.
-        setError(event.message);
         return;
       }
 
@@ -848,6 +805,33 @@ export function useAgent(): AgentController {
     [profile],
   );
 
+  const setSessionModel = useCallback(
+    async (sessionId: string, model: AgentModel | null): Promise<void> => {
+      if (profile === undefined) {
+        return;
+      }
+      try {
+        const {session} = await window.marimo.call('sessions.setModel', {
+          profileId: profile.id,
+          sessionId,
+          model,
+        });
+        /*
+         * The answer is the stored entry, not the value that was asked for: a
+         * cleared choice comes back with no `model` at all, and the composer
+         * reads that absence as "following the agent" rather than as a model id
+         * it should keep showing.
+         */
+        setSessions((current) =>
+          current.map((entry) => (entry.id === session.id ? session : entry)),
+        );
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [profile],
+  );
+
   /**
    * Deletes a conversation, and lands somewhere sensible.
    *
@@ -928,8 +912,6 @@ export function useAgent(): AgentController {
     refresh,
     openSettings,
     themeMode,
-    modelProgress,
-    modelRevision,
     memoryWaiting,
     lastReview,
     clearMemoryWaiting: () => {
@@ -950,6 +932,7 @@ export function useAgent(): AgentController {
     openWorkspace,
     moveSession,
     renameSession,
+    setSessionModel,
     removeSession,
   };
 }

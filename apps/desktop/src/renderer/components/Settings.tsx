@@ -7,12 +7,17 @@
  *
  * It is drawn in two sizes, and which one is the user's answer rather than the
  * app's guess. **Simple** is what somebody who wants a companion sees: a name,
- * one choice about what it may do, and the model. **Power** is everything, down
- * to the temperature and the individual tool switches. The line between
- * them is *tuning versus repair* — a number to adjust lives in power, a switch
- * that fixes something the user is looking at stays where they are. Hiding the
- * escape hatch from the person hitting the problem is how a setting comes to look
- * like a bug.
+ * one choice about what it may do, which service answers and which of its
+ * models. **Power** is everything, down to the temperature and the individual
+ * tool switches. The line between them is *tuning versus repair* — a number to
+ * adjust lives in power, a switch that fixes something the user is looking at
+ * stays where they are. Hiding the escape hatch from the person hitting the
+ * problem is how a setting comes to look like a bug.
+ *
+ * The repair that matters most is therefore in both. The app carries no model
+ * and runs no engine, so a fresh install cannot answer until it is pointed at a
+ * provider — and the card that does it, the Provider card, is where the welcome
+ * screen sends somebody on their first run.
  *
  * The tool list is drawn in two groups, and the grouping is the point. Twenty
  * checkboxes with no distinction between reading a file and running a shell
@@ -28,6 +33,7 @@
 import {useEffect, useState} from 'react';
 
 import type {
+  AgentModel,
   AgentProfile,
   CapabilityPreset,
   CatalogTool,
@@ -36,6 +42,7 @@ import type {
   McpStatus,
   ProfileCatalog,
   PublicSettings,
+  SettingsPatch,
 } from '@marimo/protocol';
 
 import {
@@ -43,17 +50,30 @@ import {
   COMMANDS,
   COMPANION_ANSWER_LENGTHS,
   DEFAULT_AGENT_IDENTITY,
+  PROVIDER_IDS,
+  PROVIDERS,
 } from '@marimo/protocol';
 
 import {chosenPreset} from '../capabilities.js';
 import {describe} from '../describe.js';
-import type {ModelProgress} from '../hooks/useAgent.js';
 import {Connectors} from './Connectors.js';
 import {Dream} from './Dream.js';
 import {Memory} from './Memory.js';
-import {Model} from './Model.js';
+import {ModelPicker} from './ModelPicker.js';
 import {Recall} from './Recall.js';
 import {SettingsSection} from './SettingsSection.js';
+
+/**
+ * Above this many models the field becomes a searchable picker.
+ *
+ * The native `<select>` is the better control for the handful a provider like
+ * DeepSeek serves: it is keyboard-familiar, it is drawn by the OS, and it costs
+ * no code. OpenRouter answers its `/models` with several hundred, and a list that
+ * long is one you scroll rather than choose from — the threshold is data, not a
+ * provider id, so any endpoint that turns out to be this generous gets the same
+ * treatment.
+ */
+const SEARCHABLE_MODEL_THRESHOLD = 12;
 
 /**
  * The three lengths, in the words the user is choosing between.
@@ -94,15 +114,9 @@ interface Loaded {
 export function Settings({
   onClose,
   onExperienceModeChange,
-  modelProgress,
-  modelRevision,
   lastReview,
 }: {
   onClose: () => void;
-  /** A model download in flight, from the window's event stream. */
-  modelProgress: ModelProgress | null;
-  /** Changes when the model files do, so the Model card re-reads them. */
-  modelRevision: number;
   /** What the last background look read and found, for the Memory card. */
   lastReview?: {events: number; found: number} | null;
   /**
@@ -370,32 +384,51 @@ export function Settings({
 
         <SettingsSection title="Your agents" opened={opened} onToggle={fold}>
           <p className="settings-muted">
-            Each agent has its own identity, its own abilities and its own
-            conversations. Making a second one is how you keep two jobs from
-            sharing one memory.
+            Each agent has its own identity, its own abilities, its own model
+            and its own conversations. Making a second one is how you keep two
+            jobs from sharing one memory.
           </p>
           <div className="settings-agents">
             {loaded.settings.profiles.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                className="settings-agent"
-                aria-current={
-                  entry.id === loaded.settings.activeProfileId
-                    ? 'true'
-                    : undefined
-                }
-                disabled={saving}
-                onClick={() => {
-                  void change(async () => {
-                    await window.marimo.call('profiles.select', {
-                      profileId: entry.id,
+              <div className="settings-agent-row" key={entry.id}>
+                <button
+                  type="button"
+                  className="settings-agent"
+                  aria-current={
+                    entry.id === loaded.settings.activeProfileId
+                      ? 'true'
+                      : undefined
+                  }
+                  disabled={saving}
+                  onClick={() => {
+                    void change(async () => {
+                      await window.marimo.call('profiles.select', {
+                        profileId: entry.id,
+                      });
                     });
-                  });
-                }}
-              >
-                {entry.name}
-              </button>
+                  }}
+                >
+                  {entry.name}
+                </button>
+                {/*
+                  The agent's own model, beside its name rather than in a card of
+                  its own: it is a fact about that agent, and a second list of
+                  agents to look through would be two places holding one answer.
+                */}
+                <AgentModelChoice
+                  profile={entry}
+                  settings={loaded.settings}
+                  disabled={saving}
+                  onChoose={(profileId, model) => {
+                    void change(async () => {
+                      await window.marimo.call('profiles.update', {
+                        profileId,
+                        patch: {model},
+                      });
+                    });
+                  }}
+                />
+              </div>
             ))}
             <button
               type="button"
@@ -847,20 +880,16 @@ export function Settings({
         {/*
           What answers, in both sizes.
 
-          Simple gets the whole story — the model runs here, nothing to sign up
-          for, and whether it is up. Power gets the temperature, the command line
-          and the engine's own log, because every one of those is a number to
-          tune or a failure to diagnose.
+          It is not tuning. The app carries no model of its own, so a fresh
+          install has nothing to think with until this card has been filled in —
+          and a first run that cannot answer has to be fixable from the screen it
+          lands on, not from a mode the user has to find first.
         */}
-        <Model
+        <ProviderSection
+          settings={loaded.settings}
           opened={opened}
           onToggle={fold}
-          power={power}
-          progress={modelProgress}
-          revision={modelRevision}
-          onChange={() => {
-            void load();
-          }}
+          onSaved={load}
         />
 
         <Memory
@@ -908,6 +937,496 @@ export function Settings({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * One agent's own model, and the way back to the app's.
+ *
+ * The list is the one the Provider card draws, because the window has a
+ * catalogue per provider and only ever fetches the active one's. An agent pinned
+ * to another provider is therefore offered the single id stored for it — plus
+ * the way back, which is what keeps that a state it can leave rather than a
+ * corner it is stuck in.
+ *
+ * The stored value is offered even when the catalogue has stopped carrying it,
+ * for the reason the Provider card offers it: a model the endpoint has retired
+ * may still answer.
+ */
+function AgentModelChoice({
+  profile,
+  settings,
+  disabled,
+  onChoose,
+}: {
+  profile: AgentProfile;
+  settings: PublicSettings;
+  disabled: boolean;
+  /** `null` puts the agent back on the app's default. */
+  onChoose: (profileId: string, model: AgentModel | null) => void;
+}): React.JSX.Element {
+  /** What answers when this agent names nothing of its own. */
+  const fallback: AgentModel = {
+    provider: settings.providers.active,
+    model: settings.providers.configs[settings.providers.active].model,
+  };
+  const chosen = profile.model;
+  const shown = chosen ?? fallback;
+  const catalogue =
+    shown.provider === settings.providers.active
+      ? settings.availableModels
+      : [];
+  const models = catalogue.includes(shown.model)
+    ? catalogue
+    : [shown.model, ...catalogue];
+
+  return (
+    <ModelPicker
+      models={models}
+      value={shown.model}
+      disabled={disabled}
+      /*
+       * One or the other: a model this agent chose can be given up, and one it
+       * did not has nothing to give up.
+       */
+      {...(chosen === undefined
+        ? {note: 'default'}
+        : {
+            defaultChoice: {
+              label: 'Follow the app default',
+              onUse: () => {
+                onChoose(profile.id, null);
+              },
+            },
+          })}
+      onChange={(model) => {
+        onChoose(profile.id, {provider: shown.provider, model});
+      }}
+    />
+  );
+}
+
+/**
+ * Which provider answers, how it is reached, and which of its models.
+ *
+ * One section because none of these stands alone: a model id is only meaningful
+ * at one endpoint, the address is what makes a server of your own reachable, and
+ * both are unusable without the key that endpoint wants. They were two sections
+ * for a while — a Provider card and a Model card — and the split was arbitrary:
+ * the key belongs to the picker above it, and the model list could not be
+ * refreshed without leaving the section it lives in.
+ *
+ * Two choices here are deliberate. The provider is a pick-list, because the ids
+ * are the app's own and a mistyped one would leave the settings file naming a
+ * provider nothing can resolve. The model is a pick-list for the same reason — a
+ * mistyped model id is a 404 at the start of a turn, which reads as "the agent is
+ * broken" rather than "that model does not exist" — and the stored value is shown
+ * even when the list no longer carries it, because a model the provider has
+ * stopped advertising may still work.
+ *
+ * "Fetch Models" is what replaces those placeholder names with what the endpoint
+ * actually serves, and it is offered only once a key is on file: asking a service
+ * that will answer 401 is a button whose only outcome is an error. A provider
+ * that needs no key — a local server beside the app — is asked directly.
+ *
+ * Saving is immediate, like every other control here. The base URL is the one
+ * exception in *when*: it waits for the box to lose focus, because saving per
+ * keystroke would write a half-typed address to disk and offer it to the next
+ * turn.
+ */
+function ProviderSection({
+  settings,
+  opened,
+  onToggle,
+  onSaved,
+}: {
+  settings: PublicSettings;
+  opened: ReadonlySet<string>;
+  onToggle: (title: string, expanded: boolean) => void;
+  /** Re-reads the dialog after a write, so no card is left disagreeing. */
+  onSaved: () => Promise<void>;
+}): React.JSX.Element {
+  const [saving, setSaving] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  /** What is in the base URL box, or null while it shows what is stored. */
+  const [baseUrlDraft, setBaseUrlDraft] = useState<string | null>(null);
+  /**
+   * The temperature while the slider is being dragged.
+   *
+   * Held apart from the stored value for the same reason the base URL box is:
+   * the write happens when the gesture ends, and a slider whose handle snapped
+   * back to the stored number between steps would be unusable.
+   */
+  const [temperatureDraft, setTemperatureDraft] = useState<number | null>(null);
+  /** What went wrong, shown in this section rather than only in the banner. */
+  const [problem, setProblem] = useState<string | null>(null);
+  /** What a good fetch found, so the button's effect is visible. */
+  const [note, setNote] = useState<string | null>(null);
+
+  const active = settings.providers.active;
+  const descriptor = PROVIDERS[active];
+  const config = settings.providers.configs[active];
+  /*
+   * The stored value is always offered, even once the provider's list stops
+   * carrying it: a model the endpoint has retired may still answer, and a field
+   * showing something other than what is stored is worse than one showing a name
+   * that is no longer advertised.
+   */
+  const models = settings.availableModels.includes(config.model)
+    ? settings.availableModels
+    : [config.model, ...settings.availableModels];
+  const baseUrl = baseUrlDraft ?? config.baseUrl;
+  /*
+   * Whether a key is *set*, and never what it is: the payload carries the fact
+   * and there is no call that reads one back into a field.
+   */
+  const keyStored = settings.providerKeys[active] === true;
+
+  /** Runs one write, then re-reads so this card and the rest of the dialog agree. */
+  const write = async (work: () => Promise<unknown>): Promise<void> => {
+    setSaving(true);
+    setProblem(null);
+    setNote(null);
+    try {
+      await work();
+      setBaseUrlDraft(null);
+      await onSaved();
+    } catch (failure) {
+      setProblem(describe(failure));
+      // Put the box back rather than leaving a refused address in it.
+      setBaseUrlDraft(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const save = (patch: SettingsPatch): void => {
+    void write(async () => {
+      await window.marimo.call('settings.set', {patch});
+    });
+  };
+
+  /** Saves the dragged temperature, and only when it moved. */
+  const commitTemperature = (): void => {
+    const next = temperatureDraft;
+    setTemperatureDraft(null);
+    if (next === null || next === settings.temperature) {
+      return;
+    }
+    save({temperature: next});
+  };
+
+  /** Writes the key and forgets it here: the window is never told one back. */
+  const saveKey = async (): Promise<void> => {
+    const value = apiKey;
+    setSaving(true);
+    setProblem(null);
+    setNote(null);
+    try {
+      await window.marimo.call('settings.setApiKey', {
+        apiKey: value,
+        provider: active,
+      });
+      setApiKey('');
+      await onSaved();
+    } catch (failure) {
+      setProblem(describe(failure));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /**
+   * Asks the endpoint what it serves and redraws the list from the answer.
+   *
+   * A base URL still sitting in the box has not been written yet — that field
+   * saves on blur — while the fetch reads the stored address. Committing the
+   * draft first is what stops this from asking the address the user just
+   * replaced, which would look like the button ignored the edit.
+   */
+  const fetchModels = async (): Promise<void> => {
+    setFetching(true);
+    setProblem(null);
+    setNote(null);
+    try {
+      const draft = baseUrlDraft?.trim() ?? '';
+      if (draft.length > 0 && draft !== config.baseUrl) {
+        await window.marimo.call('settings.set', {
+          patch: {providers: {configs: {[active]: {baseUrl: draft}}}},
+        });
+        setBaseUrlDraft(null);
+      }
+      const {settings: refreshed} = await window.marimo.call(
+        'providers.fetch',
+        {provider: active},
+      );
+      setNote(
+        `${descriptor.label} returned ` +
+          `${String(refreshed.availableModels.length)} model(s).`,
+      );
+      await onSaved();
+    } catch (failure) {
+      setProblem(describe(failure));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const busy = saving || fetching;
+  const canFetch = !busy && (!descriptor.requiresApiKey || keyStored);
+
+  return (
+    <SettingsSection title="Provider" opened={opened} onToggle={onToggle}>
+      <p className="settings-muted">
+        Which service answers, how the app reaches it, and which of its models.
+        Every provider keeps its own address, model and key, so trying one and
+        coming back does not cost you the setup of the other.
+      </p>
+
+      <label className="settings-field">
+        <span>Provider</span>
+        <em className="settings-why">{descriptor.blurb}</em>
+        <select
+          className="settings-input"
+          value={active}
+          disabled={busy}
+          onChange={(event) => {
+            const next = PROVIDER_IDS.find((id) => id === event.target.value);
+            if (next === undefined) {
+              return;
+            }
+            save({providers: {active: next}});
+          }}
+        >
+          {PROVIDER_IDS.map((id) => (
+            <option key={id} value={id}>
+              {PROVIDERS[id].label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {/*
+        The key, drawn for every provider — and what it says depends on whether
+        one is needed. A local server usually takes none, but `--api-key` is a
+        flag it can be started with, so a field that is absent there would be a
+        configuration the app could not reach at all. What the sentence must not
+        do is let somebody believe a key is required when it is not.
+      */}
+      <div className="settings-field">
+        <span>API key</span>
+        <p className="settings-muted">
+          {keyStored
+            ? `A key for ${descriptor.label} is stored. It is kept on this machine and never sent back to this window.`
+            : descriptor.requiresApiKey
+              ? `No ${descriptor.label} key yet — the agent cannot answer, and its models cannot be fetched, until there is one.`
+              : `${descriptor.label} needs no key. Anything pasted here is sent as one, which matters only if the server asks for it.`}
+        </p>
+        {/*
+          Said before the field rather than after a failed save: the storage is
+          about to refuse an encrypted key, and a secret typed into a box whose
+          Save cannot work is a secret spent for nothing.
+        */}
+        {!settings.encryptionAvailable && (
+          <p className="settings-muted">
+            This machine has no keychain, so a key cannot be encrypted here at
+            all. It can only be stored readable, which is what the switch below
+            asks for — and saving is refused until that switch is on.
+          </p>
+        )}
+        <div className="settings-row">
+          <input
+            className="settings-input"
+            type="password"
+            value={apiKey}
+            placeholder={descriptor.keyPlaceholder}
+            aria-label={`${descriptor.label} API key`}
+            autoComplete="off"
+            disabled={busy}
+            onChange={(event) => {
+              setApiKey(event.target.value);
+            }}
+          />
+          <button
+            type="button"
+            className="button button-primary"
+            disabled={busy || apiKey.trim().length === 0}
+            onClick={() => {
+              void saveKey();
+            }}
+          >
+            Save key
+          </button>
+        </div>
+        <p className="settings-muted">{descriptor.keyHelp}</p>
+
+        {/*
+          The one consent that decides whether a scheduled job can reach a hosted
+          provider at all: the runner has no keychain, so a key it must decrypt is
+          a key it cannot use. Per provider rather than one switch for the app,
+          because trusting one vendor's key to disk is not trusting all of them.
+        */}
+        <label className="settings-check">
+          <input
+            type="checkbox"
+            checked={config.keyStorage === 'plaintext'}
+            disabled={busy}
+            onChange={(event) => {
+              save({
+                providers: {
+                  configs: {
+                    [active]: {
+                      keyStorage: event.target.checked
+                        ? 'plaintext'
+                        : 'keychain',
+                    },
+                  },
+                },
+              });
+            }}
+          />
+          <span>
+            Let the background runner read this key
+            <em className="settings-why">
+              {settings.encryptionAvailable
+                ? 'On, the key is stored readable instead of encrypted — which is what a scheduled job needs, because the runner has no keychain to unlock it. Anything that can read the file can then read the key, so leave it off unless jobs have to run while the app is closed. Save the key again after changing this.'
+                : 'Your key can only be stored readable here, because there is no keychain to encrypt it with. It is readable by anything that can open the file.'}
+            </em>
+          </span>
+        </label>
+      </div>
+
+      <label className="settings-field">
+        <span>Base URL</span>
+        <em className="settings-why">
+          Where requests for {descriptor.label} go. The usual address is{' '}
+          <code>{descriptor.defaultBaseUrl}</code>; change it to point at a
+          server of your own.
+        </em>
+        <input
+          className="settings-input"
+          type="text"
+          value={baseUrl}
+          placeholder={descriptor.defaultBaseUrl}
+          disabled={busy}
+          spellCheck={false}
+          onChange={(event) => {
+            setBaseUrlDraft(event.target.value);
+          }}
+          onBlur={() => {
+            const next = baseUrl.trim();
+            // An empty box is not an address: fall back to what is stored rather
+            // than writing a value the schema refuses and the user cannot see.
+            if (next.length === 0 || next === config.baseUrl) {
+              setBaseUrlDraft(null);
+              return;
+            }
+            save({providers: {configs: {[active]: {baseUrl: next}}}});
+          }}
+        />
+      </label>
+
+      <div className="settings-field">
+        <span>Model</span>
+        <em className="settings-why">
+          Cheaper models are fine for reading and summarising; harder questions
+          want a bigger one.
+        </em>
+        <div className="settings-row">
+          {models.length > SEARCHABLE_MODEL_THRESHOLD ? (
+            <ModelPicker
+              models={models}
+              value={config.model}
+              disabled={busy}
+              onChange={(model) => {
+                save({providers: {configs: {[active]: {model}}}});
+              }}
+            />
+          ) : (
+            <select
+              className="settings-input"
+              aria-label="Model"
+              value={config.model}
+              disabled={busy}
+              onChange={(event) => {
+                save({
+                  providers: {configs: {[active]: {model: event.target.value}}},
+                });
+              }}
+            >
+              {models.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            type="button"
+            className="button button-quiet"
+            disabled={!canFetch}
+            title={
+              descriptor.requiresApiKey && !keyStored
+                ? `Save a ${descriptor.label} key first`
+                : undefined
+            }
+            onClick={() => {
+              void fetchModels();
+            }}
+          >
+            {fetching ? 'Fetching…' : 'Fetch Models'}
+          </button>
+        </div>
+        {note !== null && <p className="settings-muted">{note}</p>}
+        {problem !== null && <p className="settings-problem">{problem}</p>}
+      </div>
+
+      {/*
+        The one knob the settings file has always held and no screen ever drew.
+
+        It belongs here rather than with the appearance settings: it is a property
+        of the model — how literal or how inventive its wording is — and it is
+        worth more on a small local model than on any of the hosted ones, which is
+        why it is worth a control.
+
+        A range rather than a number box, like the memory limit, and saved when
+        the pointer comes up: a slider fires per pixel, and a settings write per
+        pixel is a burst of disk writes for one decision.
+      */}
+      <label className="settings-field">
+        <span>
+          Temperature{' '}
+          <strong className="settings-value">
+            {(temperatureDraft ?? settings.temperature).toFixed(1)}
+          </strong>
+        </span>
+        <em className="settings-why">
+          How much it varies its wording. Low is literal and repeatable, high is
+          more inventive and more likely to wander. 0.7 is the default; below
+          0.3 a small model starts repeating itself.
+        </em>
+        <input
+          className="settings-input"
+          type="range"
+          min={0}
+          max={2}
+          step={0.1}
+          value={temperatureDraft ?? settings.temperature}
+          disabled={busy}
+          aria-label="Temperature"
+          onChange={(event) => {
+            setTemperatureDraft(Number(event.target.value));
+          }}
+          onPointerUp={() => {
+            commitTemperature();
+          }}
+          onKeyUp={() => {
+            commitTemperature();
+          }}
+        />
+      </label>
+    </SettingsSection>
   );
 }
 

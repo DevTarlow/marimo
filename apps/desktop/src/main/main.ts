@@ -30,6 +30,7 @@ import {
 
 import {IPC_EVENT_CHANNEL, defaultWindowState} from '@marimo/protocol';
 import type {AgentUiEvent, ThemeMode, WindowState} from '@marimo/protocol';
+import {defaultStoredSettings} from '@marimo/runtime';
 
 import {registerIpcHandler} from './ipc.js';
 import {Companion} from './companion.js';
@@ -159,14 +160,6 @@ async function createWindow(): Promise<BrowserWindow> {
   if (!offscreen) {
     window.once('ready-to-show', () => {
       window.show();
-      /*
-       * And start the model, because a window on screen is the app's only signal
-       * that somebody is about to ask something. Best-effort and not awaited: a
-       * warm-up that fails reports nothing, and the first turn reports properly.
-       * An offscreen window is excluded by the branch we are already inside,
-       * which is right — nothing is on screen, so nothing is about to be typed.
-       */
-      void agent?.warmModel();
     });
   }
 
@@ -391,6 +384,11 @@ async function bootstrap(): Promise<void> {
       // timer fires: a service started at login may not have these.
       configHome:
         process.env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config'),
+      // Read per call rather than captured: the provider can change while the
+      // app is open, and a copy taken here would answer about the one that was
+      // active when the window opened.
+      readSettings: async () =>
+        agent === undefined ? defaultStoredSettings() : await agent.settings(),
     },
   });
 

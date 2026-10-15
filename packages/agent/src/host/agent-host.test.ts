@@ -232,6 +232,8 @@ describe('AgentHost', () => {
     return {
       baseUrl,
       model: TEST_MODEL,
+      provider: 'deepseek',
+      apiKey: '',
       temperature: 0,
       systemPrompt: TEST_IDENTITY,
       workspaceRoot: workDir,

@@ -225,10 +225,15 @@ describe('FileSessionService', () => {
 
   it('reads a conversation an older build gave a model of its own', async () => {
     /*
-     * Every conversation used to be able to name its model, and the index kept
-     * it. There is one model now, so the key is not read — but the entry around
-     * it must survive, because a reader that dropped a conversation over a field
-     * it no longer understands is how a chat disappears from the rail.
+     * A field whose shape changed under a document that did not.
+     *
+     * The build before this one recorded a conversation's model as a bare id and
+     * this one records a pair, so the old value is dropped: an id means nothing
+     * without the endpoint that served it, and nothing in the document says which
+     * one that was. What must survive is the *entry*, and that is the failure
+     * this guards — the schema is checked once for the whole index, so an entry
+     * that failed it would take every conversation with it and the rail would
+     * come back empty rather than missing one model.
      *
      * Written straight to the file rather than through `createSession`: what is
      * being tested is a document this build did not write.
@@ -261,7 +266,60 @@ describe('FileSessionService', () => {
     const entry = await service.getIndexEntry('from-the-provider-era');
     expect(entry?.title).toBe('An older chat');
     expect(entry?.workspaceId).toBe('workspace-a');
+    // Dropped rather than guessed at, for the reason above.
+    expect(entry?.model).toBeUndefined();
     expect(await service.getIndex()).toHaveLength(1);
+  });
+
+  /*
+   * The other half of that tolerance, and the half a document-level rule would
+   * get wrong: a stale id in one entry must not make the reader lenient about
+   * the entry beside it, which carries a pair this build wrote and has to keep.
+   * Two entries in one file is what makes that per-entry rather than a property
+   * of the document.
+   */
+  it('keeps a model this build wrote beside a stale one it drops', async () => {
+    const entry = (id: string, model: unknown): Record<string, unknown> => ({
+      id,
+      title: id,
+      createdAt: '2025-01-01T00:00:00.000Z',
+      updatedAt: '2025-01-01T00:00:00.000Z',
+      messageCount: 2,
+      appName: APP,
+      userId: USER,
+      ...(model === undefined ? {} : {model}),
+    });
+
+    await writeFile(
+      join(rootDir, 'index.json'),
+      `${JSON.stringify(
+        {
+          version: 1,
+          sessions: {
+            'from-the-provider-era': entry(
+              'from-the-provider-era',
+              'deepseek-v4-pro',
+            ),
+            'from-this-build': entry('from-this-build', {
+              provider: 'deepseek',
+              model: 'deepseek-flash',
+            }),
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+
+    expect(await service.getIndex()).toHaveLength(2);
+    expect(
+      (await service.getIndexEntry('from-the-provider-era'))?.model,
+    ).toBeUndefined();
+    expect((await service.getIndexEntry('from-this-build'))?.model).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+    });
   });
 
   it('never resurrects a deleted session from a late event', async () => {

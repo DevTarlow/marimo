@@ -303,18 +303,19 @@ started to prove asar is still off. Read it before changing a build script, a
 dependency's version, or anything the package step assumes about
 `apps/desktop/release/`.
 
-**It has never run here, and the red X does not mean it failed.** The remote is a
-Gitea instance with no runner registered, so every push records a run that
-executed nothing — `Waiting`, `0s`, annotated _No matching online runner with
-label: ubuntu-latest_. That annotation is the whole story; the older runs that
-read `Failure` were Gitea giving up on jobs nothing claimed, not tests that
-failed. So nothing in the workflow is exercised by a push, and a change that
-touches the preload, the IPC schemas or the bundles is still only verified by the
-local commands above. Registering a runner is the job that turns that tab into a
-signal — worth doing closer to release than now — and the workflow is ready for
-one: nothing in it is on Gitea's unsupported list, with `${{ runner.temp }}` in
-the package step the single expression to watch, because an unexpanded context
-there fails the step rather than the job.
+**It runs now, and the red X means something.** The remote is
+`github.com/DevTarlow/marimo` and the repository is private, so a push to `main`
+or a pull request starts a real GitHub-hosted runner and spends metered minutes.
+Everything that used to be true about this file being decoration is gone: a
+failure here is a failure, and the packaging step below is the reason to look.
+
+**That step had never executed anywhere until the first GitHub push.** It builds
+an AppImage and starts the packaged runner out of `release/linux-unpacked`, which
+is the one thing that works in development and can be broken by packaging alone.
+`${{ runner.temp }}` in it is the expression to watch, because an unexpanded
+context fails the step rather than the job — and the runner's own expectation is
+that it reports the recall model as not installed, which is a state it has to
+handle anyway.
 
 Two consequences worth internalising. **A green local run is not a green CI run**
 — the steps above are the difference, so a packaging or preload change is not
@@ -354,11 +355,12 @@ commit is not a push: it is local, reversible, and the thing that makes the next
 task's diff readable.
 
 **Never push on your own initiative.** Pushing is done when asked, usually after
-a review of the commit. The remote this checkout has is the Gitea instance
-`git remote -v` names — the same one the CI section above is about — and `main`
+a review of the commit. `origin` is `github.com/DevTarlow/marimo` and `main`
 tracks it, so the push is `git push` with no arguments and no second remote
-invented for the job. If a push is refused for authentication, say so — do not
-reach for a token or rewrite a remote.
+invented for the job. The Gitea instance this project used to live on is kept as
+a remote named `gitea` and nothing is pushed there any more — it is there to
+fetch from if a branch turns out to be missing. If a push is refused for
+authentication, say so — do not reach for a token or rewrite a remote.
 
 Messages follow the history rather than a convention document:
 

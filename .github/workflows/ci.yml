@@ -56,11 +56,11 @@ jobs:
       # support, so an archive it cannot read leaves the background service
       # silently unable to start.
       #
-      # No model is fetched and nothing is bundled: the app downloads its own on a
-      # user's first run, so packaging is now a build rather than a build plus a
-      # gigabyte. What this step proves is unchanged — that the app packages and
-      # the packaged runner starts — and the runner is expected to report the model
-      # as not installed, which is a state it has to handle anyway.
+      # Nothing is fetched and no model is bundled: the app carries no chat model,
+      # so packaging is a build rather than a build plus a gigabyte. What this step
+      # proves is unchanged — that the app packages and the packaged runner starts
+      # — and the runner is expected to report the recall model as not installed,
+      # which is a state it has to handle anyway.
       - name: Package, and prove the runner still starts
         run: |
           pnpm --filter @marimo/desktop package

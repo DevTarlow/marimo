@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Marimo \u2014 a minimal, always-on desktop agent you bolt capabilities onto.",
+  "description": "Marimo \u2014 a desktop AI assistant that runs on your own computer, with bots you make and the folders they work in.",
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": ">=20.19"
@@ -22,5 +22,9 @@
     "prettier": "^3.9.6",
     "typescript": "^6.0.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DevTarlow/marimo.git"
+  }
 }

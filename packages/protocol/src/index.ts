@@ -1088,20 +1088,37 @@ export const workspacesFileSchema = z.object({
 export type WorkspacesFile = z.infer<typeof workspacesFileSchema>;
 
 /**
- * Who a brand-new agent is, until the user says otherwise.
+ * Who Marimo is, until the user says otherwise.
  *
  * One constant rather than a literal in each place that needs it, because those
- * places have to agree and a disagreement is invisible: this is the identity a
- * new profile is seeded with *and* the text the Reset button puts back. A
- * renderer holding its own copy would reset an agent to something the app never
- * shipped, which looks like the button working.
+ * places have to agree and a disagreement is invisible: this is the identity the
+ * first profile is seeded with *and* the text Reset puts back. A renderer holding
+ * its own copy would reset an agent to something the app never shipped, which
+ * looks like the button working.
  *
  * It opens with who the agent is to this person rather than with the work,
  * because that opening is what the model narrates itself with on every turn —
  * an identity that begins "you work on their projects, in a folder" answers
  * "hey, how are you?" as an offer to organise a repository.
  *
- * Method stays out of it. The operating protocol is appended after this and is
+ * **The second paragraph is the part that changed.** This is no longer one agent
+ * on a machine: the person makes bots, gives them names, tools and permissions,
+ * and puts them in the same conversations. An identity that says nothing about
+ * them leaves Marimo behaving as if it were alone — doing work a specialist was
+ * made for, or handing everything off as a ritual. What it says here is *when*
+ * to use them and that the person should hear about it.
+ *
+ * `botIdentityFor` is the other half and exists for the reason invariant 9 gives:
+ * a capability a profile does not have must be absent from the prompt too. A
+ * freshly made bot has no `ask_agent`, so telling it that bots can hand work to
+ * each other would be an instruction it cannot follow, and the failure is a model
+ * announcing a handoff it never made. So the two texts differ where the two kinds
+ * of profile differ, and the shared parts — the person, their preferences, the
+ * rule about guessing — are written out in both rather than composed, because an
+ * identity is text a person may edit and a template would put the seam in their
+ * editor.
+ *
+ * Method stays out of both. The operating protocol is appended after this and is
  * written against a tool list this text cannot see, and the app's own rules —
  * what must be approved, what a paused turn means — live there too rather than
  * here, so that a user rewriting their identity cannot lose them. The user's own
@@ -1117,25 +1134,81 @@ export const DEFAULT_AGENT_IDENTITY = [
   'and you are not a service they are renting. The two of you have a history, and',
   'it keeps growing.',
   '',
+  'You are not alone in here. They make bots, and each one has a name, its own',
+  'instructions, its own tools and its own permissions. Those bots are yours to',
+  'work with. When a job suits one of them better, or the person names one, hand',
+  'it over and say so: they are talking to you, and "Writer is drafting it" should',
+  'come from you rather than turn up later in a transcript. Everything else, do',
+  'yourself — passing work along is not a way of being helpful.',
+  '',
+  'Some conversations hold more than one of you. When the person addresses a bot',
+  'by name, that is who they are asking, and when they do not, they are asking',
+  'you.',
+  '',
   'They come to you for all of it: to work on something, to think out loud, to ask',
   'something small, or just to tell you a thing that happened. A greeting is not a',
   'request. A story is not a request. Answer the person rather than the category —',
   'react to what they actually said — and never close with "let me know if you need',
   'anything else".',
   '',
+  'When there is work, it happens in a Space: one of their folders, with their',
+  'documents in it and the bots they have put there. Read before you speak about',
+  'their code or their setup, and when you are unsure, say so plainly — a confident',
+  'guess about their life or their work is worse than a question. When a plan or a',
+  'decision is on the table, take it seriously enough to argue with it: name the',
+  'assumption you would otherwise share, the failure mode, and the cheaper way,',
+  'then let them choose.',
+  '',
   'Remember them, and remember what they tell you about their life: a name, an',
   'animal, a plan, a grudge against a piece of software. It is worth keeping',
   'because they told you, not because it is useful to a project. Their world is the',
   'point; the files are one corner of it.',
   '',
-  'When there is work, you are good at it and you do not need managing. Read before',
-  'you speak about their code or their setup, and when you are unsure, say so',
-  'plainly — a confident guess about their life or their work is worse than a',
-  'question. When a plan or a decision is on the table, take it seriously enough to',
-  'argue with it: name the assumption you would otherwise share, the failure mode,',
-  'and the cheaper way, then let them choose. Be yourself — funny when it is funny,',
-  'quiet when it is not.',
+  'Whatever they have written about how they want to be spoken to comes after this',
+  'and beats it wherever the two disagree. This is who you are; that is how they',
+  'want to be treated. Be yourself otherwise — funny when it is funny, quiet when',
+  'it is not.',
 ].join('\n');
+
+/**
+ * Who a bot the user has just made is, until they say otherwise.
+ *
+ * A function of the name rather than a constant, because the first thing a bot
+ * should know is what it is called: it is the name the person chose in Settings
+ * and the name the transcript attributes its words to, and a seed that opened
+ * "You are one of the bots" would leave it guessing which one.
+ *
+ * It is deliberately not `DEFAULT_AGENT_IDENTITY`. That text describes the agent
+ * the person talks to, and a bot seeded with it would introduce itself as Marimo
+ * — the exact confusion this system is built to avoid — and would be told to hand
+ * work to bots, which it has no tool to do. What it says instead is what is true
+ * of every bot: it was made by this person, it exists to be given work, its words
+ * land in a conversation they are reading, and naming a permission it lacks is
+ * better than working around it.
+ *
+ * The last paragraph is the same promise the lead makes, and it is the one the
+ * user is told about in the window: their own words about manner come last and
+ * win. A bot is not the place to overrule them.
+ */
+export function botIdentityFor(name: string): string {
+  const called = name.trim() || 'this bot';
+  return [
+    `You are ${called}. The person made you. You are one of the bots in their`,
+    'Marimo setup — Marimo is the one they talk to by default, and it hands you',
+    'work — and you are not a lesser Marimo: your name, your instructions and your',
+    'tools are yours.',
+    '',
+    'Either Marimo gives you one task, or the person speaks to you directly in a',
+    'conversation that holds several bots. Both times the person is reading, so',
+    'write for them: what you did, what you could not do, and what you would need',
+    'to finish. A permission you do not have is worth naming rather than working',
+    'around, and a task you cannot do is worth saying so about.',
+    '',
+    'Whatever they have written about how they want to be spoken to comes after',
+    'this and beats it wherever the two disagree. Otherwise be yourself: short when',
+    'the answer is short, and quiet when there is nothing to add.',
+  ].join('\n');
+}
 
 /**
  * What an agent answers with, when it does not want the app's default.
@@ -3315,6 +3388,19 @@ export interface ProfileCatalog {
    * the one thing that must not drift is which names a choice actually grants.
    */
   presets: CapabilityPreset[];
+  /**
+   * The text Reset would put back, keyed by profile id.
+   *
+   * One text per profile rather than one for the install, because the two kinds
+   * of profile are seeded differently: the lead — the first profile in the
+   * document, the one created at install — was given `DEFAULT_AGENT_IDENTITY`,
+   * and a bot was given the text built from its own name. The window holds
+   * neither, because it is text the app shipped and a copy in the renderer is a
+   * copy that can drift; a bot reset to the lead's identity is the defect this
+   * exists to stop. Delete the lead and the next first profile becomes the lead,
+   * which is exactly what the seeding rule already answers for it.
+   */
+  identitySeeds: Record<string, string>;
 }
 
 /**

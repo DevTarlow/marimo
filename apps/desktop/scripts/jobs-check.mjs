@@ -36,6 +36,7 @@ const profiles = new ProfileStore({
   file: paths.profiles,
   defaultWorkspaceRoot: dir,
   defaultIdentity: '',
+  botIdentity: () => '',
   defaultTools: [],
   defaultSkills: [],
 });

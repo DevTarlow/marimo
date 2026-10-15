@@ -62,7 +62,6 @@ import {
   COMMAND_IDS,
   COMMANDS,
   COMPANION_ANSWER_LENGTHS,
-  DEFAULT_AGENT_IDENTITY,
   PROVIDER_IDS,
   PROVIDERS,
 } from '@marimo/protocol';
@@ -455,13 +454,22 @@ export function Settings({
       ? undefined
       : loaded.settings.profiles.find((entry) => entry.id === menu.id);
   /*
-   * Reset would be a no-op only when the box already shows the default *and*
-   * that is what is stored. A box showing the default it has not saved yet is a
+   * The text Reset would put back for *this* profile, read from the catalogue
+   * rather than imported: the lead's is the app constant and a bot's is built
+   * from its own name, so one import could only ever be right for one of them.
+   * The empty id is the no-profile case, where the field is not drawn at all.
+   */
+  const resetIdentity =
+    loaded.catalog.identitySeeds[loaded.profile?.id ?? ''];
+  /*
+   * Reset would be a no-op only when the box already shows that text *and* that
+   * is what is stored. A box showing the default it has not saved yet is a
    * change waiting to happen, and the button is how it gets saved.
    */
   const identityAtDefault =
-    draft?.identity === DEFAULT_AGENT_IDENTITY &&
-    loaded.profile?.identity === DEFAULT_AGENT_IDENTITY;
+    loaded.profile !== undefined &&
+    draft?.identity === resetIdentity &&
+    loaded.profile.identity === resetIdentity;
   /*
    * Grouped by the grant itself, which is the one fact about a tool that cannot
    * be out of date — it is the same value the switch is drawn from. An earlier
@@ -809,11 +817,11 @@ export function Settings({
                     className="button button-quiet"
                     disabled={saving || identityAtDefault}
                     onClick={() => {
-                      setDraft({...draft, identity: DEFAULT_AGENT_IDENTITY});
+                      setDraft({...draft, identity: resetIdentity});
                       void change(async () => {
                         await window.marimo.call('profiles.update', {
                           profileId: loaded.profile?.id ?? '',
-                          patch: {identity: DEFAULT_AGENT_IDENTITY},
+                          patch: {identity: resetIdentity},
                         });
                       });
                     }}

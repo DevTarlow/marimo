@@ -51,6 +51,7 @@ import {
   DEFAULT_AGENT_IDENTITY,
   DEFAULT_DREAM_KEEP_LOGS,
   DEFAULT_DREAM_RESULT_BYTES,
+  botIdentityFor,
 } from '@marimo/protocol';
 import type {ProviderId} from '@marimo/protocol';
 import type {
@@ -233,19 +234,31 @@ export class AgentRuntime {
     });
     this.profileStore = new ProfileStore({
       file: options.paths.profiles,
-      // A brand-new profile starts with the app's identity and no capabilities:
-      // every one of those is something the user turns on, which is the whole
-      // shape of this app. The empty lists are the point, not an oversight.
-      //
-      // The identity is seeded rather than left blank because an agent with no
-      // persona at all is not "unconfigured" — it is one whose replies have no
-      // stated idea of who they are for, and the user has no text to edit back
-      // to. It stays editable, and Settings resets it to this same constant.
-      defaultIdentity: DEFAULT_AGENT_IDENTITY,
       /*
-       * The safe core, and nothing with reach. A brand-new install can read,
+       * Two seeds, because there are two kinds of profile and the texts are not
+       * interchangeable. `freshFile` makes the first one at install — the lead,
+       * the agent the person talks to — and `DEFAULT_AGENT_IDENTITY` describes
+       * exactly that one. Every profile `create` makes afterwards is a bot the
+       * user named, and `botIdentityFor` seeds it with that name.
+       *
+       * A bot handed the lead's text is the defect these two exist to prevent:
+       * it introduces itself as Marimo — the one thing the bots feature is built
+       * so that a user never sees — and it is told to hand work to bots, which
+       * it has no `ask_agent` to do.
+       *
+       * The identity is seeded rather than left blank because an agent with no
+       * persona at all is not "unconfigured" — it is one whose replies have no
+       * stated idea of who they are for, and the user has no text to edit back
+       * to. It stays editable, and Settings resets each profile to its own seed.
+       */
+      defaultIdentity: DEFAULT_AGENT_IDENTITY,
+      botIdentity: botIdentityFor,
+      /*
+       * A brand-new profile starts with no capabilities: every one of those is
+       * something the user turns on, which is the whole shape of this app. What
+       * it does start with is the safe core below — a fresh install can read,
        * remember and search; writing, running commands, fetching an arbitrary
-       * URL and spawning helpers are all things the user grants deliberately.
+       * URL and spawning helpers are all granted deliberately.
        *
        * The list lives beside the tools themselves so a rename cannot leave it
        * naming something that no longer exists — which would fail silently, as a
@@ -319,6 +332,23 @@ export class AgentRuntime {
     const workspaceRoot =
       workspaceRootFor(workspaces) ?? this.options.paths.defaultWorkspace;
     const settings = await this.settingsStore.load();
+    /*
+     * Read for the Reset seeds below, and allowed to fail.
+     *
+     * `ProfileStore.load()` refuses a document from a newer build rather than
+     * emptying it, which is right, and it means this read can throw. Nothing else
+     * here is about the profiles — the tools, the Spaces, the connectors and the
+     * presets come from other documents — so the seeds are the one thing that
+     * should go missing. A Settings page that lost all five cards because the
+     * bots file was unreadable would be a worse answer than five cards with their
+     * Reset buttons disabled and the profile card saying what is wrong.
+     *
+     * On a *first* read the folders adoption reaches the same file and throws
+     * before this line (see `adoptLegacy`), which is older behaviour and not this
+     * call's business: by then the workspace document exists, and this is the
+     * only remaining way the profiles are read at all.
+     */
+    const profiles = await this.profileStore.profiles().catch(() => []);
 
     /*
      * The catalogue is drawn for the *app's* provider rather than for whichever
@@ -392,6 +422,21 @@ export class AgentRuntime {
        * tool answers to never reaches a profile.
        */
       presets: capabilityPresets(tools.map((tool) => tool.name)),
+      /*
+       * What Reset puts back, per profile. The lead is the *first profile in the
+       * document* — the one `freshFile` created at install — and it is the only
+       * one `DEFAULT_AGENT_IDENTITY` was written for; every other profile is a
+       * bot, and its seed is built from the name it answers to. Delete the lead
+       * and the next first profile becomes the lead, which is exactly what the
+       * seeding rule already does for it, so this stays a fact about position
+       * rather than about an id that could go stale.
+       */
+      identitySeeds: Object.fromEntries(
+        profiles.map((profile, index) => [
+          profile.id,
+          index === 0 ? DEFAULT_AGENT_IDENTITY : botIdentityFor(profile.name),
+        ]),
+      ),
     };
   }
 

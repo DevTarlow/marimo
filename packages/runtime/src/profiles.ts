@@ -45,8 +45,17 @@ export interface ProfileSeed {
 
 export interface ProfileStoreOptions {
   file: string;
-  /** Identity a brand-new profile starts with. */
+  /** Identity the first profile — the lead — starts with. */
   defaultIdentity: string;
+  /**
+   * Identity a bot the user makes starts with, from the name it was given.
+   *
+   * Deliberately not `defaultIdentity`: that text describes the lead, and a bot
+   * seeded with it would introduce itself as Marimo and be told to hand work to
+   * bots it has no tool to do. Naming itself is the one thing a bot's seed has
+   * to do, which is why this takes the name rather than being a constant.
+   */
+  botIdentity: (name: string) => string;
   /** Tool names a brand-new profile starts with. */
   defaultTools: string[];
   /** Skill names a brand-new profile starts with. */
@@ -235,12 +244,17 @@ export class ProfileStore {
   async create(name?: string): Promise<AgentProfile> {
     return await this.withLock(async () => {
       const file = await this.load();
+      /*
+       * Two agents with the same name are indistinguishable in the picker, so a
+       * new one always gets a distinct label. The identity is built from that
+       * label rather than from what was typed, so a bot called "Agent 2" says so
+       * instead of naming the one that already existed.
+       */
+      const unique = uniqueName(file.profiles, name?.trim() || 'Agent');
       const profile: AgentProfile = {
         id: randomUUID(),
-        // Two agents with the same name are indistinguishable in the picker, so
-        // a new one always gets a distinct label.
-        name: uniqueName(file.profiles, name?.trim() || 'Agent'),
-        identity: this.options.defaultIdentity,
+        name: unique,
+        identity: this.options.botIdentity(unique),
         enabledTools: [...this.options.defaultTools],
         enabledSkills: [...this.options.defaultSkills],
       };
@@ -390,6 +404,12 @@ export class ProfileStore {
     const profile: AgentProfile = {
       id: randomUUID(),
       name: 'Marimo',
+      /*
+       * The lead, and the only profile `defaultIdentity` is for: it is first in
+       * the document, which is what `AgentRuntime.catalog` reads to decide whose
+       * Reset seed is the app's constant. A bot made later is seeded from its own
+       * name instead — see `create`.
+       */
       identity: seed?.systemPrompt?.trim() || this.options.defaultIdentity,
       enabledTools: [...this.options.defaultTools],
       enabledSkills: [...this.options.defaultSkills],

@@ -601,6 +601,42 @@ because the helper's invocation sits between its parent's two halves and the
 parent's own id appears again as the log unwinds. Clearing on that would take down
 the card the helper had just put up.
 
+### An identity is seeded, and a bot is seeded as itself
+
+**An identity is the system prompt, and it is the one piece of it the user owns.**
+It is `identity` on the profile, and `composeInstruction` puts it first — ahead of
+the operating protocol, the skills and the memory — so everything the app knows
+about how a turn runs is appended after it and a person rewriting their identity
+cannot lose the rules about approvals, refusals or a paused turn. Blank is not a
+neutral default and was never the answer: an agent with nothing said about whom it
+is for narrates itself from whatever is left, and the user has no text to edit
+back to. So `ProfileStore` *seeds* a new profile, and Settings' Reset is that same
+seed put back.
+
+**There are two seeds because there are two kinds of profile, and they are not
+interchangeable.** `DEFAULT_AGENT_IDENTITY` is Marimo, the agent the person talks
+to; `botIdentityFor(name)` is a bot they made. The difference matters because a
+prompt is a claim about what the profile can do. A bot seeded with Marimo's text
+would introduce itself as Marimo — the one confusion bots exist to avoid — and
+would be told to hand work to other bots, which is an instruction it has no
+`ask_agent` to follow. What that produces is silence in the tool log and a
+sentence in the transcript: a model narrating a delegation it never made. So the
+bot's seed names the bot, says this person made it and Marimo hands it work, and
+asks it to write for the person — what it did, what it could not, what it would
+need — and to name a permission it lacks rather than work around it. Both texts
+are written out in full rather than composed from shared fragments, because an
+identity is text a person may edit and a template would put the seam in their
+editor.
+
+**`preferences` follows the identity, and the catalogue carries the seeds to the
+window.** The user's own words about manner are inserted directly after the
+identity and before the app's own blocks, so they win wherever the two disagree;
+that is the same promise Marimo's closing paragraph makes, and it holds for a bot
+because it is the same composition. `ProfileCatalog.identitySeeds` holds both
+texts keyed by profile id, so Reset restores the seed for the profile in front of
+it and the renderer holds neither: a window with its own copy could reset a bot to
+Marimo, or to a version the app never shipped, and look like the button working.
+
 ### A Space's documents are the markdown files in it
 
 **There is no second store, and that is the feature.** `DocumentService` is built

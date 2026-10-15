@@ -30,6 +30,7 @@ import type {AdkEvent} from '@marimo/agent';
 import {
   DEFAULT_AGENT_IDENTITY,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
+  botIdentityFor,
 } from '@marimo/protocol';
 import type {AgentModel, ProviderId} from '@marimo/protocol';
 
@@ -98,6 +99,7 @@ describe('AgentRuntime', () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
       defaultIdentity: '',
+      botIdentity: botIdentityFor,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -467,6 +469,7 @@ describe('the catalogue', () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
       defaultIdentity: '',
+      botIdentity: botIdentityFor,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -639,6 +642,7 @@ describe('changing an agent', () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
       defaultIdentity: '',
+      botIdentity: botIdentityFor,
       defaultTools: ['read_file'],
       defaultSkills: [],
     });
@@ -698,10 +702,12 @@ describe('changing an agent', () => {
  * The identity a new agent starts with, and the half that matters more: the
  * identities already on disk that must not change.
  *
- * The two are one feature. Settings resets an edited identity to this same
- * constant, so a seed and a button that disagreed would make Reset restore
- * something no agent is ever given — and a "default" applied on read would be
- * the app editing the user's words back to its own.
+ * The two are one feature. Settings resets an edited identity to the seed the
+ * catalogue holds for *that* profile, so a seed and a button that disagreed
+ * would make Reset restore something no agent is ever given — and a "default"
+ * applied on read would be the app editing the user's words back to its own.
+ * There are two seeds because there are two kinds of profile: the lead gets the
+ * app's constant, a bot gets text built from its own name.
  */
 describe('the identity a new agent gets', () => {
   let dir: string;
@@ -723,20 +729,73 @@ describe('the identity a new agent gets', () => {
   it('starts the first agent on the shipped identity', async () => {
     const [profile] = await runtime().profiles();
     expect(profile?.identity).toBe(DEFAULT_AGENT_IDENTITY);
-    // The same constant is what the Reset button restores, so a blank one is a
-    // feature that quietly does nothing in both places at once.
+    // The same constant is what the Reset button restores for the lead, so a
+    // blank one is a feature that quietly does nothing in both places at once.
     expect(DEFAULT_AGENT_IDENTITY.trim().length).toBeGreaterThan(0);
   });
 
-  it('gives an agent made later the same identity', async () => {
+  it("gives a bot made later an identity of its own, not the lead's", async () => {
     const created = await runtime().createProfile('Researcher');
-    expect(created.identity).toBe(DEFAULT_AGENT_IDENTITY);
+    expect(created.identity).toBe(botIdentityFor('Researcher'));
+    expect(created.identity).not.toBe(DEFAULT_AGENT_IDENTITY);
+  });
+
+  /*
+   * Reset is only correct if the catalogue answers per profile: the window
+   * holds neither text, so this is the only place it can learn what to put back.
+   * The lead is the first profile in the document, which is what makes its entry
+   * the app constant rather than something derived from its name.
+   */
+  it('answers the reset seed for every profile, lead included', async () => {
+    const instance = runtime();
+    const [lead] = await instance.profiles();
+    const writer = await instance.createProfile('Writer');
+
+    const catalog = await instance.catalog();
+    expect(catalog.identitySeeds[lead?.id ?? '']).toBe(DEFAULT_AGENT_IDENTITY);
+    expect(catalog.identitySeeds[writer.id]).toBe(botIdentityFor('Writer'));
+  });
+
+  /*
+   * The seeds are the only reason this catalogue reads the profiles at all, and
+   * that read can refuse — a document from a newer build is refused rather than
+   * emptied, on purpose. What must not happen is the *rest* of the catalogue
+   * going with it: the tools, the Spaces and the connectors come from other
+   * documents, and a Settings page that lost all of them because the bots file
+   * was unreadable would turn one broken card into five.
+   */
+  it('still answers its catalogue when the profiles cannot be read', async () => {
+    /*
+     * The folder document first, so the adoption that reads the profiles for a
+     * last time has already happened. That ordering is what makes this the case
+     * the guard exists for: from here on, the seeds are the only reason this
+     * catalogue touches a file the rest of it does not need.
+     */
+    const workspaces = new WorkspaceStore({
+      file: paths.workspaces,
+      defaultWorkspaceRoot: dir,
+    });
+    const seeded = await workspaces.load();
+    await workspaces.rename(seeded.workspaces[0]?.id ?? '', 'Work');
+
+    await writeFile(
+      paths.profiles,
+      JSON.stringify({version: 99, profiles: [], activeProfileId: 'x'}),
+      'utf8',
+    );
+
+    const catalog = await runtime().catalog();
+    expect(catalog.identitySeeds).toEqual({});
+    // And the four cards that are not about profiles are still there to draw.
+    expect(catalog.tools.length).toBeGreaterThan(0);
+    expect(catalog.presets.length).toBeGreaterThan(0);
   });
 
   it('leaves an identity the user already saved alone', async () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
       defaultIdentity: '',
+      botIdentity: botIdentityFor,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -795,6 +854,7 @@ describe('reading a conversation without a working provider', () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
       defaultIdentity: '',
+      botIdentity: botIdentityFor,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -902,6 +962,7 @@ describe('folders and filing', () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
       defaultIdentity: '',
+      botIdentity: botIdentityFor,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -1295,6 +1356,7 @@ describe('the model a turn answers with', () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
       defaultIdentity: '',
+      botIdentity: botIdentityFor,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -1396,6 +1458,7 @@ describe('who is in a conversation', () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
       defaultIdentity: '',
+      botIdentity: botIdentityFor,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -1663,6 +1726,7 @@ describe('removing a bot', () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
       defaultIdentity: '',
+      botIdentity: botIdentityFor,
       defaultTools: [],
       defaultSkills: [],
     });

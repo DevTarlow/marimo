@@ -27,6 +27,14 @@ want — a model of its own rather than the app's default. That is how you end u
 with a Writer that drafts into the website folder and a Researcher you send off to
 read things.
 
+A new bot is not blank before you write anything. It is told its own name, that
+you made it, that Marimo is the one you talk to and hands it work, and that it
+should say what it did, what it could not do and what it would need. So a bot
+called Writer introduces itself as Writer rather than as Marimo. The **How to talk
+to me** box is sent after that text and outranks it wherever the two disagree, and
+**Reset to default** puts the starting text back without touching what you wrote
+there.
+
 The `…` beside a bot's name renames it, and removes it. Removing asks first, and
 says what goes: the bot, its conversations, the jobs it had scheduled and what it
 remembered about you. What it wrote inside your Spaces stays where it is, and so

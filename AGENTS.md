@@ -12,16 +12,17 @@ an agent harness whose capabilities are opt-in, and a headless runner that keeps
 scheduled jobs going while the app is closed. It carries no chat model of its
 own — it answers through a provider somebody picks in Settings, so a fresh
 install says nothing until one is chosen — and the folder it works in is what the
-user calls a **Space**. A chat there can hold more than one agent, and one of
-them can hand work to another.
+user calls a **Space**. Marimo is the agent the person talks to; they also make
+**bots**, each with its own name, instructions, tools and permissions. A chat can
+hold more than one of them, and Marimo can hand work to one.
 
 ## Layout
 
 ```
 packages/protocol   The typed contract: zod schemas for every IPC call, the
                     AgentUiEvent union, the provider catalogue, the model pair,
-                    cron, the profile and job documents. No Electron, no Node,
-                    no React.
+                    cron, the profile and job documents, and the two identity
+                    seeds — Marimo's and a bot's. No Electron, no Node, no React.
 packages/agent      Everything ADK: the OpenAI-compatible client, tool set,
                     skills that compose the system instruction, the file-backed
                     memory and session stores, AgentHost, and the
@@ -186,6 +187,26 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     the agent cannot mention. The caps (500 files, eight levels, one megabyte) say
     when they stopped rather than answering as if the folder ended there, which is
     invariant 7.
+22. **A prompt must not advertise a capability the profile does not have.** The
+    tool list and the identity agree, or the model narrates a capability it was
+    never given. `ProfileStore.create()` seeded every new profile with Marimo's
+    text, so a bot the user named Writer introduced itself as Marimo and was told
+    to hand work to other bots — with no `ask_agent` to hand anything to. What
+    the person then sees is a bot greeting them as Marimo, or announcing a
+    delegation it never made, which reads exactly like one that did. This is
+    invariant 9 one layer up, and the layer below was already right — the
+    filtered tool list was correct and the prose lied about it. So there are two
+    seeds. `DEFAULT_AGENT_IDENTITY` is the agent the person talks to;
+    `botIdentityFor(name)` is a bot, which names itself, says this person made it
+    and Marimo hands it work, and asks it to write for the person — what it did,
+    what it could not, what it would need — rather than work around a permission
+    it does not have. `ProfileCatalog.identitySeeds` carries them keyed by
+    profile id, so Reset puts back the seed for *that* profile and the window
+    holds neither text: a renderer with its own copy resets a bot to Marimo, or
+    to a version the app never shipped. The trap in the other direction is the
+    same rule about the lead's prompt: it must not tell Marimo to do everything
+    alone either, because the person paid for the bots by making them — its text
+    says when to hand work over, and that the person should hear about it.
 
 ## Documents
 

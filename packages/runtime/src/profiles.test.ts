@@ -11,6 +11,8 @@ import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
+import {DEFAULT_AGENT_IDENTITY, botIdentityFor} from '@marimo/protocol';
+
 import {
   LastProfileError,
   ProfileStore,
@@ -37,6 +39,7 @@ describe('ProfileStore', () => {
     return new ProfileStore({
       file,
       defaultIdentity: 'You are an agent.',
+      botIdentity: (name) => `You are ${name}.`,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     });
@@ -171,6 +174,30 @@ describe('ProfileStore', () => {
     const profiles = store();
     const created = await profiles.create('Researcher');
     expect(created.preferences).toBeUndefined();
+  });
+
+  /*
+   * The two seeds, and the reason there are two. The first profile is the lead —
+   * the agent the person talks to — and only it gets the app's identity. A bot
+   * gets text built from its own name, because a bot seeded with the lead's
+   * text introduces itself as Marimo and is told to hand work to bots, which it
+   * has no tool to do.
+   */
+  it('seeds a bot with its own name and the lead with the app identity', async () => {
+    const profiles = new ProfileStore({
+      file,
+      defaultIdentity: DEFAULT_AGENT_IDENTITY,
+      botIdentity: botIdentityFor,
+      defaultTools: TOOLS,
+      defaultSkills: SKILLS,
+    });
+
+    const [lead] = (await profiles.load()).profiles;
+    expect(lead?.identity).toBe(DEFAULT_AGENT_IDENTITY);
+
+    const writer = await profiles.create('Writer');
+    expect(writer.identity).toContain('Writer');
+    expect(writer.identity).not.toContain('You are Marimo');
   });
 
   /*
@@ -398,6 +425,7 @@ describe('an agents file from a newer build', () => {
     return new ProfileStore({
       file,
       defaultIdentity: 'You are an agent.',
+      botIdentity: (name) => `You are ${name}.`,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     });
@@ -492,6 +520,7 @@ describe('an agents file with no version', () => {
     const snapshot = await new ProfileStore({
       file,
       defaultIdentity: '',
+      botIdentity: (name) => `You are ${name}.`,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     }).load();
@@ -535,6 +564,7 @@ describe('the folders a pre-workspaces file carried', () => {
     return new ProfileStore({
       file,
       defaultIdentity: 'You are an agent.',
+      botIdentity: (name) => `You are ${name}.`,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     });

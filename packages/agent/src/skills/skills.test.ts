@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 
-import {DEFAULT_AGENT_IDENTITY} from '@marimo/protocol';
+import {DEFAULT_AGENT_IDENTITY, botIdentityFor} from '@marimo/protocol';
 
 import {SKILLS, composeInstruction, renderSkills} from './index.js';
 
@@ -163,11 +163,21 @@ describe('composeInstruction', () => {
     /*
      * And the other direction, which is what keeps this from creeping back: the
      * editable identity says who the agent is, and none of the app's method.
+     *
+     * Both seeds are checked here rather than the rule being written twice: a
+     * bot's text is prepended to the same protocol, so the same drift is
+     * possible in it, and a second copy of this list would be a second thing to
+     * forget when the vocabulary changes.
      */
     it("leaves the app's own rules out of the editable identity", () => {
-      expect(DEFAULT_AGENT_IDENTITY).not.toContain('gated call');
-      expect(DEFAULT_AGENT_IDENTITY).not.toContain('GitHub-flavoured');
-      expect(DEFAULT_AGENT_IDENTITY).not.toContain('# Operating protocol');
+      for (const identity of [
+        DEFAULT_AGENT_IDENTITY,
+        botIdentityFor('Writer'),
+      ]) {
+        expect(identity).not.toContain('gated call');
+        expect(identity).not.toContain('GitHub-flavoured');
+        expect(identity).not.toContain('# Operating protocol');
+      }
     });
   });
 

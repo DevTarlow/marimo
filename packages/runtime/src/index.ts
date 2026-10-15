@@ -1,5 +1,5 @@
 /**
- * The Electron-free half of Marimo Agent.
+ * The Electron-free half of Marimo.
  *
  * Everything here runs in two places: inside the Electron main process, and
  * inside the headless job runner, which is the same binary started as plain Node

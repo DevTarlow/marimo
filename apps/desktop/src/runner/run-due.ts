@@ -1,7 +1,7 @@
 /**
  * The headless job runner.
  *
- * This is the other half of "Marimo Agent is always on". With the option
+ * This is the other half of "Marimo is always on". With the option
  * enabled, the OS wakes this process on a one-minute timer; it works out which
  * jobs are due, runs them, and exits. It is the *same* binary as the app —
  * started with `ELECTRON_RUN_AS_NODE=1`, so Electron behaves as plain Node —
@@ -39,7 +39,6 @@ import type {McpServer} from '@marimo/protocol';
 import {
   AgentRuntime,
   createJobRunner,
-  defaultUserDataDir,
   FileSecretStore,
   holdProcessLock,
   isProcessHeld,
@@ -52,7 +51,7 @@ import {
 import type {AppPaths} from '@marimo/runtime';
 import type {McpResolvedSecrets} from '@marimo/agent';
 
-import {MCP_CLIENT, PRODUCT_NAME, USER_DATA_ENV} from '../shared/product.js';
+import {MCP_CLIENT, PRODUCT_NAME, userDataDirFor} from '../shared/product.js';
 
 export interface RunDueReport {
   userData: string;
@@ -88,20 +87,15 @@ export interface RunDueReport {
 /**
  * Where this process should look.
  *
- * The override first, because that is what a development run and the smoke check
- * set, and it is the same variable the app honours. Otherwise the platform's own
- * rules with the product name appended — the value Electron would have chosen,
- * worked out without an `app` object to ask.
+ * The same decision the window makes, through the same function — the override
+ * first, because that is what a development run and the smoke check set and it is
+ * the variable the app honours, and otherwise the platform's own rules with the
+ * *folder's* name appended, worked out without an `app` object to ask.
  */
 export function resolveRunnerPaths(
   env: NodeJS.ProcessEnv = process.env,
 ): AppPaths {
-  const override = env[USER_DATA_ENV];
-  const userData =
-    override !== undefined && override.length > 0
-      ? override
-      : defaultUserDataDir({appName: PRODUCT_NAME, env});
-  return resolveAppPaths(userData);
+  return resolveAppPaths(userDataDirFor(env));
 }
 
 /**
@@ -352,7 +346,7 @@ export async function runDue(options: {
 
 /** The report as lines a person reads in a log. */
 export function describeReport(report: RunDueReport): string[] {
-  const lines = ['Marimo Agent job runner'];
+  const lines = [`${PRODUCT_NAME} job runner`];
 
   if (report.problem !== undefined) {
     lines.push(`  FAILED: ${report.problem}`);

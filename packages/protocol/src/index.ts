@@ -2618,12 +2618,12 @@ export interface IpcErrorResult {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Marimo Agent's own surface                                                  */
+/* Marimo's own surface                                                       */
 /* -------------------------------------------------------------------------- */
 /*
  * The block above is the contract Marimo Desktop grew, kept because the agent
  * package still refers to its vocabulary (`AgentProfile`, `Job`).
- * This block is Marimo Agent's own surface, and it starts deliberately small:
+ * This block is Marimo's own surface, and it starts deliberately small:
  * a call is added here when the feature behind it lands, so the contract is a
  * description of what the app does rather than a wish list. The entries above
  * that this app will not implement are pruned as their replacements arrive.

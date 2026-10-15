@@ -2,35 +2,44 @@
  * The Electron half of path resolution.
  *
  * `@marimo/runtime` owns the layout and takes the user-data directory as an
- * argument; this file is the one place that knows the answer, because it is the
- * only place with an `app` object. The headless runner works the same directory
- * out from the platform's own rules for itself, and `userDataDisagreement` below
- * is what reports it when the two stop agreeing.
+ * argument; this file is the one place with an `app` object to hand it one. Which
+ * directory that is comes from `userDataDirFor` in `shared/product.ts`, shared
+ * with the headless runner rather than written twice, and
+ * `userDataDisagreement` below is what reports it when the two stop agreeing.
  */
-import {resolve} from 'node:path';
+import {mkdirSync} from 'node:fs';
 
 import {app} from 'electron';
 
-import {defaultUserDataDir, resolveAppPaths} from '@marimo/runtime';
+import {resolveAppPaths} from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
 
-import {PRODUCT_NAME, USER_DATA_ENV} from '../shared/product.js';
+import {USER_DATA_ENV, userDataDirFor} from '../shared/product.js';
 
 export {USER_DATA_ENV};
 
 /**
- * Relocates everything the app owns, for development, smoke runs and tests.
+ * Pins this run to the directory both processes use, before the app is ready.
+ *
+ * Electron would derive a directory from `productName`, and since the app is
+ * called Marimo that derivation is now `…/Marimo` — while every installed copy
+ * has its conversations and keys in `…/Marimo Agent`. Setting it explicitly is
+ * what keeps a rename from being a data migration; `userDataDisagreement` is the
+ * check that the runner still agrees about the answer.
  *
  * It has to happen before the app is ready and before the single-instance lock
  * is requested, because Electron keeps that lock *inside* the user-data
  * directory: two instances pointed at two directories are the only way to run an
- * isolated copy beside a real one.
+ * isolated copy beside a real one. The directory is created first, because
+ * `setPath` throws for one that does not exist — which is exactly the
+ * fresh-install case.
+ *
+ * `dir` is a parameter only so a test can watch the creation happen somewhere it
+ * may write; every caller leaves it at the decision.
  */
-export function applyUserDataOverride(): void {
-  const override = process.env[USER_DATA_ENV];
-  if (override !== undefined && override.length > 0) {
-    app.setPath('userData', resolve(override));
-  }
+export function applyUserDataPath(dir: string = userDataDirFor()): void {
+  mkdirSync(dir, {recursive: true});
+  app.setPath('userData', dir);
 }
 
 /** Every location the app owns, for this run. */
@@ -57,18 +66,8 @@ export function userDataDisagreement(): string | undefined {
     return undefined;
   }
 
+  const derived = userDataDirFor();
   const actual = app.getPath('userData');
-  const name = app.getName();
-
-  if (name !== PRODUCT_NAME) {
-    return (
-      `Electron calls this app "${name}" but the runner looks for ` +
-      `"${PRODUCT_NAME}". They must match or the background service will read a ` +
-      'different directory from the one the window writes.'
-    );
-  }
-
-  const derived = defaultUserDataDir({appName: PRODUCT_NAME});
   if (actual === derived) {
     return undefined;
   }

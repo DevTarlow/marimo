@@ -42,14 +42,13 @@ import {pathToFileURL} from 'node:url';
 import type {SearchPolicySettings} from '@marimo/protocol';
 
 import {
-  defaultUserDataDir,
   DreamStore,
   renderSweep,
   resolveAppPaths,
   sweepDreamTrees,
 } from '@marimo/runtime';
 
-import {PRODUCT_NAME} from '../shared/product.js';
+import {userDataDirFor} from '../shared/product.js';
 
 const USAGE = `Replay recorded discovery trees offline, with no model and no tools.
 
@@ -80,15 +79,13 @@ export async function replayDream(argv: readonly string[]): Promise<number> {
   }
 
   /*
-   * The same resolution the app and the runner use, in the same order: the
-   * environment variable wins, and otherwise it is the platform's application
-   * data directory with the product name appended. `defaultUserDataDir` is what
-   * the headless runner calls, so a replay run from a checkout finds the logs the
+   * The same decision the app and the runner make, through the same function:
+   * the environment variable wins, and otherwise it is the platform's
+   * application data directory with the *folder's* name appended — which is not
+   * the product name. A replay run from a checkout therefore finds the logs the
    * window wrote.
    */
-  const userData =
-    process.env['MARIMO_USER_DATA_DIR'] ??
-    defaultUserDataDir({appName: PRODUCT_NAME});
+  const userData = userDataDirFor();
   const paths = resolveAppPaths(userData);
 
   const store = new DreamStore({

@@ -1,8 +1,8 @@
-# Marimo Agent
+# Marimo
 
 A desktop AI assistant that lives on your own computer.
 
-Marimo Agent is a desktop app with two faces. There is a chat window, and there
+Marimo is a desktop app with two faces. There is a chat window, and there
 is a small moss ball that floats on your screen and answers in a speech bubble.
 It carries no model of its own: the first time you open it, it asks which service
 should write the answers — one you have an account with, or a llama.cpp server
@@ -160,7 +160,9 @@ provider card rather than in a footnote. Two other things go over the network,
 and only when you use them: a web search sends your query to DuckDuckGo and reads
 the results, and a connector you set up talks to the server you configured.
 
-Your data lives in one folder. On Linux that is `~/.config/Marimo Agent`. It holds
+Your data lives in one folder. On Linux that is `~/.config/Marimo Agent` — the
+folder keeps the name the app had before it was called Marimo, so an install that
+predates the rename keeps everything it had. It holds
 your conversations, the folders you have loaded, your settings and your keys. You
 can move it with the `MARIMO_USER_DATA_DIR` environment variable, and you can
 delete it to start over — the service you chose is asked for its key again the

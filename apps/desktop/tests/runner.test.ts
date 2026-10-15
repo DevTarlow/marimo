@@ -35,7 +35,7 @@ import {
   resolveRunnerPaths,
   runDue,
 } from '../src/runner/run-due.js';
-import {PRODUCT_NAME, USER_DATA_ENV} from '../src/shared/product.js';
+import {USER_DATA_ENV, USER_DATA_NAME} from '../src/shared/product.js';
 
 describe('resolveRunnerPaths', () => {
   it('honours the override the app also honours', () => {
@@ -44,9 +44,14 @@ describe('resolveRunnerPaths', () => {
     expect(paths.jobs).toBe('/tmp/anything/jobs.json');
   });
 
+  /*
+   * The folder's name rather than the product's — the app is Marimo and the
+   * directory is still `Marimo Agent`, so a test that followed the screen would
+   * be the one that let the runner and the window drift apart.
+   */
   it('derives the platform directory when there is no override', () => {
-    const paths = resolveRunnerPaths({HOME: `/home/${PRODUCT_NAME}`});
-    expect(paths.userData).toContain(PRODUCT_NAME);
+    const paths = resolveRunnerPaths({HOME: `/home/${USER_DATA_NAME}`});
+    expect(paths.userData).toContain(USER_DATA_NAME);
   });
 });
 

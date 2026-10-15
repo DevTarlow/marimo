@@ -1,4 +1,4 @@
-# Marimo Agent: technical notes
+# Marimo: technical notes
 
 How the app is built, why it is built that way, and how to work on it. If you
 want to know what the app does and how to use it, read
@@ -452,12 +452,20 @@ and the field carries a `.catch` for the hand-edited typo.
 
 ### The window and the service must agree about where data lives
 
-Electron derives its user-data directory from the app's `productName`. The runner
-has no `app` to ask, so it derives the same path from the platform's rules. If
-those ever disagree, nothing errors: the window writes one `jobs.json`, the
-service reads another, finds nothing due, and exits 0 — a background service that
-looks healthy and never does anything. There is a test on the name, and the app
-checks the two paths against each other at launch.
+Electron derives its user-data directory from the app's `productName`, and the
+runner has no `app` to ask — so neither process leaves it to a derivation. The
+app is called Marimo and the folder it has always used is `Marimo Agent`, because
+every installed copy keeps its conversations, jobs and keys there and a rename
+that moved the folder would look exactly like a fresh install that had lost them.
+`userDataDirFor` in `apps/desktop/src/shared/product.ts` is the single rule both
+processes ask: the `MARIMO_USER_DATA_DIR` override, else the platform's
+application-data directory plus `USER_DATA_NAME`. The window then pins Electron to
+that answer with `applyUserDataPath` rather than letting it derive one. If the two
+ever disagree, nothing errors: the window writes one `jobs.json`, the service
+reads another, finds nothing due, and exits 0 — a background service that looks
+healthy and never does anything. `tests/product-name.test.ts` holds the two names
+apart, `tests/paths.test.ts` covers the pin, and the app checks the two paths
+against each other at launch.
 
 ### Documents are versioned, and a newer one is never overwritten
 
@@ -686,9 +694,11 @@ apps/desktop
 
 ## Data
 
-Everything lives under Electron's user-data directory — on Linux,
-`~/.config/Marimo Agent`. `MARIMO_USER_DATA_DIR` relocates all of it, which is
-how development, the tests and the smoke check keep their state out of yours.
+Everything lives under the app's user-data directory — on Linux,
+`~/.config/Marimo Agent`, a folder that keeps its old name so a rename cannot
+cost anybody their conversations. `MARIMO_USER_DATA_DIR` relocates all of it,
+which is how development, the tests and the smoke check keep their state out of
+yours.
 
 ```
 secrets/                one file per secret — a provider's key or a connector's,

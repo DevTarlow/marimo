@@ -32,6 +32,8 @@ import {IPC_EVENT_CHANNEL, defaultWindowState} from '@marimo/protocol';
 import type {AgentUiEvent, ThemeMode, WindowState} from '@marimo/protocol';
 import {defaultStoredSettings} from '@marimo/runtime';
 
+import {PRODUCT_NAME} from '../shared/product.js';
+
 import {registerIpcHandler} from './ipc.js';
 import {Companion} from './companion.js';
 import {noticeFor, trayMenu} from './tray.js';
@@ -39,7 +41,7 @@ import type {TrayItem} from './tray.js';
 import {AgentService} from './agent.js';
 import {registerMediaScheme} from './media/decode-window.js';
 import {
-  applyUserDataOverride,
+  applyUserDataPath,
   resolvePaths,
   userDataDisagreement,
 } from './paths.js';
@@ -57,10 +59,12 @@ const devServerUrl = process.env['MARIMO_DEV_SERVER_URL'];
 
 /*
  * Before anything else, and before the app is ready: Electron keeps the
- * single-instance lock inside the user-data directory, so relocating the
- * directory has to happen before the lock is requested.
+ * single-instance lock inside the user-data directory, so deciding which
+ * directory that is has to happen before the lock is requested. It is decided
+ * rather than derived from the app's name, because the app is Marimo and the
+ * folder is still `Marimo Agent` — see `applyUserDataPath`.
  */
-applyUserDataOverride();
+applyUserDataPath();
 
 /**
  * `MARIMO_OFFSCREEN=1` renders into CPU frames instead of a compositor surface.
@@ -141,7 +145,7 @@ async function createWindow(): Promise<BrowserWindow> {
     // Matches the dark theme's page background, so the first paint is not a
     // white flash before the renderer has decided its colours.
     backgroundColor: '#0b0d10',
-    title: 'Marimo Agent',
+    title: PRODUCT_NAME,
     ...(existsSync(windowIcon) ? {icon: windowIcon} : {}),
     show: false,
     autoHideMenuBar: true,
@@ -525,7 +529,7 @@ function createTray(): void {
   }
   const icon = nativeImage.createFromPath(windowIcon);
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({width: 22, height: 22}));
-  tray.setToolTip('Marimo Agent');
+  tray.setToolTip(PRODUCT_NAME);
   // A click on the icon is the gesture people try first; on Windows and Linux a
   // menu on left-click is the convention, so both do the same thing here.
   tray.on('click', () => {
@@ -660,7 +664,7 @@ function explainResidency(): void {
   }
   toldAboutTray = true;
   new Notification({
-    title: 'Marimo Agent is still running',
+    title: `${PRODUCT_NAME} is still running`,
     body: 'It keeps to its schedule in the background. Use the tray icon to bring it back, or to quit.',
   }).show();
 }

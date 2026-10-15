@@ -1,4 +1,4 @@
-# AGENTS.md — Marimo Agent
+# AGENTS.md — Marimo
 
 Working notes for anyone — human or agent — changing this repository. The
 project's design decisions live in `TECHNICAL.md`, and the guide for people using
@@ -85,14 +85,20 @@ Each of these is silent when it breaks. That is the whole reason they are listed
 12. **A newer document is never overwritten.** See "Documents" below.
 13. **The app and the runner resolve the same user-data directory.** When they do
     not, nothing errors: the window writes one `jobs.json`, the service reads
-    another, finds nothing due, and exits 0. **The model used to be a second case
-    of this and no longer is**: it was bundled, so the window found it through
-    Electron's `process.resourcesPath` while the runner derived the path from its
-    own executable; then it was downloaded, with the pins _imported_ rather than
-    located. It is now not the app's at all — a provider's address comes from the
-    catalogue or from the user, and both processes read the same document — while
-    the recall engine's directory and pins are still imported by both, which is
-    what keeps a window and a scheduled job searching the same index.
+    another, finds nothing due, and exits 0. **The name on screen is not the name
+    of the folder**: the app is Marimo and the directory is still `Marimo Agent`,
+    so the window does not leave it to Electron's derivation from `productName` —
+    `applyUserDataPath` pins it, both processes ask `userDataDirFor`, and
+    `userDataDisagreement` reports it when they part company. Changing
+    `USER_DATA_NAME` is a data migration rather than a rename. **The model used to
+    be a second case of this and no longer is**: it was bundled, so the window
+    found it through Electron's `process.resourcesPath` while the runner derived
+    the path from its own executable; then it was downloaded, with the pins
+    _imported_ rather than located. It is now not the app's at all — a provider's
+    address comes from the catalogue or from the user, and both processes read the
+    same document — while the recall engine's directory and pins are still
+    imported by both, which is what keeps a window and a scheduled job searching
+    the same index.
 14. **An MCP server's tools cannot take a built-in name.** The reserved set is
     every built-in name _before_ the profile filter — a tool the profile has
     switched off still owns its name, because the profile can change between

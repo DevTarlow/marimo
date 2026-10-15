@@ -176,7 +176,10 @@ export function resolveAppPaths(userData: string): AppPaths {
  * this function has no opinion about when it runs.
  */
 export function defaultUserDataDir(options: {
-  /** The name in `productName`, which is what Electron appends. */
+  /**
+   * The directory to append, which is `USER_DATA_NAME` in the app: the folder's
+   * name, deliberately not the product name.
+   */
   appName: string;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;

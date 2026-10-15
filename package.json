@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Marimo Agent \u2014 a minimal, always-on desktop agent you bolt capabilities onto.",
+  "description": "Marimo \u2014 a minimal, always-on desktop agent you bolt capabilities onto.",
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": ">=20.19"

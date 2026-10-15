@@ -12,6 +12,8 @@
  */
 import type {Job, McpStatus} from '@marimo/protocol';
 
+import {PRODUCT_NAME} from '../shared/product.js';
+
 /** What the tray menu needs to know about the world. */
 export interface TrayState {
   /** Whether the window is on screen right now. */
@@ -91,7 +93,7 @@ export function trayMenu(state: TrayState): TrayItem[] {
       checked: state.startAtLogin,
     },
     {type: 'separator'},
-    {id: 'quit', label: 'Quit Marimo Agent'},
+    {id: 'quit', label: `Quit ${PRODUCT_NAME}`},
   ];
 }
 
@@ -173,7 +175,7 @@ export function noticeFor(event: {
     case 'approval.request':
       return {
         title: 'Marimo needs your approval',
-        body: 'A tool is waiting to run. Open Marimo Agent to allow or refuse it.',
+        body: `A tool is waiting to run. Open ${PRODUCT_NAME} to allow or refuse it.`,
         ...(event.sessionId === undefined ? {} : {sessionId: event.sessionId}),
       };
 
@@ -187,7 +189,7 @@ export function noticeFor(event: {
         return undefined;
       }
       return {
-        title: 'A Marimo Agent run failed',
+        title: `A ${PRODUCT_NAME} run failed`,
         body: (event.message ?? 'Something went wrong.').slice(0, 200),
         ...(event.sessionId === undefined ? {} : {sessionId: event.sessionId}),
       };

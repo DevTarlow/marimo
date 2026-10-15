@@ -4,7 +4,7 @@
   "private": false,
   "type": "module",
   "description": "An always-on desktop AI agent: a chat window, a floating companion, and a headless runner that keeps scheduled jobs going while the app is closed.",
-  "productName": "Marimo Agent",
+  "productName": "Marimo",
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "tsc -b && tsx scripts/dev.ts",
@@ -44,7 +44,7 @@
   "author": "DevTarlow",
   "build": {
     "appId": "com.marimo.agent",
-    "productName": "Marimo Agent",
+    "productName": "Marimo",
     "copyright": "Copyright (c) 2026 DevTarlow",
     "directories": {
       "output": "release",

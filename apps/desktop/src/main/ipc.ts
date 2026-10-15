@@ -35,6 +35,8 @@ import type {
 } from '@marimo/protocol';
 import type {AppPaths} from '@marimo/runtime';
 
+import {PRODUCT_NAME} from '../shared/product.js';
+
 import {attachableFiles} from './attach.js';
 import type {AgentService} from './agent.js';
 import {settingsForWindow} from './public-settings.js';
@@ -98,7 +100,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     const service = dependencies.agent();
     if (service === undefined) {
       throw new Error(
-        'Marimo Agent did not start. Check the app log, then reopen it.',
+        `${PRODUCT_NAME} did not start. Check the app log, then reopen it.`,
       );
     }
     return service;
@@ -114,7 +116,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
   async function publicSettings(): Promise<PublicSettings> {
     const service = dependencies.agent();
     if (service === undefined) {
-      throw new Error('Marimo Agent is not running.');
+      throw new Error(`${PRODUCT_NAME} is not running.`);
     }
     const settings = await service.settings();
     const profiles = await service.profiles();

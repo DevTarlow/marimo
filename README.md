@@ -1,26 +1,45 @@
 # Marimo Agent
 
-A private AI assistant that runs on your own computer.
+A desktop AI assistant that lives on your own computer.
 
 Marimo Agent is a desktop app with two faces. There is a chat window, and there
 is a small moss ball that floats on your screen and answers in a speech bubble.
-The model that writes the answers runs on your machine, so you do not need an
-account and there is nothing to paste in before it works.
+It carries no model of its own: the first time you open it, it asks which service
+should write the answers — one you have an account with, or a llama.cpp server
+you run yourself — and it says nothing until you choose.
 
 ## What it can do
 
 Ask it a question and the answer streams in as it is written, with the thread of
 the conversation kept.
 
-Point it at a folder and it can read the files inside, so you can ask about your
-own documents or code. It cannot see anything outside that folder.
+Load a folder and it becomes a Space. A Space is a folder with everything that
+belongs to it: the chats you start in it, the documents in it — the markdown files
+it already holds, listed in a drawer beside the chat and editable in the window —
+and the agent you keep for that work. There is no import and no second copy, which
+is the point: a file the agent writes with its own tools is in that list, and the
+paragraph you type is what the agent reads next. It cannot see anything outside
+the Space.
+
+You are not limited to one agent. Settings has **+ New agent**, and a new one gets
+a name, an identity you write, its own tools, the Spaces it works in, and — if you
+want — a model of its own rather than the app's default. That is how you end up
+with a Writer that drafts into the website folder and a Researcher you send off to
+read things.
+
+Several of them can share one chat. The first is the lead and answers by default;
+type `@` and pick a name to put a question to somebody else. The lead can also
+hand work over by itself — ask it for a blog post and it can tell Writer to write
+it — and the writer's answer comes back into the same conversation, under its own
+name. If a helper needs your permission for something, the card appears in the
+chat you are already looking at.
 
 Web search is there for questions that need something current.
 
 Things you tell it, such as a preference or how a project is set up, are
 remembered and brought up in later conversations. What it learns about *you* — a
-name, an animal, how you like to be talked to — follows you between folders,
-while the rules of a particular project stay with that project.
+name, an animal, how you like to be talked to — follows you between Spaces, while
+the rules of a particular project stay with that project.
 
 If an answer is wrong, say so: there is a small "Not quite" under every reply
 where you can add one line about what was right instead. It is not written into
@@ -30,15 +49,15 @@ each line was written, so you can see what has been sitting there a while.
 
 It can also find a file or a note from a description of what it was about, even
 when you do not know the words in it. This one is off until you turn it on,
-because it needs a second download. Once it is on, press `Ctrl+K` and describe
-what you are looking for.
+because it brings its own model, fetched the first time you ask for it. Once it
+is on, press `Ctrl+K` and describe what you are looking for.
 
 If you are curious about how it decides what to do, there is a recording you can
 turn on. With it on, every turn is written down as a tree: which tools it was
 offered, which ones it asked for, which ones it ran and how each one turned out.
 Nothing about that is sent anywhere and it is off by default, because it is a
 record of your work. The point of it is the command in Settings — it replays your
-own recorded turns under different search settings, without starting the model at
+own recorded turns under different search settings, without calling a model at
 all, and shows what each setting would have hidden. It tells you what it would
 have *withheld*, not what would have happened next: the agent picks each step
 from the result of the last one, so a different setting is a different
@@ -74,12 +93,14 @@ want a task to run on a service rather than on your own server, that box is what
 makes it possible, and it means the key sits on disk readable. It is off unless
 you tick it.
 
-Then give it a folder to work in. It can read there and nowhere else, and a chat
-is filed under the folder it started in so you can keep projects apart.
+Then load a folder. The app calls it a Space, it can read there and nowhere else,
+and a chat is filed under the Space it started in so you can keep projects apart.
+The markdown files in it are the Space's documents, which the **Documents** button
+above the chat lists and opens.
 
 Next, choose how much it may do. There are three choices in plain words: "Just
 chat", "Help around my computer", and "Do things for me". You can change this at
-any time.
+any time, and the same screen is where a second agent is made.
 
 Anything that changes something on your machine, such as writing a file or
 running a command, shows you what it wants to do and waits for your approval.
@@ -93,19 +114,37 @@ ball and any scheduled tasks keep working, and you quit it from the tray menu.
 Ask about your files by naming the file or the folder, for example "what does the
 retry code in upload.ts do?".
 
-Press `Ctrl+K` to search your folder by meaning. Each result shows how close the
+Press `Ctrl+K` to search the Space by meaning. Each result shows how close the
 match is, and says when a file has changed since it was indexed.
+
+The **Documents** button above the chat opens a column beside it: the Space's
+files listed at the top, the one you pick underneath, and what you type saved as
+you go. An agent writing to the same file at the same time does not cost either
+of you your work. If the file moved since you opened it, the save is refused,
+your draft stays on screen, and you choose whether to reload their version or
+write yours over it.
+
+The example worth walking through is the blog post. Say you have a Writer whose
+Space is the website folder. You ask the lead agent for a post about last week's
+outage and tell it to hand the writing over. Writer's name goes up over what it
+says, and its file writes show up under it as its own work rather than as the
+lead's. When it wants to save the draft it asks you, in this chat, under the turn
+you are reading. When it finishes, the post is in the folder — and the Documents
+drawer is showing the same file the agent just wrote.
 
 The moss ball floats above other windows. You can drag it, ask it something from
 the bar underneath, and change how long its answers are or whether it stays on
 top in Settings.
 
-There are two versions of the settings screen. Simple has the agent's name, one
+There are two versions of the settings screen. Simple has the agent's name and one
 choice about what it may do. Power user shows everything, including the
 temperature and every tool as its own switch. Which service answers is on both,
 because an app with no model of its own has to be fixable from the screen a first
-run lands on. One switch in Settings moves
-between them, and neither is a different app.
+run lands on. Connecting a tool from somewhere else is on both screens too: a
+capability you have should not be behind a switch you have not turned on yet.
+Deciding which of those tools each agent may use is in power, because that is one
+switch per agent per connector. One switch moves between the two screens, and
+neither is a different app.
 
 When a conversation gets long, you can compact the older half into a summary from
 the `+` menu. The messages stay in the conversation file; the agent simply stops
@@ -129,10 +168,14 @@ next time you open the app, which is also what makes this folder safe to hand to
 somebody else once the key files are gone. If you turned the recording on, that folder also holds one file per
 conversation of what the agent tried; a conversation's file is moved aside when
 you delete the conversation, so the record does not outlive the chat it is about.
+A Space's documents are not in there at all: those are your own files, in your own
+folders, and the app reads and writes them where they are.
 
 Connector passwords and tokens are kept in the operating system's keychain,
-encrypted. If the machine has no keychain, the app says so and refuses to store
-the secret rather than writing it somewhere readable.
+encrypted, and so is the key for the service you chose. If the machine has no
+keychain, the app says so and refuses to store the secret rather than writing it
+somewhere readable — unless you ticked **let the background runner read this key**
+for that one, which is you accepting that it sits on disk readable.
 
 ## What is not finished yet
 
@@ -147,39 +190,40 @@ turns them on. They cannot be used yet.
 Skills are read from a file, but nothing in the window writes them. You have to
 edit the file by hand.
 
-The download itself is checked against a checksum pinned inside the app. That
-catches a damaged or swapped file, but there is no signature chain behind it.
+The search model's download is checked against a checksum pinned inside the app.
+That catches a damaged or swapped file, but there is no signature chain behind it.
+Nothing else is downloaded: there is no chat model to fetch.
 
 ## What your computer needs
 
-The model runs on your graphics card, and there is no fallback that runs it on
-the processor. The app measures what the card has free the first time it starts
-and picks a size for you.
+The app itself is small, because it runs no model of its own. What your machine
+has to be able to do is a question about the service you pointed it at. If you
+chose a llama.cpp server you run yourself, the graphics card is that server's
+requirement rather than this app's, and a server on another machine on your
+network is fine — the app only needs its address. If you chose one of the hosted
+services, the work happens on their machines and all this app needs is a
+connection and your key.
 
-About 4 GB of free video memory runs the smaller size, which the app calls Low,
-with a 16K window of conversation. About 6 GB runs the larger one, High, with a
-32K window, or roughly twice as much conversation. Between those the smaller size
-runs with a shorter window. Below about 2 GB, or with no usable graphics device,
-the model cannot run at all and the app says so.
-
-You can force either size in Settings. The app warns you when the choice looks too
-big for the card, and lets you try it anyway.
+The one thing that does run here is search, and only once you turn it on. It
+embeds text on the processor rather than the graphics card, so it does not care
+what card you have, and the first time it downloads about 310 MB — or about
+555 MB more if you want it to search pictures, sounds and video as well.
 
 The rest it wants:
 
-- A 64-bit version of Linux, Windows or macOS. The Linux and Windows builds use
-  Vulkan, so the graphics driver needs to support it. macOS uses Metal.
-- Disk space. The first download is about 2.7 GB for the smaller size and about
-  4.5 GB for the larger one. Turning on search adds about 310 MB, or about
-  555 MB more if you want it to search pictures and sounds. Leave about 3 GB
-  free for the smaller size, or about 6 GB if you use the larger one with search.
+- A 64-bit version of Linux, Windows or macOS. The search engine's builds use
+  Vulkan on Linux and Windows and Metal on macOS, so that driver has to be able
+  to load; nothing else here wants a graphics card.
+- Disk space. A few gigabytes free is plenty: a few hundred megabytes for the
+  search model, and an index that grows with the folder you point it at.
+- An account and a key with a hosted service, if that is what you picked.
 - The Windows and macOS installers are not built yet, so Linux is the only
   platform with something you can run today.
 
-A couple of suggestions. Close games and video editors before you switch to the
-larger size, since they use the same video memory. Keep the app's data folder on
-a disk with a few gigabytes free, because the model and the search index both
-live there.
+If you run your own llama.cpp server on this machine, close games and video
+editors before starting it: the weights and the game want the same video memory.
+Keep some room on the disks you index, too, since the search index is written
+beside the folder it describes rather than into the app's own directory.
 
 ## For developers
 

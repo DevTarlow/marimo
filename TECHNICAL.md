@@ -67,17 +67,19 @@ pnpm build:web   # the renderer bundle — `build` alone leaves it stale
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Done        | Five providers to answer with — DeepSeek, Google Gemini, OpenCode Go, OpenRouter, and a llama.cpp server of your own — each with its own address, model and key. The catalogue is data, the transport is one OpenAI-compatible client, and a key is encrypted unless you say otherwise |
 | Removed     | The model the app used to carry and run itself: Qwen3.5-4B on a llama.cpp engine it downloaded and supervised. Two tiers chosen from what the GPU reported, no account and no key — and 2.7 GB before the first answer |
-| Done        | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a workspace rail with the conversations filed under the folder they work in, light and dark following the OS or chosen                        |
+| Done        | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a rail of Spaces with the conversations filed under the one they work in, light and dark following the OS or chosen                           |
+| Done        | Spaces: a folder that holds its own chats, its agents and its documents — the markdown files in it, listed in a library and editable in the window, with a revision on every write so a stale tab cannot clobber what an agent wrote    |
+| Done        | A chat with more than one agent: the lead answers, `@` addresses a member, and the lead can hand work to a named agent with `ask_agent` — which runs inside the same conversation, so its approval card lands where you are reading, and which is bounded and cannot delegate further |
 | Done        | Two sizes of app: a simple screen and a power screen, with one switch between them                                                                                                                                                      |
-| Done        | The agent core: `AgentHost` over Google ADK, an OpenAI-compatible streaming client over one backend, ~28 built-in tools of which the app offers the ones its services can carry out, skills, `memory.md`, JSONL conversations           |
+| Done        | The agent core: `AgentHost` over Google ADK, one OpenAI-compatible streaming client that serves every provider, ~28 built-in tools of which the app offers the ones its services can carry out, skills, `memory.md`, JSONL conversations |
 | Done        | Approvals that survive a restart, because a pending call is derived from the stored conversation rather than held in memory                                                                                                             |
-| Done        | MCP connectors: add one by pasting a command, test it from the same form, and choose whether to trust it — untrusted servers ask before every call                                                                                      |
+| Done        | MCP connectors: add one from either settings screen, test it from the same form, and choose whether to trust it — untrusted servers ask before every call. An agent uses the ones it was granted, and a scheduled job dials them too    |
 | Done        | Per-agent capabilities: every tool is a switch, and a tool that is off is not offered to the model at all                                                                                                                               |
 | Done        | The stores: jobs, profiles, settings, skills, memory proposals — with format versioning that refuses to overwrite a document it cannot read                                                                                             |
-| Done        | Secrets in the OS keychain: connector tokens, encrypted at rest, with a machine that has no keychain told so rather than written to in the clear                                                                                        |
+| Done        | Secrets: one file per provider key and per connector secret, encrypted in the OS keychain, stored readable only when the user asks for that one to be readable by the background runner, and a machine with no keychain told so rather than written to in the clear |
 | Done        | Scheduled jobs while the app is open, and a headless runner plus an OS service that keeps them going while it is closed                                                                                                                 |
 | Done        | The desktop companion: a frameless, transparent, click-through moss ball that answers in bubbles above itself, with its own chat bar underneath and its own settings for how long it answers, how much it shows, and whether it floats  |
-| Done        | A first run that downloads the model it needs, with progress and a resumed download, instead of showing a chat that refuses                                                                                                             |
+| Done        | A first run that asks which service should answer: the catalogue, a Fetch Models button and a key field, because an app carrying no model of its own cannot say anything until somebody picks one                                       |
 | Done        | A memory review: after a conversation goes quiet the agent proposes what is worth remembering and asks before writing it — reading a long session in stretches rather than only once it ends, and remembering the facts you turned down |
 | Done        | Memory in two halves: who the user is, which follows them between projects, and what this folder is, which does not — with a correction able to replace an old fact rather than sit beside it, and every bullet dated |
 | Done        | A way to say an answer was wrong. It is recorded, never written straight into memory, and the next review reads it |
@@ -91,8 +93,8 @@ pnpm build:web   # the renderer bundle — `build` alone leaves it stale
 
 `@marimo/protocol` is the typed contract — every IPC call, every event, the
 profile and job documents. `@marimo/agent` is the agent itself. `@marimo/runtime`
-is where files live, how documents are versioned, and where the model and recall
-engines are supervised.
+is where files live, how the app's own documents are versioned, what a Space's
+files are read and written through, and where the recall engine is supervised.
 
 None of them import Electron, and that is load-bearing rather than tidy. The
 background service that keeps scheduled jobs running while the app is closed is
@@ -165,6 +167,61 @@ never-leave-an-engine-behind rule all still apply; what is gone is the tier plan
 the hardware probe and the chat weights, because nothing chooses a chat tier any
 more.
 
+### A connector belongs to the install; a grant belongs to an agent
+
+**A connector is software the user did not write, offering tools that can do
+anything its process can**, which is why `trusted` is off by default and an
+untrusted server's every call takes the same approval path as `write_file` — one
+gate, not a second kind. The layer above that is which agent may use it at all.
+
+**The connection is the install's and the grant is the profile's.** `mcpServers`
+in the settings document says how to reach a server once — a command, an address,
+where its secret goes — and `mcpServerIds` on a profile says which of them that
+agent may use. Absent means every connector, and that is what every profile
+written before the field means: an upgrade must not take a user's connectors away
+from the agent that was using them. An array names exactly those, and an empty
+one means none, which is a real answer a person can give — so clearing the grant
+is a `null` rather than `[]`, the same distinction `model` needs. The ids are the
+servers' own rather than their names, because a rename must not lose a grant and a
+name freed by a delete must not be inherited by a new server the agent was never
+given.
+
+**The filter sits where a runner is built, so an ungranted server is absent rather
+than refused.** `grantedMcpServers` narrows the toolsets as a model is built for
+an agent, and a model that never sees a tool cannot propose it — invariant 9 one
+layer down. It is read at that moment rather than when the servers were handed
+over, because both halves move: a server can connect after the profile was
+written, and the profile can be edited while the app runs.
+
+**The switch is drawn from the settings document, not from live connections.** A
+grant screen has to exist *before* the server is reachable, or a connector that
+cannot be dialled yet — a wrong command, a secret this process cannot read — is
+one nobody can decide about. Adding, testing and trusting a server is on both
+settings screens, because that is a capability the user has; the grant itself is
+in power, because it is one switch per connector per agent among thirty rather
+than one of the three choices the simple screen exists for.
+
+**A connector's secret carries the same consent a provider's key does, and the
+consent has to travel with the write.** `secretStorage` is per connector and
+defaults to `keychain`; a scheduled job runs in a process with no keychain, so a
+connector that job is meant to use has to be readable by one, and only the user
+can say so. The trap here is ordering rather than storage: the consent is a field
+of the same unsaved form as the value, so reading it back off the *saved*
+connector leaks in one direction — untick it, type a new value, save the secret
+without saving the connector, and the file is written readable while the screen
+says encrypted. `mcp.setSecret` takes the consent instead, and a test pins both
+directions of the disagreement.
+
+**And a scheduled job dials them.** `run-due` builds the window's own
+`McpManager` over the same settings document and hands its toolsets to the
+runtime, with a `FileSecretStore` that has no cipher — the reader the provider key
+beside it already had. Before that it dialled nothing and said nothing, so a job's
+agent was the agent the window runs minus every tool a connector offers. One quiet
+failure was found in the same place: a connector secret that could not be read was
+silently skipped, so the server was dialled without its credential and answered a
+401 that reads as a wrong token. The reader now raises the store's own sentence,
+which the manager turns into the connector's status and the runner reports.
+
 ### Recall: finding things by meaning, on the machine that has them
 
 Searching for a word finds the places that word appears. Recall finds the places a
@@ -174,17 +231,18 @@ weeks ago, the picture with the receipt in it. It is a second model rather than 
 second feature bolted onto the first: embeddinggemma-2, a 270M backbone at Q8_0
 (310 MB, 768 dimensions, 8K of context), served by its own pinned llama.cpp build
 on loopback. "Its own" is load-bearing, and it was learned by running the build
-rather than by reading about it: the engine the chat model runs on predates this
-model's architecture entirely (`unknown model architecture: gemma-embedding2`), so
-recall pins a newer build instead of moving the chat engine onto one whose
-template has never been verified against.
+rather than by reading about it: the engine the app used to answer with predates
+this model's architecture entirely (`unknown model architecture: gemma-embedding2`),
+so recall pins a newer build instead of moving onto one whose template has never
+been verified against anything.
 
 **It is off until somebody asks.** Turning it on downloads 310 MB and starts a
-second process, so it is not a default; the question is asked once, on the screen
-that follows the first model download, and afterwards the switch lives in Settings
-where every other capability does. The corpora are separate switches because they
-are separate consents: the folder is the work, memory is what the agent wrote down
-_about_ the user, a conversation is everything they said, and media needs a second
+process of its own, so it is not a default; the question is asked once, on the
+screen that follows the provider choice, and afterwards the switch lives in
+Settings where every other capability does. The corpora are separate switches
+because they are separate consents: the folder is the work, memory is what the
+agent wrote down _about_ the user, a conversation is everything they said, and
+media needs a second
 555 MB download — not a preference but the image and audio encoder itself, absent
 from the process unless it is fetched. A corpus that is off is not searched and
 not offered: the tool's own scope enum is built from what exists, so a model
@@ -201,12 +259,15 @@ list of answers. The window can ask for the withheld ones when the phrasing, and
 not the corpus, was the problem; a tool call cannot, and should not.
 
 **It runs on the processor, and the index lives with the folder it describes.**
-The chat tier is estimated on the engine having all the free device memory, and a
-second client holding a slice would make that estimate a lie; the embedding model
-is small enough that the slower path costs seconds. The index sits in
-`<folder>/.marimo/<agent>/recall/` beside memory, so a project that moves takes
-its index with it; an agent with no folder loaded gets one under user data
-instead.
+The reason it used to give is gone with the chat engine — there is no tier
+estimated on the engine having every byte of device memory, because the app no
+longer runs a chat model at all — and the choice stands on its own. This model's
+card warns that its activations exceed float16's range and return NaN in it, while
+the CPU backend accumulates in f32; an embedding is a single pass over at most 8K
+tokens, which is the other half of why a GPU buys less here than it did for a
+conversation. The index sits in `<folder>/.marimo/<agent>/recall/` beside memory,
+so a project that moves takes its index with it; an agent with no folder loaded
+gets one under user data instead.
 
 **Two ways in, one service behind them.** The window has a search box on `Ctrl+K`
 that returns the same hits, scores and staleness claims the tool does — somebody
@@ -368,15 +429,15 @@ on read could be swallowed by a read nobody was showing the card for.
 
 Everything the app can do is still a switch somebody turns on. What changed is
 that there are two screens to turn it on from: a simple one with three choices in
-plain words, and the power screen with the temperature, the engine's command
-line and every individual tool. They are the same app, the same stores and the
+plain words, and the power screen with the temperature, the per-model settings and
+every individual tool. They are the same app, the same stores and the
 same grants — the preset a user picks writes `enabledTools`, exactly as ticking
 the switches would, and the card that is lit is _worked out_ by comparing that
 grant against the lists. There is one source of truth for what an agent may do,
 and it is still the profile.
 
 The line between the two screens is **tuning versus repair**. A number to adjust —
-a context window, a memory limit, a temperature — is tuning and lives in power. A
+an output cap, a memory limit, a temperature — is tuning and lives in power. A
 switch that fixes something the user is looking at — the moss floating over a
 film, the moss not answering the mouse — stays where they are, because hiding an
 escape hatch from the person hitting the problem is how a setting comes to look
@@ -412,14 +473,48 @@ strictly so it can exit non-zero, which is the only signal a timer gets. And the
 write path refuses a file from a newer build, or moves a corrupt one aside,
 rather than storing an empty document over it.
 
+Everything above is about a file the app *owns*, and the word is doing work. A
+Space's documents are the other kind — the user's files, whose format this app has
+no say in — so they carry no version and are never migrated; what guards a write
+to one is the revision rule in the sections below, where a mismatch is a refusal
+rather than a repair.
+
+### A Space is a folder, and the code keeps the older word
+
+**What a person reads says Space; what a reader of `workspaces.json` sees says
+`workspace`, and that split is deliberate.** A Space is more than the path it
+points at: it is what its chats are filed under, what its documents are, and what
+an agent can be pointed at to work in. That is what made a name worth having. What
+did not follow is the vocabulary of the file: `workspaces.json`, `Workspace` and
+`workspaceId` are what the document, every session index entry and every migration
+already name, so renaming them would mean a data migration to reach a word the
+user reads the same either way. It is the argument `PROVIDERS.llamacpp` makes
+about its id — the label moves, the id stays — and the schema carries a comment
+saying so, because a split like that reads as an oversight otherwise.
+
+**A Space is a place on the machine rather than a fact about who is talking**, so
+it belongs to the install: two agents asked about the same project work in the
+same folder, under the same confinement, with the same
+`<folder>/.marimo/<agent>/` memory.
+
+**Which Space a new conversation lands in has three answers and one function.**
+`AgentRuntime.spaceFor` takes the space the *caller* named — the rail's "new chat
+in this space" — else the agent's own, else wherever the rail is. The middle one
+is what makes "my Writer drafts into the website repo" need no sentence in a
+prompt: it is `spaceId` on the profile, said once in Settings, with `null` as the
+way back to following the rail. It has to be optional, and that is not tidiness:
+`ProfileStore.parseFile` skips a profile that fails its schema, so a required
+field would quarantine every existing agent on upgrade. And a candidate naming a
+space the document no longer holds is *skipped* rather than stamped on, because
+that id files the chat under "Other chats" — the rule a conversation whose folder
+was removed already follows, and the reason it falls back rather than vanishing.
+
 ### A conversation is filed under the folder it works in
 
-Workspaces are folders, they belong to the install rather than to an agent — two
-agents asked about the same project work in the same one — and the rail is where
-they are managed: load one, rename it, open it in your file manager, forget it.
 The folder is what an agent's file tools and shell are confined to, and
 `memory.md` travels with it in `<folder>/.marimo/<agent>/`, so a project carries
-its own remembered facts.
+its own remembered facts. What the rail does with the list — load one, rename it,
+open it in your file manager, forget it — is the Space section above.
 
 The folder a turn runs in is resolved **from the conversation**, at the moment
 the turn starts, rather than from whichever folder the rail has current. That is
@@ -435,6 +530,123 @@ under "Other chats" until they are moved somewhere else. Conversations the app
 started rather than the user — a Discord mention, once that connector is wired —
 are listed under "Social" instead of inside a folder that had nothing to do with
 them.
+
+### A chat can hold several agents, and a delegation is a tool call
+
+**A group chat is one conversation with more than one agent in it, and the lead is
+first.** `agentIds` on the session index names them — declared in the schema
+rather than left to `.passthrough()`, because a value nothing declares is dropped
+on the next write — and the first is the lead: the one that answers a message
+nobody addressed, and the one whose model and identity the conversation's own
+bubbles are written with. A conversation with no such field is a chat with one
+agent, which is every conversation that existed before it and most of them after.
+
+**`@` addresses somebody, and the mention is kept.** A stored user message carries
+no addressee, so stripping `@Writer` would leave a transcript in which nobody can
+see whom the question was for; the renderer keeps the text and routes the turn
+with an `agentId` of its own. An id that is not a participant is refused in a
+sentence rather than answered by the lead, because a message that looks delivered
+and is not is worse than a refusal. The addressed agent answers with its own
+identity, tools and model, and its words are attributed to it: `MAIN_AGENT_NAME`
+is the conversation's own agent, every other author is a profile id encoded into
+something ADK accepts as an identifier, and the projection decodes it back into
+`TranscriptMessage.agentId`. A change of author closes the bubble, which is what
+stops one turn reading as one voice.
+
+**`ask_agent` is the lead handing work to a named agent.** It resolves a name the
+install has — an unknown name, an unknown Space and a blank task are all refusals
+in words, never a throw, because a throw ends the parent's turn and turns "no such
+helper" into "your request failed" — and the host builds the helper from that
+profile, so it runs with its own identity, tools, skills, model and Space. Depth
+is one by construction rather than by a number compared at runtime: the host
+builds the helper *without* this tool, so recursion is not something a model can
+talk its way into. The bounds are 60 steps, five minutes, 8,000 characters with
+the cut stated, and three helpers per turn, because a helper is the one part of a
+turn the user cannot watch closely, which makes it the part that most needs a
+ceiling. Its steps reach the window as the ordinary `tool.started` and
+`tool.finished` events, so its thread has work in it rather than a blank stretch
+and then a paragraph, and its words arrive out of band — the parent's turn is
+blocked inside the tool call, so its own generator cannot carry them.
+
+**A helper's approval is the tool's own gate, and that is the discovery this
+change is built on.** The obvious design, where the tool waits while the helper's
+card is answered, cannot work. ADK ends the invocation at a gate, so the helper's
+runner stops *inside* the parent's tool call and the parent's call would sit there
+with no result — an assistant message with an unanswered call, which every
+provider refuses on the next request and not only that turn (invariant 3). So
+`ask_agent` raises a card of its own through `requestConfirmation`, and the click
+resumes *this* tool. That is the one place the two sides can be joined: the card
+the user answered belongs to this call, and the work that has to carry on belongs
+to the helper.
+
+Resuming the child by confirmation response was tried first and does not hold: a
+confirmation is bound to the call that raised it, and the child's gate belongs to
+an invocation that has already ended by the time the user clicks, so the child
+re-asks and the loop never converges. The child is told the news in a sentence
+instead — approved, carry on; declined, stop and say what you had done — which is
+a retreat from what the ADK documentation suggests and the one form of it that
+cannot be misread. The child's own gate is still in the conversation beside the
+parent's card; that is what stopped the child, and it is not a second thing to
+answer. Keeping it live cost one rule in `pendingGatesIn`: an invocation id the
+log has already named is a turn *resuming*, not a new one asking something else,
+because the helper's invocation sits between its parent's two halves and the
+parent's own id appears again as the log unwinds. Clearing on that would take down
+the card the helper had just put up.
+
+### A Space's documents are the markdown files in it
+
+**There is no second store, and that is the feature.** `DocumentService` is built
+over a root — the space's own folder, resolved from an id by the runtime — and its
+library is the `.md` and `.markdown` files under it, so an agent's `write_file`
+appears the moment the listing is re-read and what a person types in the editor is
+what the agent reads next. Every call names a *space* rather than a path, so a
+window can only reach inside the folders the user loaded. Dot-directories are
+skipped because one of them is the app's own `.marimo/<profile>/memory.md`, and
+the rest of the skip list is the agent walk's own `SKIPPED_DIRECTORIES`: a second
+list would be a second answer to which files are in this folder, and the
+disagreement shows up as a document the agent cannot mention. Symlinks are skipped
+for the reason the agent's walk skips them, and every path arrives through that
+same `resolveInsideWorkspace`, so this module owns no second checker and `..`, an
+absolute path and a symlink that leaves the space are one refusal.
+
+**A revision guards every write, and the revision is size and modification time.**
+The question a write has to answer is "has this changed since I read it", and both
+are facts the filesystem already keeps; a hash would mean reading the whole file
+in order to *write* it, which is a strange price for a check that only has to be
+right about a file somebody held open for a few seconds. The read returns the text
+and its revision through one handle, because a stat followed by a read can be
+separated by another writer's rename, and a revision from a file the caller never
+saw would let their next save overwrite the one they did not see.
+
+**A conflict is a value rather than an error, and nothing is written on that
+path.** A file changing underneath the editor is not a failure of anything: the
+person has a draft and the folder has a newer file, and the window has to offer a
+choice rather than an apology. So the write answers with the revision actually on
+disk, the drawer keeps the draft, and the two buttons are Reload (discards my
+draft) and Overwrite with my draft — the second re-reading the fresh revision
+first, so the force is not a race with whatever wrote it. A file that does not
+exist is written only by a caller whose revision is the zero one, which is the
+statement "I believe this is new". The write itself goes beside the document and
+is renamed into place, so a crash leaves the original exactly as it was and a
+`.tmp` nobody reads rather than half a file, and the temporary name carries no
+markdown extension so it cannot appear in a listing while it lives.
+
+**Two refusals sit beside the conflict, and both are the careful direction.** A
+missing parent folder is never created: inventing a tree inside somebody's project
+hides a mistyped or stale path, and the folder is theirs. A write over the read
+cap is refused, because a document the editor cannot reopen is one this feature
+produced and then lost. The listing's own caps — 500 files, eight levels — speak
+when they stop rather than answering as if the folder ended there, which is
+invariant 7 in a place where the alternative is a library that quietly lies about
+what a Space holds.
+
+**Saving a conversation writes a document too.** The chat is rendered as markdown
+with each message under its author's name — a helper's words under the helper's —
+and it refuses a name that is already taken, because saving a chat makes a
+document, the alternative is quietly replacing one the user wrote, and a
+conversation saved twice should be two files rather than one file with the first
+version gone. The window then opens the file it made, so the thing just saved is
+the thing that can be edited.
 
 ### The companion shares the conversation, not the manner
 
@@ -459,13 +671,15 @@ packages/protocol   The typed contract. No Node, no Electron, no React.
 packages/agent      The agent: ADK, the OpenAI-compatible client, tools, skills,
                     memory, sessions.
 packages/runtime    Where files live, secrets, the stores, document versions,
-                    the model and recall engines, the OS service plans.
+                    the documents a Space holds, the recall engine, the OS
+                    service plans.
 apps/desktop
   src/main          Window, IPC, tray, the OS service, path and secret adapters,
-                    the model and recall hosts, media decoding
+                    the recall host, media decoding
   src/preload       The sandboxed bridge — the window's entire reach
   src/runner        The headless job runner
-  src/renderer      The React UI, including the search panel
+  src/renderer      The React UI, including the search panel, the documents
+                    drawer and the group chat
   src/shared        Facts both entry points need, such as the product name
   scripts/smoke.mjs Boots a real window and proves the bridge and the UI work
 ```
@@ -477,8 +691,11 @@ Everything lives under Electron's user-data directory — on Linux,
 how development, the tests and the smoke check keep their state out of yours.
 
 ```
-secrets/                one file per secret, encrypted — a machine without a
-                        keychain is refused rather than written readable
+secrets/                one file per secret — a provider's key or a connector's,
+                        encrypted unless the user asked for that one to be
+                        readable by the background runner; without that ask, a
+                        machine with no keychain is refused rather than written
+                        readable
 sessions/               one JSONL file per conversation, plus an index
 memory/<profile>/       the half of memory that is about the *person*, plus the
                         dates of every remembered bullet — it lives under user
@@ -503,6 +720,13 @@ app.lock                the running app, so the headless runner leaves the jobs 
 The other half of memory is the project's, and it is not here: it is
 `<folder>/.marimo/<profile>/memory.md`, so a folder you put on a stick takes its
 own remembered conventions with it and none of your personal facts.
+
+A Space's documents are not in there either, and that is the point rather than an
+omission. A document *is* the markdown file in the folder the user loaded, so the
+library and the editor are two views of their own directory: nothing is copied
+into user data, and the only thing the app keeps about a file is the revision a
+caller read — size and modification time — long enough to refuse a write based on
+a version that is no longer there.
 
 The recall model is in there too, under `model/recall/`: its engine, its weights
 and a marker naming the engine asset they were unpacked from, so a build that
@@ -546,20 +770,18 @@ Known gaps, stated plainly:
   per-profile grant all work, and the agent loads any skill it is granted, but the
   `save_skill` tool and the `/learn` command that wrote them are not wired into the
   window — so a skill today is added by editing the file by hand.
-- **Vulkan is the only GPU backend shipped**, and macOS's Metal, which needs no
-  choice. CUDA and ROCm exist upstream and are not pinned: Vulkan is 32 MB and
-  covers NVIDIA, AMD and Intel from one asset per platform, while the Windows CUDA
-  build is 264 MB and needs a further 391 MB of cudart DLLs. Adding one later is an
-  asset in `pins.ts` and nothing else, because the probe asks the engine rather
-  than a vendor tool.
-- **The tier boundary is an estimate rather than a measurement.** Whether a 6 GB
-  card runs the large tier is computed from the weights, a quantized cache and a
-  compute buffer with a margin — not from starting it. The override exists because
-  an estimate can be wrong, and the numbers want checking against real cards.
-- **The download is verified but not signed.** Each file is checked against a
-  sha256 pinned in the app, which catches a corrupted or substituted download over
-  a hostile network only as far as the pin itself is trusted — there is no
-  signature chain behind it.
+- **Vulkan is the only GPU backend pinned, and the recall engine barely uses it.**
+  macOS's Metal needs no choice. CUDA and ROCm exist upstream and are not pinned:
+  Vulkan is 32 MB and covers NVIDIA, AMD and Intel from one asset per platform,
+  while the Windows CUDA build is 264 MB and needs a further 391 MB of cudart
+  DLLs. Adding one later is an asset in `pins.ts` and nothing else. The engine is
+  started with no GPU offload anyway — see `args.ts` for why this model wants the
+  f32 CPU path — so the graphics backend in the archive is mostly there because
+  that is how llama.cpp publishes a build with a CPU backend in it.
+- **The recall download is verified but not signed.** Each file is checked against
+  a sha256 pinned in the app, which catches a corrupted or substituted download
+  over a hostile network only as far as the pin itself is trusted — there is no
+  signature chain behind it. Nothing else is downloaded at all.
 - **The `.deb` and the two installers** need a platform each; see the table
   above for what is verified and what is not.
 
@@ -574,10 +796,10 @@ pnpm --filter @marimo/desktop package:dir   # unpacked, no installer
 
 All four are plain builds. They used to fetch the model first and copy ~1.1 GB of
 weights into the app's resources, with `MARIMO_SKIP_MODEL=1` as the escape hatch
-CI needed; the model is downloaded on a user's first run now, so there is nothing
-to fetch and no variable to remember. A packaged app ships an app that offers to
-download a model, which is also the state a checkout is in and the state the smoke
-check runs in.
+CI needed; then a first run downloaded a pinned model instead. Now there is no
+chat model anywhere in the chain, so there is nothing to fetch and no variable to
+remember. A packaged app ships an app that asks which service should answer, which
+is also the state a checkout is in and the state the smoke check runs in.
 
 Each is built on its own platform in the normal way. What has actually been
 verified, and where:

@@ -9,21 +9,27 @@ easy to get wrong and expensive to discover.
 
 A standalone, always-on desktop agent. A chat window and a floating companion,
 an agent harness whose capabilities are opt-in, and a headless runner that keeps
-scheduled jobs going while the app is closed.
+scheduled jobs going while the app is closed. It carries no chat model of its
+own — it answers through a provider somebody picks in Settings, so a fresh
+install says nothing until one is chosen — and the folder it works in is what the
+user calls a **Space**. A chat there can hold more than one agent, and one of
+them can hand work to another.
 
 ## Layout
 
 ```
 packages/protocol   The typed contract: zod schemas for every IPC call, the
-                    AgentUiEvent union, the model id, cron, the profile and job
-                    documents. No Electron, no Node, no React.
+                    AgentUiEvent union, the provider catalogue, the model pair,
+                    cron, the profile and job documents. No Electron, no Node,
+                    no React.
 packages/agent      Everything ADK: the OpenAI-compatible client, tool set,
                     skills that compose the system instruction, the file-backed
                     memory and session stores, AgentHost, and the
                     document-version machinery. No Electron.
 packages/runtime    The Electron-free half of the app proper: where files live,
                     secrets with the cipher injected, the jobs/profiles/
-                    workspaces/settings/skills/proposals stores, the provider
+                    workspaces/settings/skills/proposals stores, the documents
+                    service a Space's library and editor go through, the provider
                     catalogue's settings and key paths, and the supervisor and
                     pins for the recall model. Re-exports the version machinery it
                     uses, so a caller still finds it beside them.
@@ -68,7 +74,10 @@ Each of these is silent when it breaks. That is the whole reason they are listed
 8. **Secrets never cross to the renderer.** Settings report whether a connector's
    secret is _set_, never its value — and there is a test that walks the payload
    rather than trusting one call site.
-9. **A capability the user turned off is absent, not discouraged.**
+9. **A capability the user turned off is absent, not discouraged.** A connector
+   an agent was not granted is the same rule one layer down: the host filters the
+   toolsets it was handed, so an ungranted server is missing from the tool menu
+   rather than refused when the model proposes it.
 10. **One turn at a time holds across processes.** The app and the runner are
     serialised by a lock, not by hope.
 11. **Unattended means unapproved stays unapproved.** A headless run never
@@ -123,6 +132,54 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     in one function (`modelChoiceFor`) because a second implementation of it would
     be a second answer to "which model is this", and the one a user reads would be
     the wrong one.
+18. **A delegation is a tool call in the same conversation.** `ask_agent` builds
+    the helper over the *parent's* session service and session id — never
+    `this.host(childProfileId)`, which would be a second live host and a second
+    turn running beside the one that asked for it. That is what keeps one turn at
+    a time a fact rather than a hope, and it is the whole reason a helper's
+    approval card is answerable: a helper writing to its own session would ask a
+    question nobody could see, and the parent would wait for an answer that can
+    never arrive. Depth is one by construction rather than by a number compared
+    at runtime, because the host builds the helper without this tool. Nothing in
+    it throws — an unknown name, an unknown Space and a blank task are sentences
+    — because a throw ends the parent's turn and turns "no such helper" into
+    "your request failed".
+19. **ADK ends the invocation at a gate, so a tool cannot wait inside one.** The
+    helper parking on an approval ends *its* invocation, and a parent tool that
+    sat waiting for it would leave the model's own call unanswered — an assistant
+    message with no result, which every provider refuses on the next request and
+    not only that turn (invariant 3). So `ask_agent` raises a card of its own with
+    `requestConfirmation`, the click resumes *it*, and it tells the helper what
+    was decided in a sentence and runs it again. Resuming the child with a
+    confirmation response was tried first and does not hold: a confirmation is
+    bound to the call that raised it, and the child's gate belongs to an
+    invocation that has already ended by the time the user clicks. The child's
+    own card is still in the log, which is what stopped the child; invariant 2 has
+    the sibling rule that keeps it from being cleared — an invocation id the log
+    has already named is a turn *resuming*, not a new one asking something else.
+20. **An editor write is refused against a stale revision, and the draft is
+    kept.** Nothing versioned stands behind a file the app does not own (see
+    "Documents"), so a write carries the revision it was based on — size and
+    modification time — and a mismatch writes *nothing* and answers with what is
+    on disk now. An agent rewriting a file while somebody has it open is the
+    ordinary case this exists for, and a save that quietly won would delete the
+    agent's work with no copy anywhere. The window keeps the draft and offers the
+    choice, and "overwrite with my draft" re-reads the fresh revision first so the
+    force is not a race. Two more refusals sit beside it: a missing parent folder
+    is never created, and a write over the read cap is refused, because inventing
+    a tree in somebody's project and saving a file the editor cannot reopen are
+    both worse than a sentence.
+21. **A Space's documents are the folder's files, not a second copy.** The
+    library lists the markdown in the folder and the editor writes it, so an
+    agent's `write_file` is in the drawer the moment the list is re-read and what
+    a person types is what the agent reads next: two doors to one file, with no
+    import or export to keep them in step. `.marimo/` is skipped because the
+    agent's memory is not a document of the user's project, and the rest of the
+    skip list is the agent's own `SKIPPED_DIRECTORIES` — a second list would be a
+    second answer to which files are in this folder, and it shows up as a document
+    the agent cannot mention. The caps (500 files, eight levels, one megabyte) say
+    when they stopped rather than answering as if the folder ended there, which is
+    invariant 7.
 
 ## Documents
 
@@ -154,6 +211,16 @@ dates in `memory/<profile>/provenance.json` — both read through
 `readVersionedDocument` and call `assertWritable` before writing, and the second
 one quarantines an unreadable file first because a date that cannot be trusted is
 not a reason to lose the facts it describes.
+
+**A Space's documents are the other kind of file, and the guard points the other
+way.** Everything above is about a file the app *owns* and must not lose; a
+document in a Space is the user's own file that the app only visits, so it
+carries no version and is never migrated — what the write path carries instead is
+the revision it read, and a mismatch is a refusal rather than a repair (invariant
+20). `documents.ts` deliberately owns no second path checker: every path arrives
+through `resolveInsideWorkspace`, the guard the agent's own file tools use, so
+`..`, an absolute path and a symlink that leaves the space are one refusal with
+one sentence.
 
 **The discovery trees are the third, and the one that is off until asked for.**
 `trees/<sessionId>.json` holds one conversation's turns as parent-child records

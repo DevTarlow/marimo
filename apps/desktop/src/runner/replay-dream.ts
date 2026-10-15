@@ -49,6 +49,8 @@ import {
   sweepDreamTrees,
 } from '@marimo/runtime';
 
+import {PRODUCT_NAME} from '../shared/product.js';
+
 const USAGE = `Replay recorded discovery trees offline, with no model and no tools.
 
 Usage: replay-dream [options]
@@ -86,7 +88,7 @@ export async function replayDream(argv: readonly string[]): Promise<number> {
    */
   const userData =
     process.env['MARIMO_USER_DATA_DIR'] ??
-    defaultUserDataDir({appName: 'Marimo Agent'});
+    defaultUserDataDir({appName: PRODUCT_NAME});
   const paths = resolveAppPaths(userData);
 
   const store = new DreamStore({

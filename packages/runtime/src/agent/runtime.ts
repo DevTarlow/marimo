@@ -914,26 +914,14 @@ export class AgentRuntime {
   }
 
   /**
-   * The recorded trees, for the replay.
-   *
-   * Exposed rather than kept private because the offline replay is a *separate
-   * program* that this process happens to host: it needs the same store, the same
-   * directory resolution and the same versioning rules, and re-deriving the path
-   * in a CLI would be a second answer to where the trees live.
-   */
-  dreamTrees(): DreamStore {
-    return this.dreamStore;
-  }
-
-  /**
-   * The last thing the recorder could not write, or nothing.
+   * The last discovery-log write that failed, or nothing.
    *
    * The window asks so the Dream-RSI card can stop claiming the agent is
-   * recording when it is not. Read-once, so a full disk is reported once rather
-   * than on every redraw of the panel.
+   * recording when it is not. A status rather than news: the card is redrawn from
+   * a payload the window reads for other reasons too.
    */
-  takeDreamProblem(): string | undefined {
-    return this.dreamStore.takeProblem();
+  dreamProblem(): string | undefined {
+    return this.dreamStore.problem();
   }
 
   /** Every conversation, or one agent's. */

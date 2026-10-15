@@ -54,11 +54,20 @@ export function Dream({
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  /**
+   * The last write the recorder could not do, as the main process reports it.
+   *
+   * Separate from `problem` above, which is this card's own failures: this one is
+   * a fact about the agent's turns, so it does not clear when the card manages to
+   * read the settings — only when a write succeeds.
+   */
+  const [recording, setRecording] = useState<string | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     try {
       const loaded = await window.marimo.call('settings.get', {});
       setSettings(loaded.settings);
+      setRecording(loaded.settings.dreamProblem ?? null);
       setProblem(null);
     } catch (failure) {
       setProblem(describe(failure));
@@ -200,13 +209,33 @@ export function Dream({
             prunes nothing. Use the replay command below to measure a threshold
             against your own recorded turns before you rely on it.
           </p>
-
-          <p className="settings-muted">
-            Replay the recorded turns, offline and with no model running:
-            <br />
-            <code>pnpm replay:dream</code>
-          </p>
         </>
+      )}
+
+      {/*
+        The command is drawn whether or not the switch is on, and that is the
+        point rather than an oversight: turning the recording off stops new files
+        and deletes nothing, so the trees already on disk are exactly what
+        somebody who just turned it off wants to read. A payoff that disappears
+        with the switch would leave them with files and no way to open them.
+      */}
+      <p className="settings-muted">
+        Replay the recorded turns, offline and with no model running:
+        <br />
+        <code>pnpm replay:dream</code>
+      </p>
+
+      {enabled && recording !== null && (
+        /*
+         * A switch that is on while nothing is being written is the one state
+         * this card must not misrepresent — the user turned it on to have a
+         * record, and the record is not happening.
+         */
+        <div className="error" role="alert">
+          <span>
+            The last search tree could not be written: {recording}
+          </span>
+        </div>
       )}
 
       {problem !== null && <div className="error">{problem}</div>}

@@ -1,4 +1,4 @@
-import {mkdtemp, readFile, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 import {describe, expect, it} from 'vitest';
@@ -170,11 +170,33 @@ describe('DreamStore', () => {
     await store.forget('session-1');
   });
 
-  it('reports a problem at most once', async () => {
-    const {store} = await storeUnder();
-    expect(store.takeProblem()).toBeUndefined();
-    // The read-once behaviour is what stops a full disk being reported on every
-    // redraw of the settings panel.
-    expect(store.takeProblem()).toBeUndefined();
+  it('reports the last failed write, and stops reporting it once one lands', async () => {
+    const {store, dir} = await storeUnder();
+    const file = join(dir, 'session-1.json');
+    expect(store.problem()).toBeUndefined();
+
+    /*
+     * A newer file is the cheapest way to make the *write* path fail: it is the
+     * one failure the store raises rather than swallows, and it needs no
+     * permission trickery that a sandbox would turn into a skipped test.
+     */
+    await writeFile(
+      file,
+      `${JSON.stringify({version: 99, sessionId: 'session-1', trees: []})}\n`,
+      'utf8',
+    );
+    await store.append(tree('session-1', 'inv-1'));
+    expect(store.problem()).toContain('newer version');
+
+    /*
+     * A status rather than a message: the card is drawn from a payload the window
+     * reads for its own reasons, so clearing on read could swallow the news. What
+     * clears it is the thing it describes — a write that worked.
+     */
+    expect(store.problem()).toContain('newer version');
+    await rm(file, {force: true});
+    await store.append(tree('session-1', 'inv-2'));
+    expect(store.problem()).toBeUndefined();
+    expect(await store.count('session-1')).toBe(1);
   });
 });

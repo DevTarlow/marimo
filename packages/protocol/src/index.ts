@@ -773,15 +773,6 @@ export const dreamSettingsSchema = z.object({
     .int()
     .min(DREAM_RESULT_BYTES_MIN)
     .max(DREAM_RESULT_BYTES_MAX),
-  /**
-   * Whether the pruning weight has been explained to the user.
-   *
-   * Not consent and not a switch, exactly like `recall.introSeen`: it exists
-   * because the card is asked once and "once" cannot be derived from anything
-   * else in the document. `enabled: false` is as true of somebody who read the
-   * warning and declined as of somebody who has never seen it.
-   */
-  introSeen: z.boolean(),
 });
 
 export type DreamSettings = z.infer<typeof dreamSettingsSchema>;
@@ -795,7 +786,6 @@ export function defaultDreamSettings(): DreamSettings {
     pruningThreshold: DEFAULT_DREAM_PRUNING_THRESHOLD,
     keepLogs: DEFAULT_DREAM_KEEP_LOGS,
     resultBytes: DEFAULT_DREAM_RESULT_BYTES,
-    introSeen: false,
   };
 }
 
@@ -1375,6 +1365,17 @@ export type PublicSettings = Settings & {
    * a dead end for each.
    */
   modelProblem?: string;
+  /**
+   * The last discovery-log write that failed, or nothing.
+   *
+   * Here rather than on an event for the reason `modelProblem` is here: it is a
+   * fact the process that tried to write the file owns, and a window that opened
+   * after the failure would otherwise draw a card claiming the agent is recording
+   * when nothing has been written since. A status, not a message — the card is
+   * redrawn from a payload the window reads for other reasons too, so a value that
+   * cleared on read could be swallowed by a read nobody was showing.
+   */
+  dreamProblem?: string;
   profiles: AgentProfile[];
   activeProfileId: string;
 };

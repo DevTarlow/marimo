@@ -1207,6 +1207,50 @@ async function main() {
       }
 
       /*
+       * Dream-RSI, which is off, and which must be *visibly* off.
+       *
+       * The feature's whole promise is that nothing is recorded until somebody
+       * asks for it, so the switch has to exist and be unchecked on a fresh
+       * install, and the two numbers behind it must not be drawn while it is off
+       * — a card that showed the tuning before the recording would offer a
+       * setting with nothing to measure. The replay command is asserted too: it
+       * is the only payoff the feature has, and a card that named it wrongly
+       * would leave a user with files they cannot read.
+       */
+      await openSection('Dream-RSI');
+      const dreamCard = await until('the Dream-RSI section to answer', async () => {
+        const state = await evaluate(`(() => {
+          const section = [...document.querySelectorAll('.settings-section')]
+            .find((entry) => entry.querySelector('h3')?.textContent === 'Dream-RSI');
+          if (section === undefined) return undefined;
+          const boxes = [...section.querySelectorAll('input[type="checkbox"]')];
+          return JSON.stringify({
+            text: section.textContent ?? '',
+            boxes: boxes.length,
+            checked: boxes.filter((box) => box.checked).length,
+            numbers: section.querySelectorAll('input[type="number"]').length,
+          });
+        })()`);
+        return state === undefined ? undefined : JSON.parse(state);
+      });
+
+      if (dreamCard.boxes !== 1) {
+        fail(
+          `the Dream-RSI card draws ${String(dreamCard.boxes)} switches, not one`,
+        );
+      } else if (dreamCard.checked !== 0) {
+        fail('the Dream-RSI recording is on for a fresh install');
+      } else if (dreamCard.numbers !== 0) {
+        fail('the Dream-RSI card offers its tuning numbers while it is off');
+      } else if (!dreamCard.text.includes('replay:dream')) {
+        fail('the Dream-RSI card does not name the replay command');
+      } else {
+        ok(
+          'the Dream-RSI card is there, off, and says how to replay what it records',
+        );
+      }
+
+      /*
        * The two prompt boxes, asserted in the bundle the window actually loaded.
        * The identity is the app's text and the preferences box is the user's, kept
        * apart so that Reset can restore one without touching the other — a build

@@ -117,6 +117,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     const settings = await service.settings();
     const profiles = await service.profiles();
     const readiness = await modelReadiness(service);
+    const dreamProblem = service.dreamProblem();
 
     return {
       ...settings,
@@ -124,6 +125,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       ...(readiness.problem === undefined
         ? {}
         : {modelProblem: readiness.problem}),
+      ...(dreamProblem === undefined ? {} : {dreamProblem}),
       profiles: profiles.profiles,
       activeProfileId: profiles.activeProfileId,
     };

@@ -180,11 +180,17 @@ function isAbandoned(tree: DreamTree): boolean {
  *
  * Refuses to name a best setting when the sweep has nothing to compare: one
  * candidate is not a comparison, and naming it "best" would read as a finding.
+ * Neither is a grid of candidates over zero replayed turns — every row then
+ * scores an estimated return of nothing, and the ranking would hand back
+ * whichever setting happened to be first in the list.
  */
 function pickBest(
   rows: readonly DreamSweepRow[],
 ): SearchPolicySettings | undefined {
   if (rows.length < 2) {
+    return undefined;
+  }
+  if (!rows.some((row) => row.report.totals.turns > 0)) {
     return undefined;
   }
   const ranked = [...rows].sort((left, right) => {

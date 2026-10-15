@@ -83,21 +83,6 @@ interface SessionLog {
 }
 
 /**
- * How many sessions to keep before the oldest is dropped.
- *
- * Sessions, not turns: `keepLogs` bounds the turns *within* a conversation, and
- * this bounds how many conversations have a file at all. Both are needed, and
- * conflating them would mean either a user with a thousand conversations or one
- * whose long conversation is truncated to a handful of turns.
- *
- * 200 rather than a setting, because at this size the whole history is a few
- * megabytes and the alternative — a user who had to decide how much of their own
- * agent's history to keep before knowing what it was for — is a worse trade than
- * a bound nobody reaches.
- */
-export const MAX_DREAM_SESSIONS = 200;
-
-/**
  * One session's trees, read back.
  *
  * `problem` rather than a thrown error for the read path, because every caller of
@@ -112,7 +97,14 @@ export interface LoadedTrees {
 }
 
 export interface DreamStoreOptions {
-  /** The directory holding one document per conversation. */
+  /**
+   * The directory holding one document per conversation.
+   *
+   * One file per conversation that was recorded, and deliberately no separate cap
+   * on how many: the number of files is the number of conversations the user has,
+   * which is already a number they control by having them. `keepLogs` beside it is
+   * the bound whose effect somebody can actually see.
+   */
   dir: string;
   /**
    * How many turns to keep per conversation.
@@ -138,13 +130,16 @@ export class DreamStore {
    * Kept rather than thrown because of where the writes come from. `append` runs
    * inside a tool callback during a turn the user is watching, and a full disk is
    * not a reason to fail that turn — but it *is* a reason for the settings card to
-   * stop claiming the agent is recording anything. Held until read, so a failure
-   * is reported once rather than on every turn.
+   * stop claiming the agent is recording anything.
+   *
+   * A status rather than a one-shot message, and the difference matters: the card
+   * is drawn from a settings payload the window reads for its own reasons, so a
+   * message that cleared on read could be swallowed by a read nobody was looking
+   * at the card for. It is the *last* write that decides, so a later success
+   * clears it and a later failure replaces it.
    */
-  takeProblem(): string | undefined {
-    const problem = this.failure;
-    this.failure = undefined;
-    return problem;
+  problem(): string | undefined {
+    return this.failure;
   }
 
   /** The path one conversation's log lives at. */
@@ -167,6 +162,9 @@ export class DreamStore {
     const run = this.queue.then(async () => {
       try {
         await this.writeTree(tree);
+        // The last write is what the card reports on, so a turn that records
+        // cleanly after a failed one stops being described as broken.
+        this.failure = undefined;
       } catch (error) {
         this.failure = describeError(error);
       }

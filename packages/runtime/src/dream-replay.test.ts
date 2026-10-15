@@ -157,6 +157,26 @@ describe('sweepDreamTrees', () => {
     expect(sweep.loaded.turns).toBe(0);
   });
 
+  it('names no best setting when the grid replayed nothing at all', async () => {
+    const store = await storeUnder();
+    /*
+     * The shape `--json` prints for somebody who has not recorded anything yet.
+     * A grid of candidates over zero turns scores every row at an estimated
+     * return of nothing, so a "best" here is whichever setting sorted first —
+     * a recommendation made out of the argument order.
+     */
+    const sweep = await sweepDreamTrees({
+      store,
+      candidates: [
+        {explorationWeight: 0, pruningThreshold: -1},
+        {explorationWeight: 1, pruningThreshold: 0},
+      ],
+    });
+    expect(sweep.loaded.turns).toBe(0);
+    expect(sweep.best).toBeUndefined();
+    expect(sweep.rows).toHaveLength(2);
+  });
+
   it('names a best setting only when there is something to compare', async () => {
     const store = await storeUnder();
     await store.append(

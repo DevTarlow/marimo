@@ -375,11 +375,7 @@ export {
  * the policy arithmetic stays in `@marimo/agent`, where it is shared with the
  * live turn. The CLI is the thinnest possible wrapper over these two.
  */
-export {
-  DREAM_VERSION,
-  DreamStore,
-  MAX_DREAM_SESSIONS,
-} from './dream-store.js';
+export {DREAM_VERSION, DreamStore} from './dream-store.js';
 export type {DreamStoreOptions, LoadedTrees} from './dream-store.js';
 export {sweepDreamTrees, renderSweep} from './dream-replay.js';
 export type {

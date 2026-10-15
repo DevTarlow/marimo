@@ -30,6 +30,8 @@
 import {BasePlugin, REQUEST_CONFIRMATION_FUNCTION_CALL_NAME} from '@google/adk';
 import type {BaseTool, Context} from '@google/adk';
 
+import {callFingerprint} from '../dream/call-fingerprint.js';
+
 /**
  * The call number that is refused rather than run.
  *
@@ -118,7 +120,7 @@ export class RepeatedToolCallPlugin extends BasePlugin {
       }
     }
 
-    const key = fingerprint(name, args);
+    const key = callFingerprint(name, args);
     const next = (turn.get(key) ?? 0) + 1;
     turn.set(key, next);
     return next;
@@ -129,31 +131,8 @@ export class RepeatedToolCallPlugin extends BasePlugin {
     name: string,
     args: Record<string, unknown>,
   ): number {
-    return this.counts.get(invocationId)?.get(fingerprint(name, args)) ?? 0;
+    return this.counts.get(invocationId)?.get(callFingerprint(name, args)) ?? 0;
   }
-}
-
-/**
- * Identifies one call, so "the same call" is decided on the arguments rather
- * than on the model happening to type them in the same order twice.
- */
-function fingerprint(name: string, args: Record<string, unknown>): string {
-  return `${name}\u0000${stable(args)}`;
-}
-
-function stable(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value) ?? 'null';
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stable).join(',')}]`;
-  }
-  const entries = Object.entries(value as Record<string, unknown>).sort(
-    ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
-  );
-  return `{${entries
-    .map(([key, inner]) => `${JSON.stringify(key)}:${stable(inner)}`)
-    .join(',')}}`;
 }
 
 /**

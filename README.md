@@ -33,6 +33,17 @@ when you do not know the words in it. This one is off until you turn it on,
 because it needs a second download. Once it is on, press `Ctrl+K` and describe
 what you are looking for.
 
+If you are curious about how it decides what to do, there is a recording you can
+turn on. With it on, every turn is written down as a tree: which tools it was
+offered, which ones it asked for, which ones it ran and how each one turned out.
+Nothing about that is sent anywhere and it is off by default, because it is a
+record of your work. The point of it is the command in Settings — it replays your
+own recorded turns under different search settings, without starting the model at
+all, and shows what each setting would have hidden. It tells you what it would
+have *withheld*, not what would have happened next: the agent picks each step
+from the result of the last one, so a different setting is a different
+conversation.
+
 Scheduled tasks, such as a summary every morning, keep running after you close
 the window.
 
@@ -99,7 +110,9 @@ Your data lives in one folder. On Linux that is `~/.config/Marimo Agent`. It hol
 your conversations, the folders you have loaded, your settings, and the model it
 downloaded. You can move it with the `MARIMO_USER_DATA_DIR` environment variable,
 and you can delete it to start over. The model downloads again the next time you
-open the app.
+open the app. If you turned the recording on, that folder also holds one file per
+conversation of what the agent tried; a conversation's file is moved aside when
+you delete the conversation, so the record does not outlive the chat it is about.
 
 Connector passwords and tokens are kept in the operating system's keychain,
 encrypted. If the machine has no keychain, the app says so and refuses to store

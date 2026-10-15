@@ -163,7 +163,6 @@ describe('the Dream-RSI settings', () => {
       pruningThreshold: DEFAULT_DREAM_PRUNING_THRESHOLD,
       keepLogs: DEFAULT_DREAM_KEEP_LOGS,
       resultBytes: 256,
-      introSeen: false,
     });
     expect(DEFAULT_DREAM_PRUNING_THRESHOLD).toBe(DREAM_PRUNING_MIN);
   });

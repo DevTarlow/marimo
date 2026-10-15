@@ -309,13 +309,21 @@ or a pull request starts a real GitHub-hosted runner and spends metered minutes.
 Everything that used to be true about this file being decoration is gone: a
 failure here is a failure, and the packaging step below is the reason to look.
 
-**That step had never executed anywhere until the first GitHub push.** It builds
-an AppImage and starts the packaged runner out of `release/linux-unpacked`, which
-is the one thing that works in development and can be broken by packaging alone.
-`${{ runner.temp }}` in it is the expression to watch, because an unexpanded
-context fails the step rather than the job — and the runner's own expectation is
-that it reports the recall model as not installed, which is a state it has to
-handle anyway.
+**That step's first run found a real bug, which is the argument for keeping it.**
+It builds an AppImage and starts the packaged runner out of
+`release/linux-unpacked`, which is the one thing that works in development and can
+be broken by packaging alone. On its first execution it packaged the app and then
+died with `GitHub Personal Access Token is not set`, because electron-builder
+publishes *implicitly* when it detects CI and this repository is on GitHub — Gitea
+never set the variable that triggers it. Every `package*` script now passes
+`--publish never`, which is also what electron-builder asks for in the warning it
+prints when it guesses. Releasing stays a deliberate act rather than a side effect
+of a green build.
+
+`${{ runner.temp }}` in that step is the expression to watch, because an
+unexpanded context fails the step rather than the job — and the runner's own
+expectation is that it reports the recall model as not installed, which is a state
+it has to handle anyway.
 
 Two consequences worth internalising. **A green local run is not a green CI run**
 — the steps above are the difference, so a packaging or preload change is not

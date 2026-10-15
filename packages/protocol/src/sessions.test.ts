@@ -70,6 +70,52 @@ describe('the profile schema', () => {
     expect(parsed.preferences).toBe('Call me Tarlow. Skip the emoji.');
   });
 
+  /*
+   * The space an agent starts new chats in, and the same rule as `preferences`
+   * above: it is optional because `ProfileStore.parseFile` skips a profile this
+   * schema refuses, and a file whose every profile was skipped is quarantined —
+   * so a required field here would lose every existing agent on upgrade.
+   */
+  it('reads a profile written before an agent could have a space', () => {
+    const parsed = agentProfileSchema.safeParse({
+      id: 'agent',
+      name: 'Agent',
+      identity: 'You are an agent.',
+      enabledTools: [],
+      enabledSkills: [],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success ? parsed.data.spaceId : 'unparsed').toBeUndefined();
+  });
+
+  it('carries the space the user pointed an agent at', () => {
+    const parsed = agentProfileSchema.parse({
+      id: 'agent',
+      name: 'Writer',
+      identity: 'You are an agent.',
+      spaceId: 'ws-website',
+      enabledTools: [],
+      enabledSkills: [],
+    });
+    expect(parsed.spaceId).toBe('ws-website');
+  });
+
+  it('lets a patch move an agent back to wherever the rail is', () => {
+    const parsed = agentCallSchemas['profiles.update'].parse({
+      profileId: 'agent',
+      patch: {spaceId: null},
+    });
+    // A third answer beside "absent" and "a value": without the null the picker
+    // could only ever move an agent onto a space, never off one.
+    expect(parsed.patch.spaceId).toBeNull();
+    expect(
+      agentCallSchemas['profiles.update'].safeParse({
+        profileId: 'agent',
+        patch: {spaceId: ''},
+      }).success,
+    ).toBe(false);
+  });
+
   it('lets a patch clear preferences with an empty string', () => {
     const parsed = agentCallSchemas['profiles.update'].parse({
       profileId: 'agent',
@@ -163,6 +209,27 @@ describe('the workspace calls', () => {
 });
 
 describe('the filing calls', () => {
+  it('starts a conversation in a named space, or with none named', () => {
+    const named = agentCallSchemas['sessions.create'].parse({
+      profileId: 'p',
+      spaceId: 'ws-website',
+    });
+    expect(named.spaceId).toBe('ws-website');
+
+    // Absent is the common case, and it is not "no space": the runtime resolves
+    // it to the agent's own or to the rail's, which is why nothing here may
+    // turn it into a value.
+    expect(
+      agentCallSchemas['sessions.create'].parse({profileId: 'p'}).spaceId,
+    ).toBeUndefined();
+    expect(
+      agentCallSchemas['sessions.create'].safeParse({
+        profileId: 'p',
+        spaceId: '',
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts an id to move to, and null to unfile', () => {
     const toFolder = agentCallSchemas['sessions.move'].parse({
       profileId: 'p',

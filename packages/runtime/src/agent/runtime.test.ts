@@ -547,6 +547,31 @@ describe('the catalogue', () => {
   });
 
   /*
+   * The spaces an agent can be pointed at, for the "works in" picker beside it.
+   * Drawn from the workspace document rather than from a copy, so the picker can
+   * only ever offer one that exists: a space added a moment ago is there, and
+   * one the user has just removed is not.
+   */
+  it('lists the spaces the install has', async () => {
+    const instance = runtime();
+    expect((await instance.catalog()).spaces).toEqual(
+      (await instance.workspaces()).workspaces,
+    );
+
+    const state = await instance.addWorkspace(join(dir, 'website'));
+    const website = state.workspaces.find(
+      (space) => space.path === join(dir, 'website'),
+    );
+    expect(website).toBeDefined();
+    expect((await instance.catalog()).spaces).toContainEqual(website);
+
+    await instance.removeWorkspace(website?.id ?? '');
+    expect(
+      (await instance.catalog()).spaces.map((space) => space.id),
+    ).not.toContain(website?.id);
+  });
+
+  /*
    * The connector switches, drawn from the settings document rather than from
    * anything connected.
    *
@@ -1018,6 +1043,82 @@ describe('folders and filing', () => {
     if (forgotten.ok) {
       expect(await forgotten.host.memoryText()).toContain('beta');
     }
+  });
+
+  /*
+   * Where a new conversation is filed.
+   *
+   * Three answers in a fixed order — the space the caller named, the agent's
+   * own, the rail's — and the point of the second is that a person who said
+   * once that their Writer drafts into the website repo does not have to say it
+   * again from the rail. The third is the behaviour every conversation had
+   * before an agent could own a space, so it is here to keep that from
+   * regressing.
+   */
+  it('files a new chat in the space the caller named', async () => {
+    const agent = runtime();
+    const alpha = folderId(
+      await agent.addWorkspace(join(dir, 'alpha')),
+      'alpha',
+    );
+    // Beta is the current space; the rail's "new chat in this space" names
+    // alpha, and the caller wins.
+    await agent.addWorkspace(join(dir, 'beta'));
+
+    const session = await agent.createSession(profileId, undefined, alpha);
+    expect(session?.workspaceId).toBe(alpha);
+  });
+
+  it("files a new chat in the agent's own space, whatever the rail is on", async () => {
+    const agent = runtime();
+    const alpha = folderId(
+      await agent.addWorkspace(join(dir, 'alpha')),
+      'alpha',
+    );
+    await agent.addWorkspace(join(dir, 'beta'));
+    expect((await agent.workspaces()).activeWorkspaceId).not.toBe(alpha);
+    await agent.updateProfile(profileId, {spaceId: alpha});
+
+    expect((await agent.createSession(profileId))?.workspaceId).toBe(alpha);
+  });
+
+  it('files a new chat in the current space for an agent with none of its own', async () => {
+    const agent = runtime();
+    await agent.addWorkspace(join(dir, 'alpha'));
+    const beta = folderId(await agent.addWorkspace(join(dir, 'beta')), 'beta');
+
+    // The state every agent is in until somebody points one somewhere: the
+    // space the rail is on, which is what this always did.
+    expect((await agent.createSession(profileId))?.workspaceId).toBe(beta);
+  });
+
+  /*
+   * A space the rail named that somebody has since removed. Stamping the id
+   * would file the chat under "Other chats" — findable only by going to look in
+   * a group nobody chose — so the rest of the order answers instead, exactly as
+   * a conversation whose folder was removed falls back to the current one.
+   */
+  it('falls back when the named space is gone', async () => {
+    const agent = runtime();
+    const alpha = folderId(
+      await agent.addWorkspace(join(dir, 'alpha')),
+      'alpha',
+    );
+    const beta = folderId(await agent.addWorkspace(join(dir, 'beta')), 'beta');
+    await agent.updateProfile(profileId, {spaceId: beta});
+
+    await agent.removeWorkspace(alpha);
+    expect(
+      (await agent.createSession(profileId, undefined, alpha))?.workspaceId,
+    ).toBe(beta);
+
+    /*
+     * And when the agent's own space has gone too, the rail's is what is left.
+     * Reaching that needs no second removal: a Settings window that was open
+     * when a space went can write the same stale id the rail just did.
+     */
+    await agent.updateProfile(profileId, {spaceId: alpha});
+    expect((await agent.createSession(profileId))?.workspaceId).toBe(beta);
   });
 
   it('files, renames and deletes one conversation, refusing another agent', async () => {

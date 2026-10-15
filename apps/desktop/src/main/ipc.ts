@@ -557,7 +557,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     }),
 
     'sessions.create': async (params) => ({
-      session: await agent().createSession(params.profileId),
+      session: await agent().createSession(params.profileId, params.spaceId),
     }),
 
     'sessions.get': async (params) =>

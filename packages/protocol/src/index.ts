@@ -1045,6 +1045,14 @@ export type StoredSettings = Settings & {availableModels: AvailableModels};
  * Belongs to the install rather than to one agent: two agents asked about the
  * same project work in the same folder, and the folder is a place on the machine
  * rather than a fact about who is talking.
+ *
+ * The user calls one a **Space** — the thing that owns its documents, its chats
+ * and its agents — and this document goes on saying `workspace` anyway. It is
+ * the decision `PROVIDERS.llamacpp` makes about its id: `workspaces.json`,
+ * `Workspace` and `workspaceId` are what the file, every session index entry and
+ * every migration already name, so renaming them would mean a migration to reach
+ * something the user reads as a Space either way. The new word lives where the
+ * user reads it — labels, pickers, sentences — and never in a document.
  */
 export const workspaceSchema = z.object({
   id: z.string().min(1),
@@ -1208,6 +1216,22 @@ export const agentProfileSchema = z.object({
    * with a fresh agent. The whole roster would be lost to an upgrade.
    */
   model: agentModelSchema.optional(),
+  /**
+   * The space this agent starts new chats in.
+   *
+   * Absent means "wherever the rail is", which is what every agent written
+   * before this field existed gets — and it stays the right answer for the agent
+   * most people use: one space, followed as they move between them. It is what
+   * makes "my Writer drafts into the website repo" need no sentence in a prompt:
+   * the person says it once in Settings and every new chat is filed there.
+   *
+   * Optional for the reason `preferences` above is optional, and it is not
+   * tidiness: a required field here would fail this schema for every agent that
+   * already exists, and `ProfileStore.parseFile` skips a profile it cannot parse
+   * — a file whose profiles were all skipped is renamed aside and replaced with
+   * a fresh agent.
+   */
+  spaceId: z.string().min(1).optional(),
 });
 
 export const profilePatchSchema = z.object({
@@ -1240,6 +1264,16 @@ export const profilePatchSchema = z.object({
    * ever move an agent off the default, never back onto it.
    */
   model: agentModelSchema.nullable().optional(),
+  /**
+   * The agent's own space, or `null` to go back to wherever the rail is.
+   *
+   * The third field here that has to be able to *unset*, and for the same
+   * reason: "this agent works in the website repo" is a real answer a person
+   * gives, and so is taking it back. Without the null the picker could only ever
+   * move an agent onto a space, never off one, and the state every other agent
+   * is in would be unreachable for one that had ever been pointed somewhere.
+   */
+  spaceId: z.string().min(1).nullable().optional(),
 });
 
 /** One entry in the pick-lists Settings renders, reported by the agent. */
@@ -2645,7 +2679,18 @@ export const agentCallSchemas = {
 
   /* Conversations. */
   'sessions.list': z.object({profileId: z.string().min(1).optional()}),
-  'sessions.create': z.object({profileId: z.string().min(1)}),
+  /*
+   * Starts a conversation, in a named space when the caller named one.
+   *
+   * The rail's "new chat in this space" is what names it. Absent is the common
+   * case: the agent's own space if it has one, and otherwise the space the rail
+   * is on — a resolution the runtime makes, because it is the layer that reads
+   * the agent and the folder document together.
+   */
+  'sessions.create': z.object({
+    profileId: z.string().min(1),
+    spaceId: z.string().min(1).optional(),
+  }),
   'sessions.get': z.object({
     profileId: z.string().min(1),
     sessionId: z.string().min(1),
@@ -3030,6 +3075,16 @@ export interface AgentCallResults {
 export interface ProfileCatalog {
   tools: CatalogTool[];
   skills: CatalogEntry[];
+  /**
+   * The spaces this install has, for the per-agent "works in" picker.
+   *
+   * The workspace document's own entries, so the picker can only ever offer a
+   * space that exists — and a space added from the rail is offerable without
+   * anything having to be told about it. The *active* one is deliberately not
+   * here: which space the rail is on is the rail's business, and the window
+   * already reads it from `workspaces.list`.
+   */
+  spaces: Workspace[];
   /**
    * The connectors this install has, for the switches that grant them.
    *

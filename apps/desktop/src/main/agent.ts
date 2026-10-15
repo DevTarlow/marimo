@@ -1080,8 +1080,16 @@ export class AgentService {
     return await this.runtime.listSessions(profileId);
   }
 
-  async createSession(profileId: string): Promise<SessionSummary> {
-    const session = await this.runtime.createSession(profileId);
+  async createSession(
+    profileId: string,
+    spaceId?: string,
+  ): Promise<SessionSummary> {
+    // No title: the store names a chat from the first thing said in it.
+    const session = await this.runtime.createSession(
+      profileId,
+      undefined,
+      spaceId,
+    );
     if (session === undefined) {
       throw new Error(`There is no agent called "${profileId}".`);
     }

@@ -294,9 +294,9 @@ export class AgentRuntime {
    * would grant nothing when ticked.
    */
   async catalog(): Promise<ProfileCatalog> {
+    const workspaces = await this.workspaceStore.load();
     const workspaceRoot =
-      workspaceRootFor(await this.workspaceStore.load()) ??
-      this.options.paths.defaultWorkspace;
+      workspaceRootFor(workspaces) ?? this.options.paths.defaultWorkspace;
     const settings = await this.settingsStore.load();
 
     /*
@@ -333,6 +333,13 @@ export class AgentRuntime {
     return {
       tools,
       skills: await this.skillCatalog(),
+      /*
+       * The spaces the install has, for the "works in" picker beside an agent.
+       * Read from the document the rail reads rather than from a copy, so a
+       * space the user just added is offerable without anything having to be
+       * told about it.
+       */
+      spaces: workspaces.workspaces,
       /*
        * Every connector the install has, switched on or not, drawn from the
        * settings document rather than from the manager's connections. That is the
@@ -1000,15 +1007,16 @@ export class AgentRuntime {
    * not up — gating this on a resolvable config would mean a fresh install could
    * not open the chat it is supposed to explain itself in.
    *
-   * The profile and the *current* folder are stamped on at creation, which is
-   * what files the conversation under the right agent and the right group in the
-   * rail. It is recorded once rather than followed: a conversation that keeps
-   * running after another folder is selected is what lets the rail be browsed
-   * while an answer streams.
+   * The profile and one space are stamped on at creation, which is what files
+   * the conversation under the right agent and the right group in the rail. It
+   * is recorded once rather than followed: a conversation that keeps running
+   * after another space is selected is what lets the rail be browsed while an
+   * answer streams.
    */
   async createSession(
     profileId: string,
     title?: string,
+    spaceId?: string,
   ): Promise<SessionSummary | undefined> {
     const profile = await this.profileFor(profileId);
     if (!profile) {
@@ -1018,8 +1026,39 @@ export class AgentRuntime {
     return await host.createSession(
       title,
       profileId,
-      (await this.workspaceStore.activeWorkspaceId()) ?? undefined,
+      await this.spaceFor(profile, spaceId),
     );
+  }
+
+  /**
+   * The space a new conversation is filed in.
+   *
+   * Three answers, in this order and no other: the space the *caller* named —
+   * the rail's "new chat in this space" — else the agent's own, which is how a
+   * user says once that their Writer drafts into the website repo, else wherever
+   * the rail is. The third is what every conversation did before agents had a
+   * space at all, so an agent with none behaves exactly as it always has.
+   *
+   * A candidate that names a space the document no longer holds is *skipped*
+   * rather than stamped, and that is the same rule a removed folder already
+   * follows for a session: the id would render as "Other chats", a group the
+   * user has to go looking in. Naming a space that has since been removed is a
+   * stale window asking, not a request to file a chat where nobody can see it.
+   */
+  private async spaceFor(
+    profile: AgentProfile,
+    named?: string,
+  ): Promise<string | undefined> {
+    const file = await this.workspaceStore.load();
+    for (const candidate of [named, profile.spaceId]) {
+      if (
+        candidate !== undefined &&
+        file.workspaces.some((entry) => entry.id === candidate)
+      ) {
+        return candidate;
+      }
+    }
+    return file.activeWorkspaceId ?? undefined;
   }
 
   /**

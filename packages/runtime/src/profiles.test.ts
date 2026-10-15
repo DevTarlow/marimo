@@ -174,7 +174,7 @@ describe('ProfileStore', () => {
   });
 
   /*
-   * The connector grant, which is the third field a patch can *unset*.
+   * The connector grant, which is one of the fields a patch can *unset*.
    *
    * All three answers a user can give have to survive the store: a list means
    * "only these", an empty list means "none", and `null` means "back to every
@@ -206,7 +206,7 @@ describe('ProfileStore', () => {
   });
 
   /*
-   * The model, which is the other field a patch can unset, and which was in the
+   * The model, which is another field a patch can unset, and which was in the
    * schema without the store ever writing it — so the picker in Settings moved a
    * value nothing kept.
    */
@@ -224,6 +224,58 @@ describe('ProfileStore', () => {
 
     const back = await profiles.update(profile.id, {model: null});
     expect(back.model).toBeUndefined();
+  });
+
+  /*
+   * The space an agent starts new chats in, and another field a patch can
+   * unset. It is what lets a person say once that their Writer drafts into the
+   * website repo, rather than saying it again in every new chat.
+   */
+  it('stores the space an agent works in, and unsets it with a null', async () => {
+    const profiles = store();
+    const profile = await profiles.activeProfile();
+    expect(profile.spaceId).toBeUndefined();
+
+    const chosen = await profiles.update(profile.id, {spaceId: 'ws-website'});
+    expect(chosen.spaceId).toBe('ws-website');
+    // Round-tripped: a store reopened on the same file answers with it.
+    expect((await store().profiles())[0]?.spaceId).toBe('ws-website');
+
+    // Unset rather than left as a sentinel. Absent *is* "wherever the rail is",
+    // and a null stored here would be a profile its own schema refuses — which
+    // the next read would skip and, if it were the only one, quarantine.
+    const back = await profiles.update(profile.id, {spaceId: null});
+    expect(back.spaceId).toBeUndefined();
+
+    // And a patch about something else does not disturb it.
+    await profiles.update(profile.id, {spaceId: 'ws-website'});
+    const renamed = await profiles.update(profile.id, {name: 'Other'});
+    expect(renamed.spaceId).toBe('ws-website');
+  });
+
+  it('reads a profile file written before agents had a space', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: 'writer',
+        profiles: [
+          {
+            id: 'writer',
+            name: 'Writer',
+            identity: '',
+            enabledTools: [],
+            enabledSkills: [],
+          },
+        ],
+      }),
+      'utf8',
+    );
+    const snapshot = await store().load();
+    // Parsed rather than skipped: a field added to the schema may not cost a
+    // user the agent that predates it.
+    expect(snapshot.profiles).toHaveLength(1);
+    expect(snapshot.profiles[0]?.spaceId).toBeUndefined();
   });
 
   it('refuses an unknown profile', async () => {

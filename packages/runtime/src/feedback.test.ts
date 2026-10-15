@@ -135,6 +135,31 @@ describe('the feedback store', () => {
   });
 
   /*
+   * Removing a bot is not a request to forget everybody's corrections: the
+   * others are about conversations that still exist, and the Memory card would
+   * look empty for a bot the user never touched.
+   */
+  it("forgets one bot's corrections and keeps the rest", async () => {
+    await store.record({
+      profileId: 'default',
+      sessionId: 'session-1',
+      messageId: 'message-1',
+      excerpt: 'Wrong about the parser.',
+    });
+    await store.record({
+      profileId: 'research',
+      sessionId: 'session-2',
+      messageId: 'message-2',
+      excerpt: 'Wrong about the release date.',
+    });
+
+    expect((await store.forgetProfile('default')).entries.map((e) => e.profileId))
+      .toEqual(['research']);
+    expect(await store.forProfile('default')).toEqual([]);
+    expect(await store.forProfile('research')).toHaveLength(1);
+  });
+
+  /*
    * A lenient read is what lets the window open with a corrupt file, and it is
    * also the reason the write path is strict — a lenient read plus a write is how
    * a user's data disappears.

@@ -1454,6 +1454,109 @@ async function main() {
       }
 
       /*
+       * Removing a bot, through the menu a person uses: the row's `…`, the item,
+       * and the second press that is the confirmation.
+       *
+       * It is the only action in the window that destroys more than one document
+       * at once — the bot, its conversations, its schedule and what it remembered
+       * — so what is checked is not only that it goes, but that its conversation
+       * went with it and that the bot beside it is still there. A removal that
+       * took a neighbour's history would otherwise be invisible until somebody
+       * noticed a chat was missing.
+       */
+      await evaluate(
+        `[...document.querySelectorAll('.settings-head button')]
+        .find((entry) => entry.textContent.trim() === 'Back to chat')?.click()`,
+      );
+      const doomed = JSON.parse(
+        await evaluate(`(async () => {
+        const created = await window.marimo.call('profiles.create', {name: 'Doomed'});
+        const {session} = await window.marimo.call('sessions.create', {
+          profileId: created.activeProfileId,
+        });
+        return JSON.stringify({id: created.activeProfileId, sessionId: session.id});
+      })()`),
+      );
+      /*
+       * Reopened rather than poked at: the list is read when the dialog mounts,
+       * and a write made over the bridge is not one this component hears about.
+       */
+      await evaluate(
+        `[...document.querySelectorAll('.head button')]
+        .find((entry) => entry.textContent.trim() === 'Settings')?.click()`,
+      );
+      await until('the reopened bot list', async () =>
+        (await evaluate(
+          `document.querySelector('[aria-label="Actions for Doomed"]') !== null`,
+        )) === true
+          ? true
+          : undefined,
+      );
+      await openSection('Your bots');
+      await evaluate(
+        `document.querySelector('[aria-label="Actions for Doomed"]')?.click()`,
+      );
+      const botMenu = await until('the bot menu', async () => {
+        const value = await evaluate(`(() => {
+        const menu = document.querySelector('.popover');
+        return menu === null
+          ? undefined
+          : JSON.stringify(
+              [...menu.querySelectorAll('.popover-item')].map((item) =>
+                item.textContent.trim(),
+              ),
+            );
+      })()`);
+        return value === undefined ? undefined : JSON.parse(value);
+      });
+      await evaluate(
+        `[...document.querySelectorAll('.popover-item')]
+        .find((item) => item.textContent.trim() === 'Remove bot…')?.click()`,
+      );
+      const question = await until(
+        'the removal question',
+        async () =>
+          await evaluate(
+            `document.querySelector('.popover-confirm p')?.textContent ?? undefined`,
+          ),
+      );
+      await evaluate(
+        `[...document.querySelectorAll('.popover-confirm button')]
+        .find((item) => item.textContent.trim() === 'Remove')?.click()`,
+      );
+      const afterRemoval = await until('the bot to go', async () => {
+        const value = await evaluate(`(async () => {
+        const {profiles} = await window.marimo.call('profiles.list', {});
+        const {sessions} = await window.marimo.call('sessions.list', {
+          profileId: ${JSON.stringify(doomed.id)},
+        });
+        return JSON.stringify({
+          names: profiles.map((entry) => entry.name),
+          sessions: sessions.length,
+          row: document.querySelector('[aria-label="Actions for Doomed"]') !== null,
+        });
+      })()`);
+        const parsed = value === undefined ? undefined : JSON.parse(value);
+        return parsed !== undefined && parsed.row === false ? parsed : undefined;
+      });
+
+      if (!botMenu.includes('Rename…') || !botMenu.includes('Remove bot…')) {
+        fail(`a bot's menu is missing its actions: ${JSON.stringify(botMenu)}`);
+      } else if (!/Doomed/u.test(question ?? '')) {
+        fail(`the removal question does not name the bot: ${String(question)}`);
+      } else if (afterRemoval.names.includes('Doomed')) {
+        fail(`a removed bot is still listed: ${JSON.stringify(afterRemoval)}`);
+      } else if (afterRemoval.sessions !== 0) {
+        fail(
+          `a removed bot kept ${String(afterRemoval.sessions)} conversation(s)`,
+        );
+      } else if (afterRemoval.names.length === 0) {
+        fail('removing a bot took the whole list with it');
+      } else {
+        ok('a bot was removed through its menu, conversations and all');
+      }
+
+      /*
        * Back to the chat before anything else is measured. The dialog covers the
        * window, and every check after this one — and the screenshot — is about the
        * window.

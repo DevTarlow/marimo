@@ -14,6 +14,7 @@
  * below supply. The two answers a real install can give — a key that is present
  * and one that is not — are both a stub away, and no test touches a keychain.
  */
+import {existsSync} from 'node:fs';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 
@@ -23,6 +24,7 @@ import {
   FileSessionService,
   MAX_MEMORY_BYTES,
   resolveMemoryFile,
+  resolvePersonMemoryFile,
 } from '@marimo/agent';
 import type {AdkEvent} from '@marimo/agent';
 import {
@@ -33,8 +35,9 @@ import type {AgentModel, ProviderId} from '@marimo/protocol';
 
 import {resolveAppPaths} from '../paths.js';
 import type {AppPaths} from '../paths.js';
+import {FeedbackStore} from '../feedback.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
-import {ProfileStore} from '../profiles.js';
+import {LastProfileError, ProfileStore} from '../profiles.js';
 import type {SecretRead} from '../secrets.js';
 import {WorkspaceStore} from '../workspaces.js';
 import {AgentRuntime} from './runtime.js';
@@ -1635,5 +1638,115 @@ describe('recall', () => {
   it('does not require a recall engine to be there at all', async () => {
     const agent = withRecall();
     await expect(agent.dispose()).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Removing a bot, which is the only action in the app that destroys more than one
+ * document at once.
+ *
+ * What it must *not* do is as much of the point as what it must. The last bot is
+ * refused before anything of its is touched, and the bot beside it keeps its
+ * conversations, its schedule and its corrections — because the failure this
+ * guards against is a removal that takes a neighbour's history with it, and that
+ * one is invisible until somebody notices a chat is gone.
+ */
+describe('removing a bot', () => {
+  let dir: string;
+  let paths: AppPaths;
+  let defaultId: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-remove-'));
+    paths = resolveAppPaths(dir);
+    await seedWorkspaces(paths, dir);
+    const profiles = new ProfileStore({
+      file: paths.profiles,
+      defaultIdentity: '',
+      defaultTools: [],
+      defaultSkills: [],
+    });
+    await profiles.load();
+    defaultId = (await profiles.activeProfile()).id;
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function runtime(): AgentRuntime {
+    return new AgentRuntime({paths, readSecret: keyPresent});
+  }
+
+  it('takes its conversations, its memory and its records with it', async () => {
+    const instance = runtime();
+    const bot = await instance.createProfile('Writer');
+    await instance.createSession(defaultId, 'kept');
+    await instance.createSession(bot.id, 'written');
+
+    /*
+     * Everything else the app keeps for one bot: the person's half of memory
+     * under user data, a suggestion it was about to make, and a correction the
+     * user left about one of its answers.
+     */
+    const memoryDir = dirname(
+      resolvePersonMemoryFile(paths.personMemoryDir, bot.id),
+    );
+    await mkdir(memoryDir, {recursive: true});
+    await writeFile(join(memoryDir, 'memory.md'), '- has a cat\n', 'utf8');
+    await new MemoryProposalStore({file: paths.memoryProposals}).record(
+      'session-written',
+      3,
+      [
+        {
+          sessionId: 'session-written',
+          profileId: bot.id,
+          section: 'Notes',
+          text: 'Has a cat.',
+          reason: 'said so',
+        },
+      ],
+    );
+    await new FeedbackStore({file: paths.feedback}).record({
+      profileId: bot.id,
+      sessionId: 'session-written',
+      messageId: 'message-1',
+      excerpt: 'Wrong about the date.',
+    });
+
+    await instance.removeProfile(bot.id);
+
+    expect((await instance.profiles()).map((entry) => entry.id)).toEqual([
+      defaultId,
+    ]);
+    expect(await instance.listSessions(bot.id)).toEqual([]);
+    expect(await instance.listSessions(defaultId)).toHaveLength(1);
+    expect(existsSync(memoryDir)).toBe(false);
+    expect(
+      (await new MemoryProposalStore({file: paths.memoryProposals}).load())
+        .proposals,
+    ).toEqual([]);
+    expect(
+      (await new FeedbackStore({file: paths.feedback}).load()).entries,
+    ).toEqual([]);
+  });
+
+  /*
+   * The order this method is written for. A refusal discovered after the
+   * conversations were deleted would leave a bot that still exists with nothing
+   * to answer for — which is the state removal exists to avoid, arrived at from
+   * the other side.
+   */
+  it('refuses the last bot before touching anything it owns', async () => {
+    const instance = runtime();
+    await instance.createSession(defaultId, 'kept');
+
+    await expect(instance.removeProfile(defaultId)).rejects.toBeInstanceOf(
+      LastProfileError,
+    );
+    expect((await instance.profiles()).map((entry) => entry.id)).toEqual([
+      defaultId,
+    ]);
+    expect(await instance.listSessions(defaultId)).toHaveLength(1);
   });
 });

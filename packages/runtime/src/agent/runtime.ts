@@ -20,12 +20,16 @@
  * settings change that arrived mid-turn would abort the turn the user is
  * watching.
  */
+import {rm} from 'node:fs/promises';
+import {dirname} from 'node:path';
+
 import {
   AgentHost,
   capabilityPresets,
   describeTools,
   MAX_MEMORY_BYTES,
   MemoryStore,
+  resolvePersonMemoryFile,
   runReview,
   SAFE_DEFAULT_TOOLS,
 } from '@marimo/agent';
@@ -81,6 +85,7 @@ import type {AppPaths} from '../paths.js';
 import {DocumentService} from '../documents.js';
 import {DreamStore} from '../dream-store.js';
 import {ProfileStore} from '../profiles.js';
+import type {ProfileFile} from '../profiles.js';
 import {FeedbackStore} from '../feedback.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
 import type {SecretRead} from '../secrets.js';
@@ -448,6 +453,63 @@ export class AgentRuntime {
 
   async selectProfile(profileId: string): Promise<AgentProfile> {
     return await this.profileStore.select(profileId);
+  }
+
+  /**
+   * Removes a bot, and everything the app kept for it.
+   *
+   * The order is the point of this method, and it is the reverse of the obvious
+   * one. **The refusal comes first**, because a bot that turns out to be the last
+   * one must be refused before anything of its is destroyed — and the profile
+   * write can also refuse for a file from a newer build. Everything after it is
+   * cleanup of things already doomed:
+   *
+   * - the conversations, through the host, which rewrites the index once for all
+   *   of them and drops each from the recall index on the way out;
+   * - their discovery trees, which must not outlive the user's ability to see the
+   *   conversations they are about;
+   * - the proposals, refusals, corrections and the person's half of memory — all
+   *   keyed by a profile id that nothing will name again, so leaving them is
+   *   keeping records about the user that no screen can show them;
+   * - and the profile itself.
+   *
+   * What is deliberately *not* here: the memory files a bot kept inside a Space.
+   * Those live in the user's own folder (`.marimo/<profile>/`), which this app
+   * only visits, and removing a bot from the roster is not a request to delete
+   * work inside somebody's project. The confirmation in Settings says so.
+   */
+  async removeProfile(profileId: string): Promise<ProfileFile> {
+    await this.profileStore.assertRemovable(profileId);
+
+    const file = await this.profileStore.remove(profileId);
+
+    /*
+     * After the profile write, so a refusal above leaves the bot whole. The host
+     * is asked for the id rather than resolved from the profile — it holds the
+     * session service, and deleting a conversation has never needed a profile to
+     * exist.
+     */
+    const host = await this.ensureHost(profileId);
+    const conversations = await host.deleteSessionsForProfile(profileId);
+    for (const sessionId of conversations) {
+      await this.dreamStore.forget(sessionId);
+      await this.proposals.forget(sessionId);
+    }
+    await this.proposals.forgetProfile(profileId);
+    await this.feedbackStore.forgetProfile(profileId);
+
+    /*
+     * The person's half of memory, by directory: it is exactly this profile's
+     * own folder under `memory/`, so nothing another bot remembers is in reach of
+     * the removal.
+     */
+    const memoryDir = dirname(
+      resolvePersonMemoryFile(this.options.paths.personMemoryDir, profileId),
+    );
+    await rm(memoryDir, {recursive: true, force: true});
+
+    this.dropHost(profileId);
+    return file;
   }
 
   /**
@@ -1136,6 +1198,12 @@ export class AgentRuntime {
      * aside is not a reason to report a failure that did not occur.
      */
     await this.dreamStore.forget(sessionId);
+    /*
+     * And the memory reviewer's watermark for it, which nothing else moves: the
+     * entry names a conversation that no longer exists, so leaving it is a file
+     * that grows by one line per deleted chat and can never be read back.
+     */
+    await this.proposals.forget(sessionId);
   }
 
   /**

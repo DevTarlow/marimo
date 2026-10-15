@@ -308,16 +308,29 @@ export class ProfileStore {
   }
 
   /**
-   * Removes a profile. Its conversations are the caller's business (the bridge
-   * deletes them); its memory files stay in whatever folders it used.
+   * Whether this profile may be removed, on its own.
+   *
+   * The same refusal `remove` makes, available before anything else happens,
+   * because removing a bot destroys more than this file holds — its
+   * conversations, its jobs, its memory — and the one outcome that must never
+   * happen is finding out it was the last bot *after* those are gone. `remove`
+   * calls it too, inside its lock, so the rule is written once.
+   */
+  async assertRemovable(profileId: string): Promise<void> {
+    refuseLast(await this.load(), profileId);
+  }
+
+  /**
+   * Removes a profile.
+   *
+   * Its conversations, jobs and stored memory are the caller's business — see
+   * `AgentRuntime.removeProfile`, which deletes them — and the memory files it
+   * kept *inside a Space* stay there, because those are the user's own folder.
    */
   async remove(profileId: string): Promise<ProfileFile> {
     return await this.withLock(async () => {
       const file = await this.load();
-      requireProfile(file, profileId);
-      if (file.profiles.length <= 1) {
-        throw new LastProfileError();
-      }
+      refuseLast(file, profileId);
 
       const profiles = file.profiles.filter((entry) => entry.id !== profileId);
       const next: ProfileFile = {
@@ -548,6 +561,21 @@ function requireProfile(
   const profile = file.profiles.find((entry) => entry.id === profileId);
   if (!profile) {
     throw new UnknownProfileError(profileId);
+  }
+  return profile;
+}
+
+/**
+ * The one rule about which profiles may go: the app is unusable without one.
+ *
+ * Named rather than inlined because two callers ask: the removal itself, and
+ * `AgentRuntime.removeProfile`, which has to be told no *before* it destroys the
+ * conversations and jobs belonging to a bot it is not allowed to remove.
+ */
+function refuseLast(file: ProfileSnapshot, profileId: string): AgentProfile {
+  const profile = requireProfile(file, profileId);
+  if (file.profiles.length <= 1) {
+    throw new LastProfileError();
   }
   return profile;
 }

@@ -1490,14 +1490,16 @@
 }
 
 /*
- * The pencil beside a bot's name, and the field it opens.
+ * The `…` beside a bot's name, and the field a rename opens in its place.
  *
- * Kept quiet and unboxed: the row's subject is the name and the two chips beside
- * it, so a control that merely renames the row must not read as the point of it.
- * The input borrows the pill's own shape so the row does not change height while
- * somebody is typing in it.
+ * Kept quiet and unboxed: the row's subject is the name and the chips beside it,
+ * so the control that offers everything *else* about the bot must not read as
+ * the point of it. Unlike the rail's, it is always faintly visible rather than
+ * appearing on hover — a settings row has no hover surface of its own, and a
+ * control nobody finds is one nobody uses. The input borrows the pill's own
+ * shape so the row does not change height while somebody is typing in it.
  */
-.settings-agent-rename {
+.settings-agent-menu {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1507,12 +1509,13 @@
   background: none;
   border: none;
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  color: var(--text-faint);
   font-size: var(--text-base);
   line-height: 1;
 }
 
-.settings-agent-rename:hover:not(:disabled) {
+.settings-agent-menu:hover:not(:disabled),
+.settings-agent-menu[aria-expanded='true'] {
   background: var(--surface-hover);
   color: var(--text);
 }

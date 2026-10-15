@@ -247,6 +247,24 @@ export class JobStore {
   }
 
   /**
+   * Removes everything a bot had scheduled, answering how many went.
+   *
+   * Beside `remove` rather than a loop over it because of what a leftover job
+   * does: the runner would wake on its schedule, find no such bot, and report a
+   * failure every time it came due — a notification the user cannot act on
+   * because the thing it is about is no longer in Settings.
+   */
+  async removeForProfile(profileId: string): Promise<number> {
+    let removed = 0;
+    await this.mutate((current) => {
+      const jobs = current.jobs.filter((job) => job.profileId !== profileId);
+      removed = current.jobs.length - jobs.length;
+      return removed > 0 ? {...current, jobs} : current;
+    });
+    return removed;
+  }
+
+  /**
    * Records how a job's run went.
    *
    * Called by the scheduler, and by the panel's conversation when the *user* is

@@ -551,6 +551,12 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       return await profileState(service);
     },
 
+    'profiles.remove': async (params) => {
+      const service = agent();
+      await service.removeProfile(params.profileId);
+      return await profileState(service);
+    },
+
     'settings.get': async () => ({settings: await publicSettings()}),
 
     /* The folders every agent works in. */

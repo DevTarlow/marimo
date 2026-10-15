@@ -303,6 +303,26 @@ export class MemoryProposalStore {
     });
   }
 
+  /**
+   * Forgets a bot: what it was about to remember, and what the user turned down.
+   *
+   * By profile rather than by conversation, because a proposal can be recorded
+   * with no conversation at all — and a dismissal never had one. Both are keyed
+   * by a profile id that nothing will name again once the bot is gone, so
+   * leaving them is keeping a suggestion the app can never show.
+   */
+  async forgetProfile(profileId: string): Promise<MemoryProposalsFile> {
+    return await this.mutate((current) => ({
+      ...current,
+      proposals: current.proposals.filter(
+        (proposal) => proposal.profileId !== profileId,
+      ),
+      dismissed: current.dismissed.filter(
+        (dismissal) => dismissal.profileId !== profileId,
+      ),
+    }));
+  }
+
   private async mutate(
     edit: (current: MemoryProposalsFile) => MemoryProposalsFile,
   ): Promise<MemoryProposalsFile> {

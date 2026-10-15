@@ -70,10 +70,12 @@ import {
 import {chosenPreset} from '../capabilities.js';
 import {describe} from '../describe.js';
 import {modelChoicesFor} from '../model-search.js';
+import {BotMenu} from './BotMenu.js';
 import {Connectors} from './Connectors.js';
 import {Dream} from './Dream.js';
 import {Memory} from './Memory.js';
 import {ModelPicker} from './ModelPicker.js';
+import type {PopoverAnchor} from './Popover.js';
 import {Recall} from './Recall.js';
 import {SettingsSection} from './SettingsSection.js';
 
@@ -211,6 +213,17 @@ export function Settings({
    * begins — the same trick the rail uses, for the same reason.
    */
   const cancelled = useRef(false);
+  /**
+   * Which bot's menu is open, and where its `…` was when it opened.
+   *
+   * One at a time, held here rather than in the row, because the menu is drawn
+   * outside the list: a popover inside a scrolling card is clipped at its edge,
+   * which is the same reason the rail holds one open menu rather than each row
+   * holding its own.
+   */
+  const [menu, setMenu] = useState<{id: string; anchor: PopoverAnchor} | null>(
+    null,
+  );
 
   const load = async (): Promise<void> => {
     try {
@@ -291,6 +304,12 @@ export function Settings({
     } finally {
       setSaving(false);
     }
+  };
+
+  /** Where a menu is drawn from: the trigger's place right now. */
+  const anchorOf = (element: HTMLElement): PopoverAnchor => {
+    const rect = element.getBoundingClientRect();
+    return {top: rect.top, bottom: rect.bottom, left: rect.left};
   };
 
   const beginRename = (id: string, value: string): void => {
@@ -426,6 +445,15 @@ export function Settings({
    * dialog is drawing itself from the same value.
    */
   const power = loaded.settings.experienceMode === 'power';
+  /*
+   * The bot an open menu belongs to, looked up rather than held in the state: a
+   * menu left open while another window removed that bot would otherwise offer
+   * actions for a profile this list no longer has.
+   */
+  const menuBot =
+    menu === null
+      ? undefined
+      : loaded.settings.profiles.find((entry) => entry.id === menu.id);
   /*
    * Reset would be a no-op only when the box already shows the default *and*
    * that is what is stored. A box showing the default it has not saved yet is a
@@ -595,15 +623,19 @@ export function Settings({
                     </button>
                     <button
                       type="button"
-                      className="settings-agent-rename"
-                      aria-label={`Rename ${entry.name}`}
-                      title="Rename"
+                      className="settings-agent-menu"
+                      aria-haspopup="menu"
+                      aria-expanded={menu?.id === entry.id}
+                      aria-label={`Actions for ${entry.name}`}
                       disabled={saving}
-                      onClick={() => {
-                        beginRename(entry.id, entry.name);
+                      onClick={(event) => {
+                        setMenu({
+                          id: entry.id,
+                          anchor: anchorOf(event.currentTarget),
+                        });
                       }}
                     >
-                      ✎
+                      ⋯
                     </button>
                   </>
                 )}
@@ -659,6 +691,34 @@ export function Settings({
               + New bot
             </button>
           </div>
+          {/*
+            One menu, drawn outside the list and anchored to the trigger that
+            opened it. Outside because a popover inside this card would be
+            clipped at its edge, and one because two open menus is a state with
+            no meaning.
+          */}
+          {menuBot !== undefined && menu !== null && (
+            <BotMenu
+              bot={menuBot}
+              last={loaded.settings.profiles.length <= 1}
+              anchor={menu.anchor}
+              onClose={() => {
+                setMenu(null);
+              }}
+              onRename={() => {
+                setMenu(null);
+                beginRename(menuBot.id, menuBot.name);
+              }}
+              onRemove={() => {
+                setMenu(null);
+                void change(async () => {
+                  await window.marimo.call('profiles.remove', {
+                    profileId: menuBot.id,
+                  });
+                });
+              }}
+            />
+          )}
         </SettingsSection>
 
         {draft !== null && loaded.profile !== undefined && (

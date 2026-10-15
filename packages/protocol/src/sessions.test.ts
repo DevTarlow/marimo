@@ -125,6 +125,21 @@ describe('the profile schema', () => {
     // requests, and the store tells them apart by exactly this.
     expect(parsed.patch.preferences).toBe('');
   });
+
+  /*
+   * Removal is one call because it destroys more than the profile — the bot's
+   * conversations, its jobs and its memory go with it. A blank id would be a
+   * request to destroy the things belonging to no bot at all.
+   */
+  it('names the bot to remove, and will not take an empty one', () => {
+    const parsed = agentCallSchemas['profiles.remove'].parse({
+      profileId: 'agent',
+    });
+    expect(parsed.profileId).toBe('agent');
+    expect(
+      agentCallSchemas['profiles.remove'].safeParse({profileId: ''}).success,
+    ).toBe(false);
+  });
 });
 
 describe('the workspaces document', () => {

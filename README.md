@@ -27,6 +27,11 @@ want — a model of its own rather than the app's default. That is how you end u
 with a Writer that drafts into the website folder and a Researcher you send off to
 read things.
 
+The `…` beside a bot's name renames it, and removes it. Removing asks first, and
+says what goes: the bot, its conversations, the jobs it had scheduled and what it
+remembered about you. What it wrote inside your Spaces stays where it is, and so
+does the last bot — there has to be one to answer.
+
 Several of them can share one chat. The first is the lead and answers by default;
 type `@` and pick a name to put a question to somebody else. The lead can also
 hand work over by itself — ask it for a blog post and it can tell Writer to write

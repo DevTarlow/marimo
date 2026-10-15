@@ -154,6 +154,22 @@ export class FeedbackStore {
     return await this.mutate(() => emptyFeedbackFile());
   }
 
+  /**
+   * Forgets one bot's corrections, for when the bot is removed.
+   *
+   * Kept rather than cleared wholesale: the other bots' corrections are still
+   * about conversations that exist, and a removal is not a request to forget
+   * everybody's.
+   */
+  async forgetProfile(profileId: string): Promise<FeedbackFile> {
+    return await this.mutate((current) => ({
+      ...current,
+      entries: current.entries.filter(
+        (entry) => entry.profileId !== profileId,
+      ),
+    }));
+  }
+
   private async mutate(
     edit: (current: FeedbackFile) => FeedbackFile,
   ): Promise<FeedbackFile> {

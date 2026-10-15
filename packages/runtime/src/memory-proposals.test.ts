@@ -232,6 +232,35 @@ describe('the proposal store', () => {
       expect(after.reviewed['session-1']).toBeUndefined();
       expect(after.reviewed['session-2']).toBe(5);
     });
+
+    /*
+     * What a removed bot leaves behind otherwise is a suggestion nothing can
+     * show — and a refusal that would silence a *new* bot only if the ids were
+     * ever reused, which they are not.
+     */
+    it('forgets a removed bot, suggestions and refusals alike', async () => {
+      await store.record('session-1', 5, [proposal()]);
+      await store.record('session-2', 5, [
+        proposal({
+          sessionId: 'session-2',
+          profileId: 'profile-2',
+          text: 'Works in Rust.',
+        }),
+      ]);
+      await store.dismiss({profileId: 'profile-1', text: 'Has a cat.'});
+      await store.dismiss({profileId: 'profile-2', text: 'Prefers dark mode.'});
+
+      const after = await store.forgetProfile('profile-1');
+
+      expect(after.proposals.map((entry) => entry.profileId)).toEqual([
+        'profile-2',
+      ]);
+      expect(after.dismissed.map((entry) => entry.profileId)).toEqual([
+        'profile-2',
+      ]);
+      // The other bot's watermark is not this removal's to reset.
+      expect(after.reviewed['session-2']).toBe(5);
+    });
   });
 
   describe('the file', () => {

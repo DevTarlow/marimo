@@ -126,6 +126,11 @@ export {
   runReview,
   resolveAgentDataDir,
   resolveMemoryFile,
+  // Where the person's half of memory lives for one profile. Exported for the
+  // runtime, which removes that folder when the bot it belonged to is removed:
+  // the file's location is this package's fact, not a second spelling in the
+  // app.
+  resolvePersonMemoryFile,
   // Split and re-render are exported for whatever indexes memory, so that there
   // is one reader of memory.md rather than a second parser in another package.
   // The index has to agree with the store bullet for bullet, and two parsers of

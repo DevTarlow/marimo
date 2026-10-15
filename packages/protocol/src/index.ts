@@ -3170,6 +3170,13 @@ export const agentCallSchemas = {
     name: z.string().trim().min(1).optional(),
   }),
   'profiles.select': z.object({profileId: z.string().min(1)}),
+  /*
+   * Removal takes the bot's conversations, jobs and memory with it, which is why
+   * it is one call rather than a delete of the profile plus a second call per
+   * thing it owned: a client that did the first and not the rest would leave
+   * conversations nothing can answer for.
+   */
+  'profiles.remove': z.object({profileId: z.string().min(1)}),
 
   /* Preferences, including the two that decide whether hidden jobs can run. */
   'settings.get': z.object({}),
@@ -3269,6 +3276,7 @@ export interface AgentCallResults {
   'profiles.update': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.create': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.select': {profiles: AgentProfile[]; activeProfileId: string};
+  'profiles.remove': {profiles: AgentProfile[]; activeProfileId: string};
   'settings.get': {settings: PublicSettings};
   'settings.set': {settings: PublicSettings};
 }

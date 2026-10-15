@@ -1149,6 +1149,19 @@ export class AgentService {
     return created;
   }
 
+  /**
+   * Removes a bot, its conversations, its schedule and what it remembered.
+   *
+   * The runtime first and the jobs second, because that call is the one that
+   * refuses the last bot — and it refuses *before* it destroys anything. Taking
+   * a bot's schedule away and then declining to take the bot would be a change
+   * somebody did not ask for.
+   */
+  async removeProfile(profileId: string): Promise<void> {
+    await this.runtime.removeProfile(profileId);
+    await this.jobsStore.removeForProfile(profileId);
+  }
+
   async updateSettings(
     patch: Parameters<AgentRuntime['updateSettings']>[0],
   ): Promise<void> {

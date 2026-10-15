@@ -709,8 +709,17 @@ export class AgentHost {
     return await this.sessionService.adoptUnownedSessions(profileId);
   }
 
-  /** Deletes a profile's conversations. Its memory files are left alone. */
-  async deleteSessionsForProfile(profileId: string): Promise<number> {
+  /**
+   * Deletes a profile's conversations, answering which ones went.
+   *
+   * The ids rather than a count, because a caller removing a bot has more to
+   * drop that was keyed to a conversation — its discovery tree, in the runtime
+   * that owns that store — and a second scan of the index to find out what was
+   * just deleted is a race against the next write. Its memory files are left
+   * alone: the folder's half is inside a Space the user owns, and the person's
+   * half is the runtime's to decide about.
+   */
+  async deleteSessionsForProfile(profileId: string): Promise<string[]> {
     if (
       this.active &&
       (await this.sessionProfile(this.active.sessionId)) === profileId
@@ -720,7 +729,7 @@ export class AgentHost {
     const deleted =
       await this.sessionService.deleteSessionsForProfile(profileId);
     /*
-     * Told before the count is answered, so a caller that deletes a profile and
+     * Told before the ids are answered, so a caller that deletes a profile and
      * immediately searches cannot find the conversations it just removed. The
      * ids are the session service's own answer rather than a second scan of the
      * index.
@@ -728,7 +737,7 @@ export class AgentHost {
     if (deleted.length > 0) {
       await this.onSessionsDeleted?.(deleted);
     }
-    return deleted.length;
+    return deleted;
   }
 
   async createSession(

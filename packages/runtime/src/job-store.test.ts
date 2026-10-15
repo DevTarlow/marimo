@@ -285,6 +285,38 @@ describe('JobStore', () => {
     expect(await store.remove(job.id)).toBe(false);
   });
 
+  /*
+   * The other bots' schedules are not this bot's to take with it. A leftover job
+   * is not harmless either: the runner would wake on it, find no such bot and
+   * report a failure every time it came due.
+   */
+  it("removes one bot's jobs and leaves the rest alone", async () => {
+    await store.create({
+      name: 'Nightly',
+      description: '',
+      sessionId: 'session-1',
+      profileId: 'profile-1',
+    });
+    const {job: kept} = await store.create({
+      name: 'Morning',
+      description: '',
+      sessionId: 'session-2',
+      profileId: 'profile-2',
+    });
+    await store.create({
+      name: 'Weekly',
+      description: '',
+      sessionId: 'session-3',
+      profileId: 'profile-1',
+    });
+
+    expect(await store.removeForProfile('profile-1')).toBe(2);
+    expect((await store.load()).jobs.map((job) => job.id)).toEqual([kept.id]);
+
+    // And a bot with nothing scheduled is not a write.
+    expect(await store.removeForProfile('profile-9')).toBe(0);
+  });
+
   it('records how a run went, without disturbing the rest of the job', async () => {
     const {job} = await store.create({
       name: 'Nightly',

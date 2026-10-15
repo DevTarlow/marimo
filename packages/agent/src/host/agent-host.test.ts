@@ -952,7 +952,7 @@ describe('AgentHost', () => {
     await collect(host.run(beta.id, 'beta work'));
 
     const deleted = await host.deleteSessionsForProfile('profile-beta');
-    expect(deleted).toBe(1);
+    expect(deleted).toEqual([beta.id]);
     expect(await host.listSessions('profile-beta')).toEqual([]);
     expect(await host.listSessions('profile-alpha')).toHaveLength(1);
   });
@@ -975,7 +975,9 @@ describe('AgentHost', () => {
     expect(forgotten).toEqual([[one.id]]);
 
     const two = await host.createSession(undefined, 'profile-beta');
-    expect(await host.deleteSessionsForProfile('profile-beta')).toBe(1);
+    expect(await host.deleteSessionsForProfile('profile-beta')).toEqual([
+      two.id,
+    ]);
     expect(forgotten[1]).toEqual([two.id]);
   });
 

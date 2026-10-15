@@ -228,7 +228,20 @@ export interface DelegationResult {
 export interface DelegationSeam {
   resolve: (request: {
     agent: string;
+    /** The Space the model named, when it named one. */
     space?: string;
+    /**
+     * The Space the *asking conversation* is filed under.
+     *
+     * Resolved by the host rather than by the seam, because the conversation
+     * index is the host's to read and the seam would otherwise need a second way
+     * to ask which conversation this is. It is the fallback *after* the helper's
+     * own default and before the rail's current Space: a turn's file tools run in
+     * the conversation's folder, and a helper that ran in whichever Space
+     * somebody happened to be browsing would be the only part of the app where
+     * clicking the rail changes where work lands.
+     */
+    sessionSpaceId?: string;
   }) => Promise<DelegationResult | {problem: string}>;
 }
 
@@ -1649,7 +1662,11 @@ export class AgentHost {
     const host = this;
     const delegation: AgentDelegation = {
       start: async (request) => {
-        const resolved = await seam.resolve(request);
+        const filed = await this.sessionWorkspaceId(request.sessionId);
+        const resolved = await seam.resolve({
+          ...request,
+          ...(filed === undefined ? {} : {sessionSpaceId: filed}),
+        });
         if ('problem' in resolved) {
           return resolved;
         }

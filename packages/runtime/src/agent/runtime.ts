@@ -1588,6 +1588,7 @@ export class AgentRuntime {
   private async resolveDelegate(request: {
     agent: string;
     space?: string;
+    sessionSpaceId?: string;
   }): Promise<DelegationResult | {problem: string}> {
     const profiles = await this.profilesByName();
     const profile = profiles.get(request.agent.trim().toLocaleLowerCase());
@@ -1603,7 +1604,18 @@ export class AgentRuntime {
     }
 
     const file = await this.workspaceStore.load();
-    let spaceId = profile.spaceId;
+    /*
+     * The helper's folder, in the order the evidence is good: the Space the model
+     * named, else the agent's own default — "my Writer drafts into the website
+     * repo" — else the Space *this conversation* is filed under, and only then
+     * whatever the rail happens to be on.
+     *
+     * That third step is the one worth stating: a turn's own file tools run in
+     * the conversation's folder, and a helper that ran in whichever Space
+     * somebody was browsing would be the one place in the app where clicking the
+     * rail changes where work lands.
+     */
+    let spaceId = profile.spaceId ?? request.sessionSpaceId;
     if (request.space !== undefined) {
       const wanted = request.space.trim().toLocaleLowerCase();
       const named = file.workspaces.find(
@@ -1623,12 +1635,6 @@ export class AgentRuntime {
       spaceId = named.id;
     }
 
-    /*
-     * The space the helper works in. Its own when the agent is filed under one,
-     * the caller's when the model named one, and otherwise whatever the rail is
-     * on — the same two fallbacks a new conversation gets, so "where does this
-     * agent work" has one answer in the app rather than two.
-     */
     const root = workspaceRootFor(file, spaceId);
 
     const resolved = await resolveAgentConfig({

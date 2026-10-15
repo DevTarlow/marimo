@@ -158,6 +158,8 @@ export interface AgentDelegation {
   start: (request: {
     agent: string;
     space?: string;
+    /** The conversation asking, so the helper can default to its Space. */
+    sessionId: string;
   }) => Promise<AgentTools | {problem: string}>;
   /** The gates a conversation has been asked and not yet answered. */
   pendingGates: (sessionId: string) => Promise<AgentGate[]>;
@@ -294,6 +296,7 @@ async function runAgent(
   const resolved = await deps.start({
     agent: args.agent,
     ...(args.space === undefined ? {} : {space: args.space}),
+    sessionId,
   });
   if ('problem' in resolved) {
     return resolved.problem;

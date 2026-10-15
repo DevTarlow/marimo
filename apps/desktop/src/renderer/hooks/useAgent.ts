@@ -480,7 +480,7 @@ export function useAgent(): AgentController {
       setAgents(listed.profiles);
 
       if (active === undefined) {
-        setError('This install has no agent. Reopen the app to create one.');
+        setError('This install has no bot. Reopen the app to create one.');
         setReady(true);
         return;
       }

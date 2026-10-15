@@ -303,7 +303,7 @@ export function App(): React.JSX.Element {
     sessionModel !== undefined
       ? undefined
       : agentModel !== undefined
-        ? 'agent'
+        ? 'bot'
         : 'default';
 
   /*

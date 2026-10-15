@@ -17,7 +17,7 @@ import type {AgentProfile} from '@marimo/protocol';
  * empty line reads as neither. The id stays on the participant, so a caller that
  * wants to show it — a `title`, say — still can.
  */
-const GONE = 'a deleted agent';
+const GONE = 'a deleted bot';
 
 /** One member of a conversation, named. */
 export interface Participant {

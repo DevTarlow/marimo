@@ -51,7 +51,7 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
       if (id === null) {
         const created = await runtime.createSession(profileId, title);
         if (created === undefined) {
-          throw new Error(`There is no agent called "${profileId}".`);
+          throw new Error(`There is no bot called "${profileId}".`);
         }
         id = created.id;
         // Written back before the turn starts, so a run that is interrupted

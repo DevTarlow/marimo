@@ -221,7 +221,7 @@ export function Memory({
   const clearDismissed = async (): Promise<void> => {
     if (
       !window.confirm(
-        `Forget all ${String(dismissed.length)} of these? The agent will be ` +
+        `Forget all ${String(dismissed.length)} of these? The bot will be ` +
           'able to suggest them again.',
       )
     ) {
@@ -247,7 +247,7 @@ export function Memory({
       ) : (
         <>
           <p className="settings-muted">
-            What this agent remembers about you and your work. The whole file is
+            What this bot remembers about you and your work. The whole file is
             shown to it at the start of every conversation, so the smaller it is
             the less of each prompt it takes up.
           </p>
@@ -277,7 +277,7 @@ export function Memory({
               step={1024}
               value={limit}
               disabled={busy}
-              aria-label="Memory size before the agent is asked to prune"
+              aria-label="Memory size before the bot is asked to prune"
               onChange={(event) => {
                 setDraftLimit(Number(event.target.value));
               }}
@@ -313,7 +313,7 @@ export function Memory({
               max={MEMORY_REVIEW_EVENTS_MAX}
               value={usage.reviewEvents}
               disabled={busy}
-              aria-label="Unreviewed events before the agent reads a conversation back"
+              aria-label="Unreviewed events before the bot reads a conversation back"
               onChange={(event) => {
                 const reviewEvents = Number(event.target.value);
                 /*
@@ -344,7 +344,7 @@ export function Memory({
 
       <h4 className="memory-proposals-heading">What it would remember</h4>
       <p className="settings-muted">
-        After a conversation goes quiet, the agent reads it back and suggests
+        After a conversation goes quiet, the bot reads it back and suggests
         what is worth keeping. These are shown to it at the start of every
         future conversation, so it asks before writing one down.
       </p>
@@ -427,7 +427,7 @@ export function Memory({
         <>
           <h4 className="memory-proposals-heading">{dismissals.heading}</h4>
           <p className="settings-muted">
-            Facts you turned down, so the agent does not ask about them twice.
+            Facts you turned down, so the bot does not ask about them twice.
             It learns from the refusal only: a fact you decline here is still
             stored the moment you state it yourself, and this list never reaches
             the prompt.
@@ -472,7 +472,7 @@ export function Memory({
               : `Everything remembered, by when`}
           </h4>
           <p className="settings-muted">
-            Oldest first. This is what the agent is shown at the start of every
+            Oldest first. This is what the bot is shown at the start of every
             conversation; the dates are when each line was first written, and they
             are here so you can tell what has been sitting there a year.
           </p>

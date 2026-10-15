@@ -57,7 +57,7 @@ export function summarizeMemory(usage: MemoryUsage): MemorySummary {
       pressure: 'empty',
       size,
       detail:
-        'Nothing remembered for this agent yet. Facts it decides are worth keeping are added here, and the whole file is shown to it at the start of every conversation.',
+        'Nothing remembered for this bot yet. Facts it decides are worth keeping are added here, and the whole file is shown to it at the start of every conversation.',
       percent,
     };
   }
@@ -67,7 +67,7 @@ export function summarizeMemory(usage: MemoryUsage): MemorySummary {
       pressure: 'over',
       size,
       detail:
-        'Past the size you set, so the agent is being told to prune. Raise the limit or let it tidy up with prune_memory — nothing is refused until the file reaches the hard cap.',
+        'Past the size you set, so the bot is being told to prune. Raise the limit or let it tidy up with prune_memory — nothing is refused until the file reaches the hard cap.',
       percent,
     };
   }
@@ -76,7 +76,7 @@ export function summarizeMemory(usage: MemoryUsage): MemorySummary {
     pressure: 'room',
     size,
     detail:
-      'Memory is shown to the agent at the start of every conversation, so it is worth keeping short. Past this size the agent is told to prune.',
+      'Memory is shown to the bot at the start of every conversation, so it is worth keeping short. Past this size the bot is told to prune.',
     percent,
   };
 }

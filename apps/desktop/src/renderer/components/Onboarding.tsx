@@ -30,7 +30,7 @@ export function Onboarding({
       <h2>Welcome to Marimo Agent</h2>
 
       <p className="onboarding-lead">
-        The agent has nothing to think with until it is pointed at a model.
+        The bot has nothing to think with until it is pointed at a model.
       </p>
       <p className="onboarding-note">{problem}</p>
 

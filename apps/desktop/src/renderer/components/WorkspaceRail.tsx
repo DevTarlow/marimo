@@ -268,7 +268,7 @@ export function WorkspaceRail({
       >
         {groups.length === 0 && (
           <p className="rail-empty">
-            No spaces yet. Load one and every agent can work in it.
+            No spaces yet. Load one and every bot can work in it.
           </p>
         )}
 

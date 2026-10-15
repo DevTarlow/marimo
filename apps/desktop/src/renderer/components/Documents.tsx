@@ -764,7 +764,7 @@ export function Documents({
             {files !== null && files.length === 0 && (
               <li className="documents-note">
                 This Space holds no markdown files yet. New document writes the
-                first one here — and anything the agent writes lands beside it.
+                first one here — and anything the bot writes lands beside it.
               </li>
             )}
             {files !== null && files.length > 0 && visible.length === 0 && (
@@ -896,7 +896,7 @@ export function Documents({
              */
             <div className="documents-conflict" role="alert">
               <p>
-                This file changed while you had it open — the agent may have
+                This file changed while you had it open — the bot may have
                 written it. Nothing was written back, and your draft is still
                 here.
               </p>

@@ -252,7 +252,7 @@ function Message({
           {message.compacted === 1
             ? 'One earlier message was replaced by this summary.'
             : `${String(message.compacted)} earlier messages were replaced by this summary.`}{' '}
-          They are still in this conversation&rsquo;s file — the agent is simply
+          They are still in this conversation&rsquo;s file — the bot is simply
           not sent them any more.
         </p>
         <div className="bubble bubble-answer">
@@ -339,7 +339,7 @@ function Message({
                     type="text"
                     value={correction}
                     maxLength={400}
-                    placeholder="Optional — the agent will read this next time"
+                    placeholder="Optional — the bot will read this next time"
                     onChange={(event) => {
                       setCorrection(event.target.value);
                     }}

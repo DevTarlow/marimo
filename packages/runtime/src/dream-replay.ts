@@ -245,7 +245,7 @@ export function renderSweep(sweep: DreamSweep): string {
     lines.push('');
     lines.push(
       'Nothing to replay. Turn Dream-RSI on in Settings and run a few turns ' +
-        'first — the replay reads what the agent actually did, and there is no ' +
+        'first — the replay reads what the bot actually did, and there is no ' +
         'way to simulate a turn that was never recorded.',
     );
     return lines.join('\n');

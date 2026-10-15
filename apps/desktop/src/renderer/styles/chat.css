@@ -1489,6 +1489,45 @@
   border-style: dashed;
 }
 
+/*
+ * The pencil beside a bot's name, and the field it opens.
+ *
+ * Kept quiet and unboxed: the row's subject is the name and the two chips beside
+ * it, so a control that merely renames the row must not read as the point of it.
+ * The input borrows the pill's own shape so the row does not change height while
+ * somebody is typing in it.
+ */
+.settings-agent-rename {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7em;
+  height: 1.7em;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  line-height: 1;
+}
+
+.settings-agent-rename:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.settings-agent-input {
+  min-width: 0;
+  max-width: 24ch;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
 .settings-field {
   display: flex;
   flex-direction: column;

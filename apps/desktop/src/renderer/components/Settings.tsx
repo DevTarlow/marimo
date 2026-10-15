@@ -30,11 +30,19 @@
  * group says what is at stake. That list is the power screen's; the simple screen
  * offers the same grants as three cards, which write the same profile field.
  *
+ * **A bot is what the screen calls an agent.** The word on screen changed; the
+ * code did not, because `agent` is a package name, an IPC namespace and a field
+ * on disk, and renaming those means migrating data rather than changing copy. So
+ * `profiles.*`, the `AgentProfile` type and `agentIds` all still say agent while
+ * every sentence a user reads says bot. The split is deliberate rather than
+ * half-finished, so that the next reader does not "fix" one side of it — the
+ * same note `WorkspaceRail` carries for spaces.
+ *
  * Saving is immediate per switch rather than behind a Save button. Each toggle
  * is one independent fact, and a form that can be abandoned leaves the screen
  * disagreeing with the file.
  */
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 
 import type {
   AgentModel,
@@ -185,6 +193,24 @@ export function Settings({
    * list — every section folded — is never confused with not having looked yet.
    */
   const [openSections, setOpenSections] = useState<string[] | null>(null);
+  /**
+   * Which bot's name is being edited in the list, and the value so far.
+   *
+   * The list is where a bot is picked, so the list is where it is named. The
+   * Name field further down edits whichever bot is *active*, which is no help
+   * for the one somebody is looking at but has not selected.
+   */
+  const [renaming, setRenaming] = useState<{id: string; value: string} | null>(
+    null,
+  );
+  /*
+   * Escape has to beat the blur that follows it. Unmounting the input fires a
+   * blur whose handler still closes over the old draft, so a cancelled edit
+   * would otherwise be committed on the way out. Set before the state change,
+   * consumed by whichever handler runs first, and cleared when the next edit
+   * begins — the same trick the rail uses, for the same reason.
+   */
+  const cancelled = useRef(false);
 
   const load = async (): Promise<void> => {
     try {
@@ -265,6 +291,41 @@ export function Settings({
     } finally {
       setSaving(false);
     }
+  };
+
+  const beginRename = (id: string, value: string): void => {
+    cancelled.current = false;
+    setRenaming({id, value});
+  };
+
+  /**
+   * Commits the name in the list, or puts it back.
+   *
+   * A blank name is a refusal rather than a write: a bot nobody can pick out of
+   * a list is one the list cannot offer, and the field is the only place that
+   * says so. An unchanged name writes nothing, so a click away from a field
+   * somebody never typed in is not a round trip.
+   */
+  const commitRename = (): void => {
+    const edit = renaming;
+    if (edit === null || cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
+    setRenaming(null);
+    const value = edit.value.trim();
+    const current = loaded?.settings.profiles.find(
+      (entry) => entry.id === edit.id,
+    );
+    if (current === undefined || value.length === 0 || value === current.name) {
+      return;
+    }
+    void change(async () => {
+      await window.marimo.call('profiles.update', {
+        profileId: edit.id,
+        patch: {name: value},
+      });
+    });
   };
 
   /**
@@ -454,18 +515,18 @@ export function Settings({
               {EXPERIENCE_LABELS.power} mode
               <em className="settings-why">
                 {power
-                  ? 'Everything is on this page: which service answers, where it is reached, which of its models, and every single thing the agent is allowed to do. Turn it off for the everyday settings.'
-                  : 'The everyday settings, with the tuning left out. Turn this on to write an identity for the agent, to tune how it answers, and to see every ability as its own switch.'}
+                  ? 'Everything is on this page: which service answers, where it is reached, which of its models, and every single thing the bot is allowed to do. Turn it off for the everyday settings.'
+                  : 'The everyday settings, with the tuning left out. Turn this on to write an identity for the bot, to tune how it answers, and to see every ability as its own switch.'}
               </em>
             </span>
           </label>
         </div>
 
-        <SettingsSection title="Your agents" opened={opened} onToggle={fold}>
+        <SettingsSection title="Your bots" opened={opened} onToggle={fold}>
           <p className="settings-muted">
-            Each agent has its own identity, its own abilities, its own model
-            and its own conversations. Making a second one is how you keep two
-            jobs from sharing one memory.
+            Each bot has its own identity, its own abilities, its own model and
+            its own conversations. Making a second one is how you keep two jobs
+            from sharing one memory.
           </p>
           {/*
             Once for the list rather than once per agent: with no spaces there is
@@ -482,25 +543,70 @@ export function Settings({
           <div className="settings-agents">
             {loaded.settings.profiles.map((entry) => (
               <div className="settings-agent-row" key={entry.id}>
-                <button
-                  type="button"
-                  className="settings-agent"
-                  aria-current={
-                    entry.id === loaded.settings.activeProfileId
-                      ? 'true'
-                      : undefined
-                  }
-                  disabled={saving}
-                  onClick={() => {
-                    void change(async () => {
-                      await window.marimo.call('profiles.select', {
-                        profileId: entry.id,
-                      });
-                    });
-                  }}
-                >
-                  {entry.name}
-                </button>
+                {renaming?.id === entry.id ? (
+                  /*
+                   * The name gives way to a field in the same row rather than
+                   * opening a dialog: what is being renamed is one pill among
+                   * several, and a modal for it would hide the list it belongs
+                   * to.
+                   */
+                  <input
+                    className="settings-agent-input"
+                    value={renaming.value}
+                    aria-label={`Name for ${entry.name}`}
+                    autoFocus
+                    spellCheck={false}
+                    disabled={saving}
+                    onChange={(event) => {
+                      setRenaming({...renaming, value: event.target.value});
+                    }}
+                    onBlur={commitRename}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        commitRename();
+                      } else if (event.key === 'Escape') {
+                        event.preventDefault();
+                        cancelled.current = true;
+                        setRenaming(null);
+                      }
+                    }}
+                  />
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="settings-agent"
+                      aria-current={
+                        entry.id === loaded.settings.activeProfileId
+                          ? 'true'
+                          : undefined
+                      }
+                      disabled={saving}
+                      onClick={() => {
+                        void change(async () => {
+                          await window.marimo.call('profiles.select', {
+                            profileId: entry.id,
+                          });
+                        });
+                      }}
+                    >
+                      {entry.name}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-agent-rename"
+                      aria-label={`Rename ${entry.name}`}
+                      title="Rename"
+                      disabled={saving}
+                      onClick={() => {
+                        beginRename(entry.id, entry.name);
+                      }}
+                    >
+                      ✎
+                    </button>
+                  </>
+                )}
                 {/*
                   The agent's own model, beside its name rather than in a card of
                   its own: it is a fact about that agent, and a second list of
@@ -550,7 +656,7 @@ export function Settings({
                 });
               }}
             >
-              + New agent
+              + New bot
             </button>
           </div>
         </SettingsSection>
@@ -605,7 +711,7 @@ export function Settings({
               <div className="settings-field">
                 <span>Identity</span>
                 <em className="settings-why">
-                  Who this agent is and how it should behave. Written as an
+                  Who this bot is and how it should behave. Written as an
                   instruction to it, and sent at the start of every
                   conversation.
                 </em>
@@ -732,7 +838,7 @@ export function Settings({
         */}
         {power ? (
           <SettingsSection
-            title={`What ${loaded.profile?.name ?? 'this agent'} can do`}
+            title={`What ${loaded.profile?.name ?? 'this bot'} can do`}
             opened={opened}
             onToggle={fold}
           >
@@ -772,7 +878,7 @@ export function Settings({
             {connectors.length === 0 ? (
               <p className="settings-muted">
                 No connectors are set up on this machine, so there is nothing
-                here to give an agent. The Connectors card below is where one is
+                here to give a bot. The Connectors card below is where one is
                 added, and it appears here as soon as it is saved.
               </p>
             ) : (
@@ -780,8 +886,8 @@ export function Settings({
                 <h4 className="settings-group">Connectors</h4>
                 <p className="settings-why">
                   {connectorsUnchosen
-                    ? 'This agent has never had connectors chosen for it, so it may use every connector that is switched on. Unchecking one is what narrows it.'
-                    : 'The connectors this agent may use. One that is not ticked is not offered to the model at all.'}
+                    ? 'This bot has never had connectors chosen for it, so it may use every connector that is switched on. Unchecking one is what narrows it.'
+                    : 'The connectors this bot may use. One that is not ticked is not offered to the model at all.'}
                 </p>
                 {connectors.map((connector) => (
                   <ConnectorRow
@@ -797,7 +903,7 @@ export function Settings({
           </SettingsSection>
         ) : (
           <SettingsSection
-            title={`What ${loaded.profile?.name ?? 'this agent'} can do`}
+            title={`What ${loaded.profile?.name ?? 'this bot'} can do`}
             opened={opened}
             onToggle={fold}
           >
@@ -1502,7 +1608,7 @@ function ProviderSection({
           {keyStored
             ? `A key for ${descriptor.label} is stored. It is kept on this machine and never sent back to this window.`
             : descriptor.requiresApiKey
-              ? `No ${descriptor.label} key yet — the agent cannot answer, and its models cannot be fetched, until there is one.`
+              ? `No ${descriptor.label} key yet — the bot cannot answer, and its models cannot be fetched, until there is one.`
               : `${descriptor.label} needs no key. Anything pasted here is sent as one, which matters only if the server asks for it.`}
         </p>
         {/*
@@ -1823,8 +1929,8 @@ function ConnectorRow({
             ? connector.blurb
             : `${connector.blurb} ${
                 on
-                  ? 'Switched off in the Connectors card, so it is not connected — this agent keeps its grant for when it is switched back on.'
-                  : 'Switched off in the Connectors card, so no agent can use it. Turn it on there and it can be given to this one.'
+                  ? 'Switched off in the Connectors card, so it is not connected — this bot keeps its grant for when it is switched back on.'
+                  : 'Switched off in the Connectors card, so no bot can use it. Turn it on there and it can be given to this one.'
               }`}
         </em>
       </span>
@@ -1900,10 +2006,10 @@ function CapabilityChoices({
       {chosen === undefined && (
         <p className="settings-muted">
           {granted.size === 0
-            ? 'This agent is not allowed to do anything at all yet — not even ' +
+            ? 'This bot is not allowed to do anything at all yet — not even ' +
               'read a file. Choosing one of the three above is how you change ' +
               'that.'
-            : 'This agent has a set of abilities put together in Power user ' +
+            : 'This bot has a set of abilities put together in Power user ' +
               'mode. Choosing one of the three above replaces it with that one.'}
         </p>
       )}

@@ -964,7 +964,7 @@ export class AgentRuntime {
     const documents = await this.documentsFor(spaceId);
     const profile = await this.profileFor(profileId);
     if (profile === undefined) {
-      throw new Error(`There is no agent called "${profileId}".`);
+      throw new Error(`There is no bot called "${profileId}".`);
     }
     /*
      * The index rather than `conversationFor`, which would read every event of
@@ -1286,7 +1286,7 @@ export class AgentRuntime {
     const settings = await this.settingsStore.load();
     const profile = await this.profileFor(profileId);
     if (!profile) {
-      return {ok: false, problem: `There is no agent called "${profileId}".`};
+      return {ok: false, problem: `There is no bot called "${profileId}".`};
     }
 
     /*
@@ -1596,10 +1596,10 @@ export class AgentRuntime {
       const known = await this.existingAgentNames();
       return {
         problem:
-          `There is no agent called "${request.agent.trim()}" on this computer. ` +
+          `There is no bot called "${request.agent.trim()}" on this computer. ` +
           (known.length > 0
             ? `The ones that exist are ${listOf(known)}.`
-            : 'There are no other agents yet — they are created in Settings.'),
+            : 'There are no other bots yet — they are created in Settings.'),
       };
     }
 

@@ -440,9 +440,9 @@ export function Composer({
             value={text}
             placeholder={
               disabled
-                ? 'Add an agent to start chatting.'
+                ? 'Add a bot to start chatting.'
                 : mentionable
-                  ? 'Ask Marimo anything… type @ to address an agent'
+                  ? 'Ask Marimo anything… type @ to address a bot'
                   : 'Ask Marimo anything…'
             }
             disabled={disabled}
@@ -582,7 +582,7 @@ export function Composer({
                 {...(inherited === undefined
                   ? {
                       defaultChoice: {
-                        label: 'Follow the agent',
+                        label: 'Follow the bot',
                         onUse: () => {
                           void onSelectModel(null);
                         },
@@ -644,7 +644,7 @@ export function Composer({
       {mention !== null && matches.length > 0 && (
         <Popover
           anchor={mention.anchor}
-          label="Address an agent"
+          label="Address a bot"
           onClose={() => {
             setMention(null);
           }}

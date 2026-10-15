@@ -330,7 +330,7 @@ const TOOL_BLURBS: Record<string, string> = {
     'until you ask for it.',
   web_search: 'Search the web and read the results. No account or key needed.',
   ask_agent:
-    'Hand a piece of work to one of your other agents by name, and get its ' +
+    'Hand a piece of work to one of your other bots by name, and get its ' +
     'answer back. It cannot see this chat, so the task has to stand alone.',
   recall:
     'Search your space and its own notes by what you mean, not by the exact words.',

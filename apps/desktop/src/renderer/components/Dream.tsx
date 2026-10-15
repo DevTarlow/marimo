@@ -99,7 +99,7 @@ export function Dream({
   return (
     <SettingsSection title="Dream-RSI" opened={opened} onToggle={onToggle}>
       <p className="settings-muted">
-        Records what the agent tried on each turn — which tools it called, with
+        Records what the bot tried on each turn — which tools it called, with
         what arguments, and how each call turned out — as a tree of decisions.
         The trees stay on this machine, and a command replays them to show what
         different search settings would have done, without asking the model
@@ -115,7 +115,7 @@ export function Dream({
             void set({enabled: event.target.checked});
           }}
         />
-        Record the agent's search trees
+        Record the bot's search trees
       </label>
 
       {enabled && (
@@ -131,7 +131,7 @@ export function Dream({
             <span>
               Exploration weight
               <em>
-                How much an untried tool is worth. 0 means the agent only repeats
+                How much an untried tool is worth. 0 means the bot only repeats
                 what has already worked; higher means it keeps trying new things.
                 The default of {DEFAULT_DREAM_EXPLORATION_WEIGHT} leaves the
                 first choice to the model.

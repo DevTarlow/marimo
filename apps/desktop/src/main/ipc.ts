@@ -98,7 +98,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     const service = dependencies.agent();
     if (service === undefined) {
       throw new Error(
-        'The agent did not start. Check the app log, then reopen Marimo Agent.',
+        'Marimo Agent did not start. Check the app log, then reopen it.',
       );
     }
     return service;
@@ -114,7 +114,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
   async function publicSettings(): Promise<PublicSettings> {
     const service = dependencies.agent();
     if (service === undefined) {
-      throw new Error('The agent is not running.');
+      throw new Error('Marimo Agent is not running.');
     }
     const settings = await service.settings();
     const profiles = await service.profiles();

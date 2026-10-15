@@ -1170,7 +1170,7 @@ export class AgentService {
       spaceId,
     );
     if (session === undefined) {
-      throw new Error(`There is no agent called "${profileId}".`);
+      throw new Error(`There is no bot called "${profileId}".`);
     }
     return session;
   }

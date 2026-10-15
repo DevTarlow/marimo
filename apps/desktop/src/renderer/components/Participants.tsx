@@ -56,7 +56,7 @@ export function Participants({
         className="button button-quiet button-small"
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
-        title="Agents in this chat"
+        title="Bots in this chat"
         onClick={() => {
           const rect = trigger.current?.getBoundingClientRect();
           setAnchor(
@@ -66,13 +66,13 @@ export function Participants({
           );
         }}
       >
-        + Agent
+        + Bot
       </button>
 
       {anchor !== null && (
         <Popover
           anchor={anchor}
-          label="Agents in this chat"
+          label="Bots in this chat"
           onClose={() => {
             setAnchor(null);
           }}
@@ -93,7 +93,7 @@ export function Participants({
           ))}
 
           <div className="popover-sep" />
-          <span className="popover-label">Add an agent</span>
+          <span className="popover-label">Add a bot</span>
           {others.map((agent) => (
             <PopoverItem
               key={agent.id}

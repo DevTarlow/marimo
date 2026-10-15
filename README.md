@@ -16,12 +16,12 @@ the conversation kept.
 Load a folder and it becomes a Space. A Space is a folder with everything that
 belongs to it: the chats you start in it, the documents in it — the markdown files
 it already holds, listed in a drawer beside the chat and editable in the window —
-and the agent you keep for that work. There is no import and no second copy, which
-is the point: a file the agent writes with its own tools is in that list, and the
-paragraph you type is what the agent reads next. It cannot see anything outside
+and the bot you keep for that work. There is no import and no second copy, which
+is the point: a file the bot writes with its own tools is in that list, and the
+paragraph you type is what the bot reads next. It cannot see anything outside
 the Space.
 
-You are not limited to one agent. Settings has **+ New agent**, and a new one gets
+You are not limited to one bot. Settings has **+ New bot**, and a new one gets
 a name, an identity you write, its own tools, the Spaces it works in, and — if you
 want — a model of its own rather than the app's default. That is how you end up
 with a Writer that drafts into the website folder and a Researcher you send off to
@@ -43,7 +43,7 @@ the rules of a particular project stay with that project.
 
 If an answer is wrong, say so: there is a small "Not quite" under every reply
 where you can add one line about what was right instead. It is not written into
-memory directly — the next time the agent reads a conversation back it proposes
+memory directly — the next time the bot reads a conversation back it proposes
 that fact, and you decide. Settings shows you everything it remembers and when
 each line was written, so you can see what has been sitting there a while.
 
@@ -59,7 +59,7 @@ Nothing about that is sent anywhere and it is off by default, because it is a
 record of your work. The point of it is the command in Settings — it replays your
 own recorded turns under different search settings, without calling a model at
 all, and shows what each setting would have hidden. It tells you what it would
-have *withheld*, not what would have happened next: the agent picks each step
+have *withheld*, not what would have happened next: the bot picks each step
 from the result of the last one, so a different setting is a different
 conversation.
 
@@ -100,7 +100,7 @@ above the chat lists and opens.
 
 Next, choose how much it may do. There are three choices in plain words: "Just
 chat", "Help around my computer", and "Do things for me". You can change this at
-any time, and the same screen is where a second agent is made.
+any time, and the same screen is where a second bot is made.
 
 Anything that changes something on your machine, such as writing a file or
 running a command, shows you what it wants to do and waits for your approval.
@@ -119,35 +119,35 @@ match is, and says when a file has changed since it was indexed.
 
 The **Documents** button above the chat opens a column beside it: the Space's
 files listed at the top, the one you pick underneath, and what you type saved as
-you go. An agent writing to the same file at the same time does not cost either
+you go. A bot writing to the same file at the same time does not cost either
 of you your work. If the file moved since you opened it, the save is refused,
 your draft stays on screen, and you choose whether to reload their version or
 write yours over it.
 
 The example worth walking through is the blog post. Say you have a Writer whose
-Space is the website folder. You ask the lead agent for a post about last week's
+Space is the website folder. You ask the lead bot for a post about last week's
 outage and tell it to hand the writing over. Writer's name goes up over what it
 says, and its file writes show up under it as its own work rather than as the
 lead's. When it wants to save the draft it asks you, in this chat, under the turn
 you are reading. When it finishes, the post is in the folder — and the Documents
-drawer is showing the same file the agent just wrote.
+drawer is showing the same file the bot just wrote.
 
 The moss ball floats above other windows. You can drag it, ask it something from
 the bar underneath, and change how long its answers are or whether it stays on
 top in Settings.
 
-There are two versions of the settings screen. Simple has the agent's name and one
+There are two versions of the settings screen. Simple has the bot's name and one
 choice about what it may do. Power user shows everything, including the
 temperature and every tool as its own switch. Which service answers is on both,
 because an app with no model of its own has to be fixable from the screen a first
 run lands on. Connecting a tool from somewhere else is on both screens too: a
 capability you have should not be behind a switch you have not turned on yet.
-Deciding which of those tools each agent may use is in power, because that is one
-switch per agent per connector. One switch moves between the two screens, and
+Deciding which of those tools each bot may use is in power, because that is one
+switch per bot per connector. One switch moves between the two screens, and
 neither is a different app.
 
 When a conversation gets long, you can compact the older half into a summary from
-the `+` menu. The messages stay in the conversation file; the agent simply stops
+the `+` menu. The messages stay in the conversation file; the bot simply stops
 being sent them.
 
 ## Your files and privacy
@@ -166,7 +166,7 @@ can move it with the `MARIMO_USER_DATA_DIR` environment variable, and you can
 delete it to start over — the service you chose is asked for its key again the
 next time you open the app, which is also what makes this folder safe to hand to
 somebody else once the key files are gone. If you turned the recording on, that folder also holds one file per
-conversation of what the agent tried; a conversation's file is moved aside when
+conversation of what the bot tried; a conversation's file is moved aside when
 you delete the conversation, so the record does not outlive the chat it is about.
 A Space's documents are not in there at all: those are your own files, in your own
 folders, and the app reads and writes them where they are.

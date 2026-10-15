@@ -208,7 +208,7 @@ export function Recall({
                 void set({workspace: event.target.checked});
               }}
             />
-            Index the space this agent works in
+            Index the space this bot works in
           </label>
           <label className="settings-check">
             <input
@@ -333,8 +333,8 @@ export function Recall({
           </p>
           {!granted && (
             <p className="settings-muted">
-              The agent also has to be allowed to use it. Tick recall under
-              “What this agent can do”; a tool it has not been granted is not
+              The bot also has to be allowed to use it. Tick recall under
+              “What this bot can do”; a tool it has not been granted is not
               offered to it.
             </p>
           )}

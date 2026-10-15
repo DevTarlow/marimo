@@ -83,7 +83,7 @@ export interface ProfileFile extends ProfileSnapshot {
 export class LastProfileError extends Error {
   constructor() {
     super(
-      'The last agent profile cannot be deleted. Create another one first.',
+      'The last bot cannot be deleted. Create another one first.',
     );
     this.name = 'LastProfileError';
   }
@@ -91,7 +91,7 @@ export class LastProfileError extends Error {
 
 export class UnknownProfileError extends Error {
   constructor(profileId: string) {
-    super(`Unknown agent profile: ${profileId}`);
+    super(`Unknown bot: ${profileId}`);
     this.name = 'UnknownProfileError';
   }
 }
@@ -163,7 +163,7 @@ export class ProfileStore {
      * the worse one: it looks exactly like having lost them.
      */
     const read = await readVersionedDocument(this.options.file, {
-      label: 'The agents file',
+      label: 'The bots file',
     });
     if (read.state === 'too-new') {
       /*
@@ -172,7 +172,7 @@ export class ProfileStore {
        * goes through `assertWritable` below and refuses.
        */
       throw new DocumentTooNewError(
-        'The agents file',
+        'The bots file',
         read.found,
         read.supported,
       );
@@ -390,7 +390,7 @@ export class ProfileStore {
      * exists for: a lenient read plus a write is how a user's data disappears,
      * and "the read was lenient" is precisely what a newer file causes.
      */
-    await assertWritable(this.options.file, {label: 'The agents file'});
+    await assertWritable(this.options.file, {label: 'The bots file'});
     await mkdir(dirname(this.options.file), {recursive: true});
     const target = `${this.options.file}.${randomUUID()}.tmp`;
     await writeFile(

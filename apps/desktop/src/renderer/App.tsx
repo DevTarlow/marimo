@@ -24,12 +24,14 @@ import type {
 
 import {Composer} from './components/Composer.js';
 import {Onboarding} from './components/Onboarding.js';
+import {Participants} from './components/Participants.js';
 import {RecallIntro} from './components/RecallIntro.js';
 import {Search} from './components/Search.js';
 import {Settings} from './components/Settings.js';
 import {Transcript} from './components/Transcript.js';
 import {WorkspaceRail} from './components/WorkspaceRail.js';
 import {useAgent} from './hooks/useAgent.js';
+import {sessionMembers} from './participants.js';
 import {recallOfferOnRead} from './recall-offer.js';
 
 import './styles/chat.css';
@@ -168,6 +170,30 @@ export function App(): React.JSX.Element {
 
   const busy = agent.busy;
   const disabled = agent.profile === undefined;
+
+  /*
+   * Who is in the open conversation, and which of them leads it.
+   *
+   * `agentIds` absent is a chat with one agent — the one that owns it — which is
+   * every conversation written before groups existed. The lead is the first
+   * member: the voice the conversation's own bubbles are in, the agent that
+   * answers a message nobody addressed, and the one whose answers need no label.
+   */
+  const openSession = agent.sessions.find(
+    (entry) => entry.id === agent.sessionId,
+  );
+  const members = sessionMembers({
+    agentIds: openSession?.agentIds,
+    ownerId: agent.profile?.id,
+    agents: agent.agents,
+  });
+  const leadId = members[0]?.id;
+  /*
+   * Who a message may be addressed to: the members the roster still holds. An
+   * `@` naming a deleted agent is one that could only be refused, and a list of
+   * one is not a choice — with either, the composer draws no picker at all.
+   */
+  const mentionable = members.filter((member) => member.known);
 
   /*
    * Which model will answer, and where that choice lives.
@@ -375,7 +401,15 @@ export function App(): React.JSX.Element {
           <img className="head-mark" src="./marimo-logo.png" alt="" />
           <div className="head-who">
             <h1 className="head-name">
-              {agent.profile?.name ?? 'Marimo Agent'}
+              {/*
+                The conversation's own name: one agent, or the group's members
+                with the lead first. Read from the members rather than from the
+                active agent, because the two stop agreeing the moment a chat has
+                a second one in it.
+              */}
+              {members.length > 0
+                ? members.map((member) => member.name).join(', ')
+                : 'Marimo Agent'}
             </h1>
             {info !== null && (
               <p className="head-sub">
@@ -394,6 +428,16 @@ export function App(): React.JSX.Element {
               </p>
             )}
           </div>
+          <Participants
+            members={members}
+            agents={agent.agents}
+            onAdd={(agentIds) => {
+              const sessionId = agent.sessionId;
+              if (sessionId !== null) {
+                void agent.setParticipants(sessionId, agentIds);
+              }
+            }}
+          />
           <button
             type="button"
             className="button button-quiet button-small"
@@ -501,6 +545,9 @@ export function App(): React.JSX.Element {
             messages={agent.messages}
             outbox={agent.outbox}
             live={agent.live}
+            delegations={agent.delegations}
+            agents={agent.agents}
+            leadId={leadId}
             pending={agent.pending}
             onDecide={(callId, confirmed) => {
               void agent.decide(callId, confirmed);
@@ -543,6 +590,7 @@ export function App(): React.JSX.Element {
             return {files, skipped};
           }}
           commands={commands}
+          participants={mentionable}
           onRunCommand={async (id) => {
             const profile = agent.profile;
             const sessionId = agent.sessionId;
@@ -566,7 +614,9 @@ export function App(): React.JSX.Element {
               }
             }
           }}
-          onSend={async (text) => await agent.send(text)}
+          onSend={async (text, agentId) =>
+            await agent.send(text, 'window', agentId)
+          }
           onStop={() => {
             void agent.stop();
           }}

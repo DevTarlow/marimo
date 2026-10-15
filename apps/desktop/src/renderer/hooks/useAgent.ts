@@ -60,17 +60,78 @@ export interface LiveTurn {
   running: boolean;
 }
 
+/**
+ * A helper agent's work, while it happens.
+ *
+ * Keyed by the parent's tool call, because that is what the window draws it in
+ * place of: the turn is suspended inside `ask_agent`, so a thread *is* that call,
+ * opened.
+ *
+ * The helper's own tool calls arrive on the same stream as the parent's — there
+ * is one turn running — and are filed here rather than left in the turn's list.
+ * A call that runs while a helper holds the turn belongs inside the helper's
+ * group; left at the top level it would read as the parent's own work, which is
+ * exactly what a group chat must not do.
+ */
+export interface Delegation {
+  /**
+   * The helper, as the events named it.
+   *
+   * The events' own record, kept whole: `agentId` is who it is and `name` is
+   * what to draw, and the two are held together because a rename between the
+   * event and the render is not the window's to reconcile.
+   */
+  agentId: string;
+  name: string;
+  task: string;
+  text: string;
+  /**
+   * When the window saw it start.
+   *
+   * Only the fallback for a finish that arrives with no duration to show; the
+   * engine's own `ms` is the measurement, because it is the process that timed
+   * the work.
+   */
+  startedAt: number;
+  /** The helper's calls, in the order they started. */
+  toolCalls: LiveToolCall[];
+  /** Set by `delegate.finished`; absent while the helper is still working. */
+  done?: boolean;
+  /** Whether it worked — absent until `done`. */
+  ok?: boolean;
+  /** How long the engine measured, in milliseconds. */
+  ms?: number;
+  error?: string;
+}
+
 export interface AgentController {
   ready: boolean;
   /** Why the window has nothing to show, when it has nothing to show. */
   error: string | null;
   profile: AgentProfile | undefined;
+  /**
+   * Every agent in the install, as `profiles.list` answered.
+   *
+   * The whole roster rather than the active one, because a window that can name
+   * an `agentId` — a delegated message, a conversation's members — has to be able
+   * to turn it into a name and an initial, and an id it cannot find has to be
+   * drawn as something honest.
+   */
+  agents: AgentProfile[];
   sessions: SessionSummary[];
   sessionId: string | null;
   messages: TranscriptMessage[];
   /** Gates the open conversation is waiting on, stored or live. */
   pending: PendingGate[];
   live: LiveTurn | null;
+  /**
+   * Work the lead has handed to another agent, by the parent's tool call id.
+   *
+   * Emptied when the turn ends, however it ends. A thread that kept spinning
+   * after its turn had failed or been stopped would be the window insisting on
+   * work nothing is doing any more.
+   */
+  delegations: Record<string, Delegation>;
   /**
    * The user's own words, sent but not yet read back from the conversation.
    *
@@ -89,8 +150,17 @@ export interface AgentController {
    * The answer is what lets the composer keep what was typed: a refusal — a
    * turn already running, an unknown conversation — is not a failure the user
    * should have to retype a prompt to recover from.
+   *
+   * `agentId` is the member the user addressed with `@`, when they addressed
+   * one. The engine refuses an agent this conversation does not hold, so it is
+   * passed through rather than checked here: who is a participant is a fact about
+   * the stored conversation, and the window's copy of it is a copy.
    */
-  send: (text: string, origin?: 'window' | 'pet') => Promise<boolean>;
+  send: (
+    text: string,
+    origin?: 'window' | 'pet',
+    agentId?: string,
+  ) => Promise<boolean>;
   decide: (callId: string, confirmed: boolean) => Promise<void>;
   stop: () => Promise<void>;
   /**
@@ -173,6 +243,14 @@ export interface AgentController {
     sessionId: string,
     model: AgentModel | null,
   ) => Promise<void>;
+  /**
+   * Names the agents in a conversation, lead first.
+   *
+   * A group is something a chat grows into, so this is not a field of creating
+   * one: the same call adds the second agent and puts the list back the way it
+   * was. An empty list means "just the agent that owns it".
+   */
+  setParticipants: (sessionId: string, agentIds: string[]) => Promise<void>;
   /** Deletes a conversation, and lands somewhere sensible if it was open. */
   removeSession: (sessionId: string) => Promise<void>;
 }
@@ -181,11 +259,13 @@ export function useAgent(): AgentController {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<AgentProfile | undefined>();
+  const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [storedPending, setStoredPending] = useState<PendingGate[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
+  const [delegations, setDelegations] = useState<Record<string, Delegation>>({});
   const [outbox, setOutbox] = useState<string | null>(null);
   const [openSettings, setOpenSettings] = useState(0);
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
@@ -226,6 +306,17 @@ export function useAgent(): AgentController {
   const profileRef = useRef<AgentProfile | undefined>(undefined);
   profileRef.current = profile;
 
+  /**
+   * The delegation the turn is currently inside, if any.
+   *
+   * A ref rather than a lookup in the state above, because the tool-call cases
+   * need it synchronously: a helper's call can arrive in the same batch as the
+   * `delegate.started` that opened it, and state read from a closure would still
+   * be a render behind. There is at most one, because the turn that started it is
+   * suspended until it finishes.
+   */
+  const helperAtWork = useRef<string | null>(null);
+
   const loadTranscript = useCallback(
     async (profileId: string, id: string): Promise<void> => {
       const result = await window.marimo.call('sessions.get', {
@@ -254,6 +345,8 @@ export function useAgent(): AgentController {
     async (id: string): Promise<void> => {
       setSessionId(id);
       setLive(null);
+      setDelegations({});
+      helperAtWork.current = null;
       setStoredPending([]);
       setMessages([]);
       setOutbox(null);
@@ -382,6 +475,9 @@ export function useAgent(): AgentController {
           (entry) => entry.id === listed.activeProfileId,
         ) ?? listed.profiles[0];
       setProfile(active);
+      // The roster, not just the active agent: a group chat is drawn with names
+      // this window has to look up by id, including agents that are not talking.
+      setAgents(listed.profiles);
 
       if (active === undefined) {
         setError('This install has no agent. Reopen the app to create one.');
@@ -512,6 +608,31 @@ export function useAgent(): AgentController {
 
         case 'tool.started':
           if (forUs) {
+            /*
+             * A call that starts while a helper holds the turn is the helper's,
+             * not the lead's: the lead is suspended inside `ask_agent` and cannot
+             * be calling anything. Filed under the thread so it is drawn inside
+             * it, where the work it belongs to is.
+             */
+            if (helperAtWork.current !== null) {
+              const helper = helperAtWork.current;
+              setDelegations((current) => {
+                const work = current[helper];
+                return work === undefined
+                  ? current
+                  : {
+                      ...current,
+                      [helper]: {
+                        ...work,
+                        toolCalls: [
+                          ...work.toolCalls,
+                          {callId: event.callId, tool: event.tool, args: event.args},
+                        ],
+                      },
+                    };
+              });
+              return;
+            }
             setLive((turn) =>
               turn === null
                 ? turn
@@ -528,6 +649,26 @@ export function useAgent(): AgentController {
 
         case 'tool.finished':
           if (forUs) {
+            if (helperAtWork.current !== null) {
+              const helper = helperAtWork.current;
+              setDelegations((current) => {
+                const work = current[helper];
+                return work === undefined
+                  ? current
+                  : {
+                      ...current,
+                      [helper]: {
+                        ...work,
+                        toolCalls: work.toolCalls.map((call) =>
+                          call.callId === event.callId
+                            ? {...call, ok: event.ok, result: event.result}
+                            : call,
+                        ),
+                      },
+                    };
+              });
+              return;
+            }
             setLive((turn) =>
               turn === null
                 ? turn
@@ -540,6 +681,66 @@ export function useAgent(): AgentController {
                     ),
                   },
             );
+          }
+          return;
+
+        case 'delegate.started':
+          if (forUs) {
+            helperAtWork.current = event.callId;
+            setDelegations((current) => ({
+              ...current,
+              [event.callId]: {
+                agentId: event.agentId,
+                name: event.name,
+                task: event.task,
+                text: '',
+                startedAt: Date.now(),
+                toolCalls: [],
+              },
+            }));
+          }
+          return;
+
+        case 'delegate.event':
+          if (forUs) {
+            setDelegations((current) => {
+              const work = current[event.callId];
+              /*
+               * Dropped when there is no thread to put it in. That is not a
+               * hypothetical: a delta can land after the turn ended and the map
+               * was emptied, and a thread conjured from a delta alone would have
+               * no agent and no task — a header naming nobody.
+               */
+              return work === undefined
+                ? current
+                : {
+                    ...current,
+                    [event.callId]: {...work, text: work.text + event.text},
+                  };
+            });
+          }
+          return;
+
+        case 'delegate.finished':
+          if (forUs) {
+            if (helperAtWork.current === event.callId) {
+              helperAtWork.current = null;
+            }
+            setDelegations((current) => {
+              const work = current[event.callId];
+              return work === undefined
+                ? current
+                : {
+                    ...current,
+                    [event.callId]: {
+                      ...work,
+                      done: true,
+                      ok: event.ok,
+                      ms: event.ms,
+                      ...(event.error === undefined ? {} : {error: event.error}),
+                    },
+                  };
+            });
           }
           return;
 
@@ -576,9 +777,20 @@ export function useAgent(): AgentController {
            */
           const id = openSession.current;
           const active = profileRef.current;
-          if (forUs && id !== null && active !== undefined) {
+          if (forUs) {
+            /*
+             * The helpers go with the turn, whatever ended it. A thread is only
+             * ever a claim that work is happening; after an abort or a failure
+             * nothing is, and a group left open would be the window insisting
+             * otherwise for as long as it stays on screen. The calls survive in
+             * the stored transcript, which is read again below.
+             */
             setLive(null);
-            void loadTranscript(active.id, id).catch(() => undefined);
+            setDelegations({});
+            helperAtWork.current = null;
+            if (id !== null && active !== undefined) {
+              void loadTranscript(active.id, id).catch(() => undefined);
+            }
           }
           return;
         }
@@ -651,6 +863,7 @@ export function useAgent(): AgentController {
     async (
       text: string,
       origin: 'window' | 'pet' = 'window',
+      agentId?: string,
     ): Promise<boolean> => {
       if (profile === undefined || sessionId === null) {
         return false;
@@ -672,6 +885,9 @@ export function useAgent(): AgentController {
            * caller cannot end up looking like another by omission.
            */
           origin,
+          // Absent rather than `undefined`: the schema has the field optional,
+          // and the lead is what answers when nobody was named.
+          ...(agentId === undefined ? {} : {agentId}),
         });
         /*
          * Refused — a turn already running, an unknown conversation. The refusal
@@ -760,6 +976,8 @@ export function useAgent(): AgentController {
         setMessages([]);
         setStoredPending([]);
         setLive(null);
+        setDelegations({});
+        helperAtWork.current = null;
         setOutbox(null);
       } catch (failure) {
         setError(describe(failure));
@@ -843,6 +1061,35 @@ export function useAgent(): AgentController {
   );
 
   /**
+   * Names the agents in a conversation, lead first.
+   *
+   * The answer is the stored entry, like every other session write here: who is
+   * in a conversation is the file's fact, and the window's list is redrawn from
+   * what came back rather than from the ids it asked for — the store may keep
+   * them in the order it was given, or refuse one.
+   */
+  const setParticipants = useCallback(
+    async (sessionId: string, agentIds: string[]): Promise<void> => {
+      if (profile === undefined) {
+        return;
+      }
+      try {
+        const {session} = await window.marimo.call('sessions.setParticipants', {
+          profileId: profile.id,
+          sessionId,
+          agentIds,
+        });
+        setSessions((current) =>
+          current.map((entry) => (entry.id === session.id ? session : entry)),
+        );
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [profile],
+  );
+
+  /**
    * Deletes a conversation, and lands somewhere sensible.
    *
    * The list is re-read rather than filtered locally, because the question the
@@ -869,6 +1116,8 @@ export function useAgent(): AgentController {
         setMessages([]);
         setStoredPending([]);
         setLive(null);
+        setDelegations({});
+        helperAtWork.current = null;
         setOutbox(null);
         if (next === undefined) {
           await newSession();
@@ -907,11 +1156,13 @@ export function useAgent(): AgentController {
     ready,
     error,
     profile,
+    agents,
     sessions,
     sessionId,
     messages,
     pending,
     live,
+    delegations,
     outbox,
     busy,
     send,
@@ -943,6 +1194,7 @@ export function useAgent(): AgentController {
     moveSession,
     renameSession,
     setSessionModel,
+    setParticipants,
     removeSession,
   };
 }

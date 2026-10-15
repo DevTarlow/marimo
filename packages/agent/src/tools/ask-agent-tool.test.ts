@@ -88,6 +88,11 @@ function saying(author: string, text: string): AgentEvent {
   return {author, content: {parts: [{text}]}};
 }
 
+/** One chunk of a streaming answer, as ADK emits it while the model writes. */
+function chunk(author: string, text: string): AgentEvent {
+  return {author, partial: true, content: {parts: [{text}]}};
+}
+
 /**
  * A seam that resolves to `tools`, recording what it was asked for.
  *
@@ -219,6 +224,112 @@ describe('where the helper runs', () => {
       }),
     );
     expect(await ask(deps, {agent: 'researcher', task: 'x'})).toBe('the answer');
+  });
+
+  /*
+   * The streaming case, which is the one that is easy to get wrong in either
+   * direction: a model that streams emits chunks *and then* a settled event
+   * carrying everything it said. Adding the settled text to the chunks hands the
+   * lead the paragraph twice; assigning each chunk over the last hands it the
+   * final fragment. And the window must hear each chunk once — a settled event
+   * whose text already went out as deltas is not a fourth thing to draw.
+   */
+  it('joins a streamed answer without saying it twice', async () => {
+    const seen: string[] = [];
+    const {deps} = seam(
+      helper({
+        events: [
+          chunk('researcher', 'the '),
+          chunk('researcher', 'answer '),
+          chunk('researcher', 'is 42'),
+          saying('researcher', 'the answer is 42'),
+        ],
+      }),
+      {onEvent: (event) => {
+        if (event.type === 'delegate.event') {
+          seen.push(event.text);
+        }
+      }},
+    );
+
+    expect(await ask(deps, {agent: 'researcher', task: 'x'})).toBe(
+      'the answer is 42',
+    );
+    // Three chunks, and the settled event silent: its text is already there.
+    expect(seen).toEqual(['the ', 'answer ', 'is 42']);
+  });
+
+  /*
+   * The helper's *doing*, which the window draws inside its thread the way the
+   * lead's own calls are drawn in the turn. Without this the fold has a blank
+   * stretch and then a paragraph, and a user watching a helper work sees nothing
+   * happen — which is the state this whole feature exists to avoid.
+   */
+  it('forwards the helper’s calls as ordinary tool events', async () => {
+    const seen: AgentUiEvent[] = [];
+    const {deps} = seam(
+      helper({
+        events: [
+          {
+            author: 'researcher',
+            content: {
+              parts: [
+                {
+                  functionCall: {
+                    id: 'call-1',
+                    name: 'read_file',
+                    args: {path: 'notes.md'},
+                  },
+                },
+              ],
+            },
+          },
+          {
+            author: 'researcher',
+            content: {
+              parts: [
+                {
+                  functionResponse: {
+                    id: 'call-1',
+                    name: 'read_file',
+                    response: {result: 'the notes'},
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      {onEvent: (event) => seen.push(event)},
+    );
+
+    await ask(deps, {agent: 'researcher', task: 'x'});
+
+    /*
+     * Matched on the fields that decide where the window puts it, not on the
+     * whole event: the message id is the parent's call id with a suffix, which is
+     * this file's business, and pinning it here would make a rename of that
+     * convention look like a broken thread.
+     */
+    expect(seen).toContainEqual(
+      expect.objectContaining({
+        type: 'tool.started',
+        sessionId: 'session-1',
+        callId: 'call-1',
+        tool: 'read_file',
+        args: {path: 'notes.md'},
+      }),
+    );
+    expect(seen).toContainEqual(
+      expect.objectContaining({
+        type: 'tool.finished',
+        sessionId: 'session-1',
+        callId: 'call-1',
+        tool: 'read_file',
+        ok: true,
+        result: 'the notes',
+      }),
+    );
   });
 
   it('says so when the helper produced nothing', async () => {

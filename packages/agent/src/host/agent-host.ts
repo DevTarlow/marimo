@@ -57,6 +57,11 @@ import type {
 } from '../sessions/file-session-service.js';
 import {composeInstruction} from '../skills/index.js';
 import {createAskAgentTool, createTools} from '../tools/index.js';
+import {
+  describeToolResult,
+  hasError,
+  isConfirmationRefusal,
+} from './tool-result.js';
 import type {
   AgentDelegation,
   AgentLimits,
@@ -2583,50 +2588,6 @@ export function pendingGatesIn(events: readonly AdkEvent[]): PendingGate[] {
   }
 
   return [...asked.values()].filter((gate) => !answered.has(gate.callId));
-}
-
-function hasError(response: unknown): boolean {
-  return (
-    !!response &&
-    typeof response === 'object' &&
-    ('error' in (response as Record<string, unknown>) ||
-      'errorMessage' in (response as Record<string, unknown>))
-  );
-}
-
-/**
- * ADK returns this payload instead of running a gated tool, right before it
- * emits the approval gate for the same call. Reporting it as a finished tool
- * would make the UI show a failed call next to the approval dialog, so it is
- * dropped and the call stays visibly pending until the user decides.
- */
-function isConfirmationRefusal(response: unknown): boolean {
-  if (!response || typeof response !== 'object') {
-    return false;
-  }
-  const error = (response as {error?: unknown}).error;
-  return (
-    typeof error === 'string' &&
-    error.startsWith('This tool call requires confirmation')
-  );
-}
-
-function describeToolResult(response: unknown): string {
-  if (response === undefined || response === null) {
-    return '';
-  }
-  let value: unknown = response;
-  if (typeof response === 'object' && 'result' in (response as object)) {
-    value = (response as {result: unknown}).result;
-  }
-  if (typeof value === 'string') {
-    return value;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
 }
 
 function describeError(error: unknown): string {

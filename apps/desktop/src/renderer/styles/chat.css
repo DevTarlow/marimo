@@ -266,7 +266,8 @@
   transition: background var(--transition-fast);
 }
 
-.popover-item:hover:not(:disabled) {
+.popover-item:hover:not(:disabled),
+.popover-item[data-active='true'] {
   background: var(--surface-hover);
 }
 
@@ -368,6 +369,12 @@
   margin: 0;
   font-size: var(--text-base);
   font-weight: 600;
+  /* One line, however many agents are in the conversation: a group is a list of
+     names, and a heading that wrapped to three lines would push the rest of the
+     header off the top of the window. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .head-sub {
@@ -544,6 +551,44 @@
 }
 
 /*
+ * Who wrote an answer, when the conversation has more than one voice.
+ *
+ * The same size and weight as the other faint lines in the transcript — a name
+ * is a fact about the message, not a heading over it, and anything larger would
+ * turn a group chat into a stack of bylines.
+ */
+.message-author {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+/*
+ * The initial that stands in for an avatar.
+ *
+ * There is no colour per agent to draw — nothing in a profile chooses one — so
+ * the two places that name a helper share this instead. Deliberately not tinted:
+ * a colour invented here would look like a setting somebody could change.
+ */
+.agent-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+/*
  * Where a compaction's summary sits.
  *
  * Full width and set apart by a rule rather than by a fill, because it is not
@@ -635,6 +680,41 @@
   overflow-wrap: anywhere;
   color: var(--text-muted);
   user-select: text;
+}
+
+/*
+ * A delegated call, drawn as the group it is.
+ *
+ * It borrows the call's box — the dashed rule, the padding, the mark — because it
+ * takes the call's place in the list and is the same thing seen from further out.
+ * What is new is only what a group needs that one line did not: a task that is
+ * prose rather than an argument, a duration at the far end, and a body.
+ */
+.thread-who {
+  flex: none;
+}
+
+.thread-task {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+}
+
+.thread-when {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .thinking {

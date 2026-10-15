@@ -9,12 +9,32 @@
  */
 import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 
-import type {PendingGate, TranscriptMessage} from '@marimo/protocol';
+import type {AgentProfile, PendingGate, TranscriptMessage} from '@marimo/protocol';
 
 import {shouldFollow, shouldOfferJump} from '../scroll.js';
+import {participantFor} from '../participants.js';
 import {Copy, Markdown} from './Markdown.js';
 
-import type {LiveToolCall, LiveTurn} from '../hooks/useAgent.js';
+import type {Delegation, LiveToolCall, LiveTurn} from '../hooks/useAgent.js';
+
+/**
+ * The agent's initial.
+ *
+ * A profile carries no colour — nothing in the document chooses one — so the two
+ * places that name a helper, above the words it wrote and on the thread it worked
+ * in, agree on this instead. Hidden from a screen reader, because the name is
+ * always beside it and hearing "W" first is noise.
+ */
+function AgentMark({name}: {name: string}): React.JSX.Element {
+  // Spread rather than `charAt`: a name may open with an emoji, which is two code
+  // units, and half of one renders as a replacement character.
+  const [first = '?'] = [...name];
+  return (
+    <span className="agent-mark" aria-hidden="true">
+      {first.toUpperCase()}
+    </span>
+  );
+}
 
 /** A call, collapsed to one line, with its result folded away behind it. */
 function ToolCall({call}: {call: LiveToolCall}): React.JSX.Element {
@@ -40,6 +60,102 @@ function ToolCall({call}: {call: LiveToolCall}): React.JSX.Element {
       )}
     </details>
   );
+}
+
+/**
+ * A delegated call, drawn as the work it did.
+ *
+ * The lead's turn is suspended inside `ask_agent` while the helper works, so this
+ * takes the place the tool call would have had — and it is not one line, because
+ * what comes back is a second agent's words and the calls that agent made. Open
+ * while it runs and after it fails, since both are states somebody is watching;
+ * folded to a summary once it has worked, because by then the answer is already
+ * in the transcript and the group is only its receipt.
+ */
+function Thread({
+  work,
+  open,
+}: {
+  work: Delegation;
+  open: boolean;
+}): React.JSX.Element {
+  const state =
+    work.done !== true ? 'running' : work.ok === false ? 'failed' : 'ok';
+
+  return (
+    <details className="call thread" data-state={state} open={open}>
+      <summary className="call-head">
+        <span className="call-mark" aria-hidden="true">
+          {state === 'running' ? '…' : state === 'ok' ? '✓' : '✕'}
+        </span>
+        <AgentMark name={work.name} />
+        <span className="thread-who">{work.name}</span>
+        <span className="thread-task">{`— ${work.task}`}</span>
+        <span className="thread-when">{outcome(work)}</span>
+      </summary>
+      <div className="thread-body">
+        {work.text.length > 0 && (
+          <div className="bubble bubble-answer">
+            <Markdown text={work.text} />
+          </div>
+        )}
+        {work.toolCalls.length > 0 && (
+          <div className="calls">
+            {work.toolCalls.map((call) => (
+              <ToolCall key={call.callId} call={call} />
+            ))}
+          </div>
+        )}
+        {state === 'running' && work.text.length === 0 && (
+          <div className="bubble thinking" aria-label={`${work.name} is working`}>
+            <span />
+            <span />
+            <span />
+          </div>
+        )}
+        {work.error !== undefined && work.error.length > 0 && (
+          <p className="message-error">{work.error}</p>
+        )}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * What a thread's head says when there is an ending to report.
+ *
+ * Nothing while it runs: a helper that started four seconds ago is not news, and
+ * a clock that ticked would mean re-rendering the transcript for a number nobody
+ * asked for. A failure says so rather than giving a time, because a duration
+ * beside a thread that failed reads as a result.
+ */
+function outcome(work: Delegation): string {
+  if (work.done !== true) {
+    return '';
+  }
+  if (work.ok === false) {
+    return 'failed';
+  }
+  /*
+   * The engine's `ms` is the measurement — it is the process that timed the work
+   * — and the window's own clock is only for a finish that carried no duration.
+   */
+  return describeDuration(work.ms ?? Math.max(0, Date.now() - work.startedAt));
+}
+
+/**
+ * How long something took, in the roughest useful unit.
+ *
+ * Tenths of a second up to a minute, because the question is "a moment or a
+ * while" and 4.2 against 4.9 is not an answer anybody is comparing.
+ */
+function describeDuration(ms: number): string {
+  const seconds = Math.max(0, ms) / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  return `${String(minutes)}m ${String(Math.round(seconds - minutes * 60))}s`;
 }
 
 /**
@@ -92,9 +208,15 @@ function ApprovalCard({
 
 function Message({
   message,
+  author,
   onFeedback,
 }: {
   message: TranscriptMessage;
+  /**
+   * Who wrote it, when that is not the conversation's lead. Absent for every
+   * message in a chat with one participant, which is most of them.
+   */
+  author?: string;
   onFeedback?: (
     messageId: string,
     excerpt: string,
@@ -142,6 +264,18 @@ function Message({
 
   return (
     <article className={`message message-${message.role}`}>
+      {/*
+        Above the calls and the words, so the two are read as one agent's answer.
+        Only ever on an answer: the user's own message is the user's, and putting a
+        name over it would attribute their sentence to whoever happens to be last
+        in the roster.
+      */}
+      {author !== undefined && (
+        <p className="message-author">
+          <AgentMark name={author} />
+          {author}
+        </p>
+      )}
       {message.toolCalls !== undefined && message.toolCalls.length > 0 && (
         <div className="calls">
           {message.toolCalls.map((call) => (
@@ -241,7 +375,10 @@ export function Transcript({
   messages,
   outbox,
   live,
+  delegations,
   pending,
+  agents,
+  leadId,
   onDecide,
   onFeedback,
   busy,
@@ -254,7 +391,23 @@ export function Transcript({
    */
   outbox: string | null;
   live: LiveTurn | null;
+  /** Work a helper is doing right now, by the lead's tool call id. */
+  delegations: Record<string, Delegation>;
   pending: PendingGate[];
+  /**
+   * Every agent in the install, so a message's `agentId` can be turned into the
+   * name of whoever wrote it — including an agent that has since been deleted,
+   * which is drawn as exactly that rather than as a blank.
+   */
+  agents: readonly AgentProfile[];
+  /**
+   * The agent whose voice the conversation's own messages are in.
+   *
+   * The first participant, or the agent that owns the conversation when nobody
+   * has been named. An answer from anyone else is labelled; an answer from this
+   * one needs no label, because it is what the transcript has always shown.
+   */
+  leadId: string | undefined;
   onDecide: (callId: string, confirmed: boolean) => void;
   /**
    * Records that an answer was wrong. Absent in a caller with nowhere to put it.
@@ -329,6 +482,33 @@ export function Transcript({
     }
   }, [blank]);
 
+  /*
+   * Threads whose parent call the window has not been shown.
+   *
+   * `delegate.started` names the lead's tool call, and in the ordinary order that
+   * call is streamed first — which is what puts the group where the call is
+   * rather than at the end of the list. The thread is the delegation's own fact,
+   * though, so it is drawn either way instead of depending on another event
+   * having arrived before it.
+   */
+  const placed = new Set((live?.toolCalls ?? []).map((call) => call.callId));
+  const unplaced = Object.entries(delegations).filter(
+    ([callId]) => !placed.has(callId),
+  );
+
+  /*
+   * Whether a thread is unfolded.
+   *
+   * Open while it runs and open after it fails — both are states somebody is
+   * meant to be watching. Folded once it has worked, because the answer is
+   * already above it and the group is then only a receipt. A pending gate opens
+   * every thread as well: the cards are drawn further down the transcript rather
+   * than inside a thread, so a closed one cannot hide a card, but while somebody
+   * is deciding they should be able to see the work that asked.
+   */
+  const threadOpen = (work: Delegation): boolean =>
+    work.done !== true || work.ok === false || pending.length > 0;
+
   return (
     <div className="transcript-wrap">
     <div
@@ -351,13 +531,28 @@ export function Transcript({
         </div>
       )}
 
-      {messages.map((message) => (
-        <Message
-          key={message.id}
-          message={message}
-          {...(onFeedback === undefined ? {} : {onFeedback})}
-        />
-      ))}
+      {messages.map((message) => {
+        /*
+         * A stored answer is the conversation's own unless it says otherwise:
+         * `agentId` absent is the agent that owns the chat, and so is a value
+         * equal to the lead. Either way there is nothing to label, and a name over
+         * every answer in the app would be the noise this avoids.
+         */
+        const other =
+          message.role === 'assistant' &&
+          message.agentId !== undefined &&
+          message.agentId !== leadId
+            ? participantFor(message.agentId, agents).name
+            : undefined;
+        return (
+          <Message
+            key={message.id}
+            message={message}
+            {...(other === undefined ? {} : {author: other})}
+            {...(onFeedback === undefined ? {} : {onFeedback})}
+          />
+        );
+      })}
 
       {outbox !== null && (
         <article className="message message-user">
@@ -367,10 +562,23 @@ export function Transcript({
 
       {live !== null && (
         <article className="message message-assistant">
-          {live.toolCalls.length > 0 && (
+          {(live.toolCalls.length > 0 || unplaced.length > 0) && (
             <div className="calls">
-              {live.toolCalls.map((call) => (
-                <ToolCall key={call.callId} call={call} />
+              {live.toolCalls.map((call) => {
+                const work = delegations[call.callId];
+                /*
+                 * A call the lead made while a helper was working is inside that
+                 * helper's thread instead — the hook files it there — so anything
+                 * still in this list is the lead's own, or the delegation itself.
+                 */
+                return work === undefined ? (
+                  <ToolCall key={call.callId} call={call} />
+                ) : (
+                  <Thread key={call.callId} work={work} open={threadOpen(work)} />
+                );
+              })}
+              {unplaced.map(([callId, work]) => (
+                <Thread key={callId} work={work} open={threadOpen(work)} />
               ))}
             </div>
           )}

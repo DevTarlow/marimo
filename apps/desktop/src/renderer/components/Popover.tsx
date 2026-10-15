@@ -125,11 +125,21 @@ export function PopoverItem({
   onSelect,
   disabled = false,
   danger = false,
+  active = false,
   children,
 }: {
   onSelect: () => void;
   disabled?: boolean;
   danger?: boolean;
+  /**
+   * Whether this is the item the keyboard is on.
+   *
+   * A menu opened by a button does not need this: focus is on the item, and the
+   * browser draws that. A menu that opens under a text box does — the composer's
+   * `@`, where focus has to stay where the typing is — so the item the next Enter
+   * would choose is marked some other way.
+   */
+  active?: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -137,6 +147,7 @@ export function PopoverItem({
       type="button"
       role="menuitem"
       className={danger ? 'popover-item is-danger' : 'popover-item'}
+      data-active={active ? 'true' : undefined}
       disabled={disabled}
       onClick={onSelect}
     >

@@ -48,6 +48,8 @@ import {z} from 'zod';
 
 import type {AgentUiEvent} from '@marimo/protocol';
 
+import {describeToolResult, hasError} from '../host/tool-result.js';
+
 /** The bounds a helper runs under. */
 export interface AgentLimits {
   /** How many events the helper may produce before it is stopped. */
@@ -83,7 +85,23 @@ export const DEFAULT_AGENT_LIMITS: AgentLimits = {
  */
 export interface AgentEvent {
   author?: string;
-  content?: {parts?: Array<{text?: string}>};
+  /**
+   * Whether this is a chunk of a streaming answer or the settled one.
+   *
+   * Load-bearing, and the reason it is on this narrow shape rather than left to
+   * the caller: ADK emits the helper's words as partial events and *then* an
+   * aggregated one, so a collector that ignores the flag either keeps only the
+   * last chunk or counts the whole answer twice. The host's own turn loop reads
+   * exactly this field for exactly this reason.
+   */
+  partial?: boolean;
+  content?: {
+    parts?: Array<{
+      text?: string;
+      functionCall?: {id?: string; name?: string; args?: Record<string, unknown>};
+      functionResponse?: {id?: string; name?: string; response?: unknown};
+    }>;
+  };
 }
 
 /** One gate a conversation has been asked and not yet answered. */
@@ -301,6 +319,8 @@ async function runAgent(
 
   let steps = 0;
   let answer = '';
+  /** Whether the turn being read has already reached the window as deltas. */
+  let streamed = false;
   let stopped: string | undefined;
   /** Set when the helper parked on a card that is now this call's to raise. */
   let parked = false;
@@ -328,17 +348,69 @@ async function runAgent(
        * The helper's words, as it writes them, and only its own: ADK emits events
        * for its bookkeeping too, and forwarding those would make the live view
        * say more than the transcript it is a preview of.
+       *
+       * Three facts about an ADK stream decide this shape, and getting any of
+       * them wrong is quiet.
+       *
+       * A partial event is a *chunk*; a settled one carries everything the helper
+       * said in that turn. So the answer is accumulated while it streams and then
+       * *replaced* by the settled text — adding the settled event to the deltas
+       * that produced it would hand the lead the same paragraph twice, and
+       * assigning each chunk over the last would hand it only the final fragment
+       * of a helper that streamed.
+       *
+       * The window, meanwhile, must hear each chunk exactly once: a settled event
+       * whose text already went out as deltas is not forwarded again.
+       *
+       * And a helper with several turns says something in each. The answer the
+       * lead is given is the last turn's, which is its conclusion; the earlier
+       * prose is in the thread above it.
        */
       if (text.length > 0 && event.author === helper.author) {
-        answer = text;
-        deps.onEvent?.({
-          type: 'delegate.event',
-          sessionId,
-          callId,
-          agentId: helper.agentId,
-          name: helper.name,
-          text,
-        });
+        if (event.partial === true) {
+          streamed = true;
+          answer += text;
+          emitHelperText(deps, {sessionId, callId, helper, text});
+        } else {
+          if (!streamed) {
+            emitHelperText(deps, {sessionId, callId, helper, text});
+          }
+          streamed = false;
+          answer = text;
+        }
+      }
+
+      /*
+       * What the helper is *doing*, which is not the same as what it says.
+       *
+       * Forwarded as the ordinary tool events the window already draws, so a
+       * helper's `read_file` appears inside its thread the way the lead's own
+       * calls appear in the turn — and so the fold has steps in it rather than a
+       * blank stretch and then a paragraph. The ids are the helper's, because
+       * they are what its results come back under; the session is the parent's,
+       * because that is the conversation these are happening in.
+       */
+      for (const part of event.content?.parts ?? []) {
+        if (part.functionCall?.name !== undefined) {
+          deps.onEvent?.({
+            type: 'tool.started',
+            sessionId,
+            messageId: `${callId}:helper`,
+            callId: part.functionCall.id ?? part.functionCall.name,
+            tool: part.functionCall.name,
+            args: part.functionCall.args ?? {},
+          });
+        } else if (part.functionResponse?.name !== undefined) {
+          deps.onEvent?.({
+            type: 'tool.finished',
+            sessionId,
+            messageId: `${callId}:helper`,
+            callId: part.functionResponse.id ?? part.functionResponse.name,
+            tool: part.functionResponse.name,
+            ok: !hasError(part.functionResponse.response),
+            result: describeToolResult(part.functionResponse.response),
+          });
+        }
       }
 
       if (steps >= limits.maxSteps) {
@@ -441,6 +513,26 @@ function messageFor(task: string, decision: ToolConfirmation | undefined): Conte
       },
     ],
   };
+}
+
+/** One line of a helper's answer, as the window hears it. */
+function emitHelperText(
+  deps: AgentDelegation,
+  parts: {
+    sessionId: string;
+    callId: string;
+    helper: AgentTools;
+    text: string;
+  },
+): void {
+  deps.onEvent?.({
+    type: 'delegate.event',
+    sessionId: parts.sessionId,
+    callId: parts.callId,
+    agentId: parts.helper.agentId,
+    name: parts.helper.name,
+    text: parts.text,
+  });
 }
 
 function textOf(event: {content?: {parts?: Array<{text?: string}>}}): string {

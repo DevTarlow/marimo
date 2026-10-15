@@ -4,14 +4,19 @@ A desktop AI assistant that lives on your own computer.
 
 Marimo is a desktop app with two faces. There is a chat window, and there
 is a small moss ball that floats on your screen and answers in a speech bubble.
-It carries no model of its own: the first time you open it, it asks which service
-should write the answers — one you have an account with, or a llama.cpp server
-you run yourself — and it says nothing until you choose.
+
+You can also make bots. Each one has its own name, instructions, tools and
+memory, and Marimo can hand the work to any of them. A chat can hold several at
+once, and you can put a question to one of them by name.
+
+The app carries no model of its own: the first time you open it, it asks
+which service should write the answers — one you have an account with, or a
+llama.cpp server you run yourself — and it says nothing until you choose.
 
 ## What it can do
 
-Ask it a question and the answer streams in as it is written, with the thread of
-the conversation kept.
+Ask a question and the answer streams in as it is written, with the thread of the
+conversation kept.
 
 Load a folder and it becomes a Space. A Space is a folder with everything that
 belongs to it: the chats you start in it, the documents in it — the markdown files

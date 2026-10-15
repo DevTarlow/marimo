@@ -551,8 +551,8 @@ export function Settings({
               {EXPERIENCE_LABELS.power} mode
               <em className="settings-why">
                 {power
-                  ? 'Everything is on this page: which service answers, where it is reached, which of its models, and every single thing the bot is allowed to do. Turn it off for the everyday settings.'
-                  : 'The everyday settings, with the tuning left out. Turn this on to write an identity for the bot, to tune how it answers, and to see every ability as its own switch.'}
+                  ? 'The identity, every tool on its own, which connectors this bot may reach, the command list and the recording. Turn it off for the everyday settings.'
+                  : 'The everyday settings: the bots, what one may do, the service that answers, memory and search. Turn this on to write an identity and to see every ability as its own switch.'}
               </em>
             </span>
           </label>
@@ -2036,8 +2036,8 @@ function CapabilityChoices({
   return (
     <>
       <p className="settings-muted">
-        Everything here is something you chose, and anything that changes a file
-        asks you before it does.
+        Everything here is something you chose. Running a command, replacing a
+        file that is already there, or scheduling a job asks you first.
       </p>
 
       <div className="capability-cards">

@@ -44,8 +44,8 @@ jobs:
 
       # Boots a real window over the DevTools protocol and asserts the bridge
       # answers, React mounted, the conversation round-trips, the companion
-      # window is up and transparent, and a fresh install offers to download
-      # the model rather than showing a chat that cannot answer.
+      # window is up and transparent, and a fresh install can reach the provider
+      # card rather than showing a chat that cannot answer.
       - name: Smoke
         run: xvfb-run --auto-servernum pnpm --filter @marimo/desktop smoke
         env:

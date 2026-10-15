@@ -525,8 +525,8 @@ export function Transcript({
           <h2>Say something to Marimo</h2>
           <p>
             It can read and write files in the space you chose, and use whatever
-            else you have switched on — anything that changes something asks you
-            first.
+            else you have switched on — it asks before running a command or
+            replacing a file that is already there.
           </p>
         </div>
       )}

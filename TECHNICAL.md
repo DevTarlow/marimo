@@ -429,19 +429,24 @@ on read could be swallowed by a read nobody was showing the card for.
 
 Everything the app can do is still a switch somebody turns on. What changed is
 that there are two screens to turn it on from: a simple one with three choices in
-plain words, and the power screen with the temperature, the per-model settings and
-every individual tool. They are the same app, the same stores and the
+plain words, and a power screen that adds the bot's own identity text, every tool
+as its own switch, the per-bot connector grants, the app's command list and the
+recording. They are the same app, the same stores and the
 same grants — the preset a user picks writes `enabledTools`, exactly as ticking
 the switches would, and the card that is lit is _worked out_ by comparing that
 grant against the lists. There is one source of truth for what an agent may do,
 and it is still the profile.
 
-The line between the two screens is **tuning versus repair**. A number to adjust —
-an output cap, a memory limit, a temperature — is tuning and lives in power. A
-switch that fixes something the user is looking at — the moss floating over a
-film, the moss not answering the mouse — stays where they are, because hiding an
-escape hatch from the person hitting the problem is how a setting comes to look
-like a bug.
+The line between the two screens is **the numbers versus the text**. The numbers —
+an output cap, a memory limit, a temperature — are on both, because somebody who
+wants shorter answers should not have to find an advanced mode first, and the same
+goes for the provider card, since an app that carries no model has to be fixable
+from the screen a first run lands on. Power is where things are *written*: the
+identity, the per-tool switches, the connector grants, the command list. A switch
+that fixes something the user is looking at — the moss floating over a film, the
+moss not answering the mouse — stays where they are, because hiding an escape
+hatch from the person hitting the problem is how a setting comes to look like a
+bug.
 
 Which screen a fresh install opens on is decided by _how_ the settings file was
 read rather than by what it holds. No file at all means somebody meeting this app

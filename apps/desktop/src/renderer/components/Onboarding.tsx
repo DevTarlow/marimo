@@ -44,7 +44,8 @@ export function Onboarding({
 
       <p className="onboarding-note onboarding-quiet">
         It can read files in the space you choose and use whatever else you
-        switch on. Anything that changes something asks you first.
+        switch on. It asks before running a command or replacing a file that is
+        already there.
       </p>
     </div>
   );

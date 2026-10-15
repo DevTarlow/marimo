@@ -126,8 +126,9 @@ export const CAPABILITY_PRESETS: readonly CapabilityPreset[] = [
     label: 'Do things for me',
     blurb:
       'Everything above, plus writing files, fetching a page you name, ' +
-      'keeping lists and setting up jobs that run on a schedule. Anything ' +
-      'that changes something still asks you first.',
+      'keeping lists and setting up jobs that run on a schedule. A new file ' +
+      'is written straight away; replacing one that is already there asks you ' +
+      'first, and so does running a command.',
     tools: [
       ...SAFE_DEFAULT_TOOLS,
       'write_file',

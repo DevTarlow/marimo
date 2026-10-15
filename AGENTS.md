@@ -405,6 +405,18 @@ runs it:
 pkill -f '^/.*electron/dist/electron'
 ```
 
+**Only the renderer is hot, and the tray makes a "restart" easy to think you did.**
+`dev` compiles the main process, the preload and the runner *once* and then starts
+Vite: a save under `src/renderer` reloads the window, and a save under `src/main`,
+`src/preload` or `src/runner` changes nothing until Electron is started again —
+and `start` compiles nothing at all, it serves whatever `dist` already holds. A
+window newer than the process behind it has exactly one signature: it calls a
+method the running main process has never heard of and is told `Unknown IPC
+method: <name>`, which reads like a typo in the caller and is not one. Restarting
+properly means quitting the old instance first — from the tray, or with the
+`pkill` above — because a second launch defers to the one already holding the
+single-instance lock, so starting `dev` again looks like it did nothing.
+
 `pnpm build` and `pnpm build:web` are not alternatives and neither implies the
 other. The root `build` is `tsc -b` alone; the renderer bundle only comes from
 the desktop package's own `build`, which is what `build:web` filters to. Running

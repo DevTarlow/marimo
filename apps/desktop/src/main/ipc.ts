@@ -664,7 +664,21 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
         typeof method !== 'string' ||
         !Object.hasOwn(agentCallSchemas, method)
       ) {
-        throw new Error(`Unknown IPC method: ${String(method)}`);
+        /*
+         * There is one way this happens in practice, and it is not a typo in a
+         * caller: the window is newer than the process behind it. Vite reloads
+         * the renderer on every save, and the main process is only rebuilt when
+         * the app is started — so a method added to the contract this morning is
+         * called by a window whose main process has never heard of it. Said
+         * plainly here, because "Unknown IPC method" reads like a bug in the
+         * caller and sends the reader looking in the wrong file.
+         */
+        throw new Error(
+          `Unknown IPC method: ${String(method)}. Nothing in this build's ` +
+            'contract answers to that name — in development that usually means ' +
+            'the window was reloaded and the main process was not. Restart the ' +
+            'app, quitting it from the tray rather than closing the window.',
+        );
       }
 
       const key = method as AgentCallMethod;

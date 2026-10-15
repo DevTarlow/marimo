@@ -10,9 +10,11 @@
  * the MCP client's own tests get them from. Sharing them is deliberate: the two
  * suites are testing the same protocol from two sides.
  */
+import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-import {describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import type {McpServer} from '@marimo/protocol';
 
@@ -21,6 +23,8 @@ import type {McpResolvedSecrets} from '@marimo/agent';
 import {McpManager, mcpSecretFile, secretReaderFor} from './mcp-manager.js';
 import type {McpManagerOptions, McpStatus} from './mcp-manager.js';
 import {resolveAppPaths} from '../paths.js';
+import type {AppPaths} from '../paths.js';
+import {FileSecretStore} from '../secrets.js';
 
 const ECHO = fileURLToPath(
   new URL('../../../agent/test-fixtures/echo-mcp-server.mjs', import.meta.url),
@@ -37,6 +41,7 @@ function server(overrides: Partial<McpServer> = {}): McpServer {
     command: process.execPath,
     args: [ECHO],
     enabled: true,
+    secretStorage: 'keychain',
     trusted: false,
     ...overrides,
   };
@@ -428,14 +433,15 @@ describe('mcpSecretFile', () => {
 });
 
 describe('secretReaderFor', () => {
+  const paths = resolveAppPaths('/data/marimo-agent');
+
   it('reads only the names the server declared', async () => {
-    const paths = resolveAppPaths('/data/marimo-agent');
     const asked: string[] = [];
 
     const read = secretReaderFor(paths, (file) => {
       asked.push(file);
       return {
-        get: async () => 'secret-value',
+        read: async () => ({state: 'present', value: 'secret-value'}),
       } as never;
     });
 
@@ -456,8 +462,10 @@ describe('secretReaderFor', () => {
   it('says nothing about a credential that is not set', async () => {
     // An empty value would be sent as an empty header, which some servers treat
     // as a wrong credential rather than as no credential.
-    const paths = resolveAppPaths('/data/marimo-agent');
-    const read = secretReaderFor(paths, () => ({get: async () => ''}) as never);
+    const read = secretReaderFor(
+      paths,
+      () => ({read: async () => ({state: 'absent'})}) as never,
+    );
 
     const secrets = await read(
       server({secrets: [{target: 'header', name: 'Authorization'}]}),
@@ -465,11 +473,130 @@ describe('secretReaderFor', () => {
     expect(secrets).toEqual({env: {}, headers: {}});
   });
 
+  it('refuses rather than dialling without a credential it cannot read', async () => {
+    /*
+     * The distinction the three-valued read exists for. Dialling without the
+     * secret earns a `401` from a server that never saw one, which sends the user
+     * to check a token that is perfectly correct; the store's sentence says what
+     * is actually wrong. The throw is deliberate — the manager turns it into the
+     * server's status, which is where a person can read it.
+     */
+    const read = secretReaderFor(
+      paths,
+      () =>
+        ({
+          read: async () => ({
+            state: 'unreadable',
+            reason:
+              'The Authorization is encrypted and this process cannot decrypt it.',
+          }),
+        }) as never,
+    );
+
+    await expect(
+      read(server({secrets: [{target: 'header', name: 'Authorization'}]})),
+    ).rejects.toThrow(/cannot decrypt/u);
+  });
+
+  it('names the secret the way the store quotes it back', async () => {
+    // The store's own sentences begin with "The ", so a label beginning with
+    // "the" reads as "The the Authorization for …" — and that is the sentence a
+    // user is shown when a connector's secret has to be entered again.
+    const labels: string[] = [];
+    const read = secretReaderFor(paths, (_file, label) => {
+      labels.push(label);
+      return {read: async () => ({state: 'absent'})} as never;
+    });
+
+    await read(
+      server({
+        name: 'notes',
+        secrets: [{target: 'header', name: 'Authorization'}],
+      }),
+    );
+
+    expect(labels).toEqual(['Authorization for "notes"']);
+  });
+
   it('reads nothing for a server that declares nothing', async () => {
-    const paths = resolveAppPaths('/data/marimo-agent');
     const read = secretReaderFor(paths, () => {
       throw new Error('should not be asked');
     });
     expect(await read(server())).toEqual({env: {}, headers: {}});
+  });
+});
+
+/*
+ * The runner's side of a connector's secret, against real files.
+ *
+ * This is the configuration the headless job runner builds and the window does
+ * not: a `FileSecretStore` with no cipher at all. What it decides is whether a
+ * scheduled job can use a connector at all — and the failure worth pinning is the
+ * quiet one, where a server is dialled without the credential it asked for and
+ * answers `401`, instead of being reported as the setting it actually is.
+ */
+describe('a connector secret the runner cannot open', () => {
+  let dir: string;
+  let paths: AppPaths;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-mcp-secret-'));
+    paths = resolveAppPaths(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  /** The runner's manager: the window's class, over a store with no cipher. */
+  function runnerManager() {
+    return manager({
+      readSecrets: secretReaderFor(
+        paths,
+        (file, label) => new FileSecretStore(file, label),
+      ),
+    });
+  }
+
+  async function writeSecret(contents: string): Promise<void> {
+    const file = mcpSecretFile(paths, 'mcp:notes', 'header', 'Authorization');
+    await mkdir(dirname(file), {recursive: true});
+    await writeFile(file, contents, 'utf8');
+  }
+
+  const notes = server({
+    secrets: [{target: 'header', name: 'Authorization'}],
+  });
+
+  it('comes up when the user stored the secret readable', async () => {
+    await writeSecret(`plaintext:${Buffer.from('a-token').toString('base64')}\n`);
+
+    const {instance} = runnerManager();
+    try {
+      await instance.apply([notes]);
+      expect(instance.statusOf('mcp:notes').state).toBe('online');
+    } finally {
+      await instance.stop();
+    }
+  });
+
+  it('is reported as unreadable instead of being dialled without it', async () => {
+    await writeSecret(`encrypted:${Buffer.from('a-token').toString('base64')}\n`);
+
+    const {instance} = runnerManager();
+    try {
+      await instance.apply([notes]);
+
+      const status = instance.statusOf('mcp:notes');
+      expect(status.state).toBe('error');
+      // The store's own sentence, which names the setting that fixes it rather
+      // than the server.
+      expect(status.detail).toMatch(/is encrypted/u);
+      expect(status.detail).toMatch(/Re-enter it/iu);
+      // And no tools at all: a turn is never offered a server that is not up.
+      expect(instance.toolsets()).toEqual([]);
+    } finally {
+      await instance.stop();
+    }
   });
 });

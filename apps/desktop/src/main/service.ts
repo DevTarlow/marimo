@@ -55,18 +55,35 @@ export interface ServiceContext {
 }
 
 /**
- * Whether the active provider is one a process with no keychain could use.
+ * Whether a process with no keychain could run this install's jobs.
  *
  * That process is the runner, and the question decides whether switching the
- * service on is honest: a provider that needs no key — a llama.cpp server on the
- * user's own machine — has nothing to decrypt, and one whose key the user chose
- * to store readable can be read by anything. Anything else is a job that would
- * be refused at the first turn, which is what the card has to say beforehand
- * rather than after somebody has relied on it overnight.
+ * service on is honest. It is about the *whole* job rather than about the
+ * provider, which is why it grew a second half: a scheduled turn answers through
+ * a provider and may use the connectors its agent was granted, so a job needs
+ * both secrets. A provider that needs no key — a llama.cpp server on the user's
+ * own machine — has nothing to decrypt, and one whose key the user chose to store
+ * readable can be read by anything. The same two answers apply to each connector
+ * that is switched on: one with no secrets needs none, one the user let the
+ * runner read is readable, and an encrypted one is a connector the job dials
+ * without — which is a turn that does less than it was asked to, or a `401` from
+ * a server that never saw a credential.
+ *
+ * Anything else is a job that would be refused or degraded at the first turn,
+ * which is what the card has to say beforehand rather than after somebody has
+ * relied on it overnight.
  */
 export function keysReadableIn(settings: StoredSettings): boolean {
   const {id, keyStorage} = activeProvider(settings.providers);
-  return !PROVIDERS[id].requiresApiKey || keyStorage === 'plaintext';
+  if (PROVIDERS[id].requiresApiKey && keyStorage !== 'plaintext') {
+    return false;
+  }
+  return settings.mcpServers.every(
+    (server) =>
+      !server.enabled ||
+      server.secretStorage === 'plaintext' ||
+      (server.secrets ?? []).length === 0,
+  );
 }
 
 /** The service definition for this install. */

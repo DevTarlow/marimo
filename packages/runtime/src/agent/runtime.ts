@@ -55,6 +55,7 @@ import type {
   CompactResult,
   DismissedMemory,
   FeedbackEntry,
+  McpServer,
   MemoryProposal,
   MemoryProvenanceEntry,
   MemorySupersede,
@@ -332,6 +333,21 @@ export class AgentRuntime {
     return {
       tools,
       skills: await this.skillCatalog(),
+      /*
+       * Every connector the install has, switched on or not, drawn from the
+       * settings document rather than from the manager's connections. That is the
+       * rule the recall switch follows and the reason is the same: a grant screen
+       * has to exist *before* the server is reachable, or a connector that cannot
+       * be dialled yet — a wrong command, a secret the runner cannot read — is
+       * one nobody can decide about. A manager consulted here would answer "no
+       * connectors" on the very install that needs the switches most.
+       */
+      connectors: settings.mcpServers.map((server) => ({
+        id: server.id,
+        name: server.name,
+        blurb: connectorBlurb(server),
+        enabled: server.enabled,
+      })),
       /*
        * The same tools in three sizes, narrowed to the ones this install has.
        * The narrowing happens here rather than in the window so that whichever
@@ -1443,6 +1459,24 @@ export class AgentRuntime {
     this.applied.set(profileId, signature);
     host.setMcpServers(sources);
   }
+}
+
+/**
+ * What a connector is, for the person deciding whether an agent may use it.
+ *
+ * The address rather than a description, because there is nothing else true to
+ * say: a connector's tools are whatever the server offers, and only the server
+ * knows what they are — the description the model gets comes from it, tool by
+ * tool. Where it points is the one fact this document holds, and it is the fact
+ * that tells two connectors of the same kind apart.
+ */
+function connectorBlurb(server: McpServer): string {
+  const where =
+    server.transport === 'http'
+      ? (server.url ?? 'an address it did not record')
+      : [server.command ?? '', ...(server.args ?? [])].join(' ').trim() ||
+        'a command it did not record';
+  return `${server.transport === 'http' ? 'At' : 'Runs'} ${where}. Its own tools are offered beside the built-in ones.`;
 }
 
 /** A turn that never started, said in the shape the window already draws. */

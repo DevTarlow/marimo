@@ -16,3 +16,13 @@ export const PRODUCT_NAME = 'Marimo Agent';
 
 /** The environment variable that relocates all app state, for dev and tests. */
 export const USER_DATA_ENV = 'MARIMO_USER_DATA_DIR';
+
+/**
+ * How this app introduces itself to an MCP server.
+ *
+ * Shared rather than written out in each entry point, for the reason
+ * `PRODUCT_NAME` is: the window and the headless runner dial the same servers, and
+ * a second copy of a version string is a second answer to "which build is asking"
+ * — the sort of difference a server's own logs would show last, if at all.
+ */
+export const MCP_CLIENT = {name: 'marimo-agent', version: '0.1.0'} as const;

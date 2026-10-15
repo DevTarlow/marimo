@@ -162,6 +162,41 @@ describe('trust', () => {
   });
 });
 
+/*
+ * How a connector's secrets are stored.
+ *
+ * The field is optional in the file and answered by the parse, and both halves
+ * matter. Optional, because every connectors list written before this existed has
+ * no such field and a required one would fail the *settings* schema for those
+ * installs — costing the user every other setting they had. Answered, because the
+ * missing case has to mean the safe thing everywhere an entry is read: an entry
+ * that says nothing is encrypted, and only a connector the user explicitly let
+ * the runner read is written in the clear.
+ */
+describe('secret storage', () => {
+  it('parses an entry that predates the choice', () => {
+    // `stdio()` is that entry: it says nothing about storage, which is what every
+    // connectors list written before this choice looks like.
+    expect(mcpServerSchema.safeParse(stdio()).success).toBe(true);
+  });
+
+  it('reads a missing field as the keychain, not as readable', () => {
+    expect(mcpServerSchema.parse(stdio()).secretStorage).toBe('keychain');
+  });
+
+  it('keeps the plaintext consent the user gave', () => {
+    expect(
+      mcpServerSchema.parse(stdio({secretStorage: 'plaintext'})).secretStorage,
+    ).toBe('plaintext');
+  });
+
+  it('refuses a value that is neither', () => {
+    expect(
+      mcpServerSchema.safeParse(stdio({secretStorage: 'readable'})).success,
+    ).toBe(false);
+  });
+});
+
 describe('mcpServersAreDistinct', () => {
   it('passes a list of distinct servers', () => {
     const [first, second] = [stdio(), http()].map((entry) =>

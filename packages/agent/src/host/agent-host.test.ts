@@ -21,6 +21,7 @@ import type {DreamTree, Job} from '@marimo/protocol';
 import type {AgentConfig} from '../config.js';
 
 import {resolveMemoryFile} from '../memory/index.js';
+import type {McpToolsetSource} from '../tools/index.js';
 import type {JobService} from '../tools/job-tools.js';
 import type {RecallAnswer, RecallLookup} from '../tools/recall-tools.js';
 import type {WebSearchProvider} from '../tools/web-search-tool.js';
@@ -1940,6 +1941,173 @@ describe('AgentHost', () => {
 
       expect(names).toContain('recall');
       expect(names?.indexOf('recall')).toBe(names.indexOf('search_knowledge_base') + 1);
+    });
+  });
+
+  /*
+   * Which connectors an agent is offered.
+   *
+   * The grant is a profile field with three answers a user can mean — every
+   * connector, only these, none — and what is asserted is the tool declarations
+   * the model actually receives, because that is the whole of the difference a
+   * grant makes. A server that was not granted is *absent* rather than refused:
+   * there is no tool to call, and so nothing for any gate to say no to, which is
+   * invariant 9 seen from the model's side of the fence.
+   */
+  describe('the connector grant', () => {
+    /** One connected server and the tools it says it offers. */
+    function toolset(name: string, tools: string[]): McpToolsetSource {
+      return {
+        server: {
+          id: `mcp:${name}`,
+          name,
+          transport: 'stdio',
+          command: 'irrelevant-for-a-test',
+          enabled: true,
+          trusted: true,
+          secretStorage: 'keychain',
+        },
+        // Nothing calls it: what is under test is which tools are *declared*, and
+        // a declaration is built from the metadata alone.
+        connection: {} as never,
+        tools: tools.map((tool) => ({
+          name: tool,
+          description: '',
+          inputSchema: {},
+        })),
+      };
+    }
+
+    /** The tool names one turn sends, for a host configured as given. */
+    async function toolsOffered(options: {
+      grant?: readonly string[];
+      enabledTools?: readonly string[];
+      sources?: readonly McpToolsetSource[];
+    }): Promise<string[]> {
+      const model = await startFakeDeepSeek(() => textChunks('ok'));
+      try {
+        const host = new AgentHost({
+          sessionsDir: join(workDir, 'sessions'),
+          config: {
+            ...createConfig(model.baseUrl),
+            ...(options.enabledTools === undefined
+              ? {}
+              : {enabledTools: [...options.enabledTools]}),
+            ...(options.grant === undefined
+              ? {}
+              : {mcpServerIds: [...options.grant]}),
+          },
+          ...(options.sources === undefined
+            ? {}
+            : {mcpServers: options.sources}),
+        });
+        host.init();
+        openHosts.push(host);
+        const session = await host.createSession();
+        await collect(host.run(session.id, 'hi'));
+
+        return toolNamesIn(model, 0);
+      } finally {
+        await model.close();
+      }
+    }
+
+    /** What the model was offered on one request of a conversation. */
+    function toolNamesIn(model: FakeDeepSeek, index: number): string[] {
+      const tools = (model.requests[index]?.body['tools'] ?? []) as Array<{
+        function: {name: string};
+      }>;
+      return tools.map((tool) => tool.function.name);
+    }
+
+    const two = [toolset('notes', ['search']), toolset('mail', ['send'])];
+
+    it('offers every connected connector when the profile names none', async () => {
+      // The state every profile written before the field existed is in, and it
+      // has to behave exactly as it did: saying nothing means all, not none.
+      const names = await toolsOffered({sources: two});
+
+      expect(names).toContain('mcp_notes_search');
+      expect(names).toContain('mcp_mail_send');
+    });
+
+    it('offers only the connectors the profile names', async () => {
+      const names = await toolsOffered({grant: ['mcp:notes'], sources: two});
+
+      expect(names).toContain('mcp_notes_search');
+      expect(names).not.toContain('mcp_mail_send');
+    });
+
+    it('offers none of them when the profile grants an empty list', async () => {
+      const names = await toolsOffered({grant: [], sources: two});
+
+      expect(names.filter((name) => name.startsWith('mcp_'))).toEqual([]);
+      // And the built-in tools are untouched by it: the grant is over servers.
+      expect(names).toContain('read_file');
+    });
+
+    /*
+     * Invariant 14, through the grant.
+     *
+     * A server's tools are named after the server, and the reserved set they are
+     * checked against is every built-in name this build can produce *before* the
+     * profile's own filter — a tool the profile has switched off still owns its
+     * name, because the profile can change between turns. This server declares a
+     * tool under a built-in's own name and arrives prefixed anyway: the grant
+     * chooses servers, and it cannot be the thing that lets one take a name the
+     * build already uses.
+     */
+    it('keeps a granted connector from taking a built-in name', async () => {
+      const names = await toolsOffered({
+        grant: ['mcp:read'],
+        // `read_file` is switched off for this profile — and still owns its name.
+        enabledTools: ['current_time'],
+        sources: [toolset('read', ['file'])],
+      });
+
+      expect(names).toContain('mcp_read_file');
+      expect(names).not.toContain('read_file');
+      expect(names).toContain('current_time');
+    });
+
+    /*
+     * A grant changed while the window is open.
+     *
+     * The host caches the runner it built, and a runner holds the tool closures
+     * it was made with — so a profile edit that is not noticed would leave the
+     * model offered a connector the user has just taken away, until something
+     * else happened to rebuild. `updateConfig` is what notices, and this is the
+     * test that says so from the outside.
+     */
+    it('applies a changed grant on the next turn', async () => {
+      const model = await startFakeDeepSeek(() => textChunks('ok'));
+      try {
+        const host = new AgentHost({
+          sessionsDir: join(workDir, 'sessions'),
+          config: {
+            ...createConfig(model.baseUrl),
+            mcpServerIds: ['mcp:notes', 'mcp:mail'],
+          },
+          mcpServers: two,
+        });
+        host.init();
+        openHosts.push(host);
+        const session = await host.createSession();
+
+        await collect(host.run(session.id, 'first'));
+        expect(toolNamesIn(model, 0)).toContain('mcp_mail_send');
+
+        host.updateConfig({
+          ...createConfig(model.baseUrl),
+          mcpServerIds: ['mcp:notes'],
+        });
+        await collect(host.run(session.id, 'second'));
+
+        expect(toolNamesIn(model, 1)).toContain('mcp_notes_search');
+        expect(toolNamesIn(model, 1)).not.toContain('mcp_mail_send');
+      } finally {
+        await model.close();
+      }
     });
   });
 

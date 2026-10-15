@@ -8,6 +8,8 @@
  */
 import {z} from 'zod';
 
+import {providerKeyStorageSchema} from './providers.js';
+
 /**
  * The characters a server name may use, and why they are so few.
  *
@@ -99,6 +101,28 @@ export const mcpServerSchema = z
     headers: z.record(z.string().max(128), z.string().max(4_096)).optional(),
     /** Names whose values are in the secret store. */
     secrets: z.array(mcpSecretRefSchema).max(32).optional(),
+    /*
+     * How this connector's secrets are stored on disk.
+     *
+     * The same per-connector choice a provider's key has, and for the same
+     * reason: a job runs in a process with no `app` object and therefore no
+     * keychain, so a connector whose secret a scheduled job is meant to use has
+     * to be readable by a process that has none. `plaintext` is the user saying
+     * they accept that for *this* server; a machine with a keychain still writes
+     * readable when asked, because silently encrypting anyway would be the app
+     * deciding it knows better and the job would fail without saying why.
+     *
+     * Defaulted rather than required, and each half is doing work. Optional in
+     * the *file*, because every connectors list written before this choice
+     * existed has no such field, and a required one would fail the whole settings
+     * schema for those installs — costing the user every other setting they had.
+     * Answered by the parse, because the default has to be the same answer
+     * everywhere an entry is read: `keychain`, the safe one, so an old entry does
+     * not become readable because a later build asked the question and a machine
+     * with no keychain refuses to store a secret rather than writing a token in
+     * the clear.
+     */
+    secretStorage: providerKeyStorageSchema.default('keychain'),
     /** Connect at launch, and reconnect when it drops. */
     enabled: z.boolean(),
     /**

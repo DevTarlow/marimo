@@ -62,6 +62,7 @@ import {BrowserSearchProvider} from './search/search-window.js';
 import {RecallHost} from './recall.js';
 import {MediaDecodingWindow} from './media/decode-window.js';
 import {mediaParts} from './media/parts.js';
+import {MCP_CLIENT} from '../shared/product.js';
 
 /**
  * How often a dropped MCP server is considered for a reconnect.
@@ -209,8 +210,8 @@ export class AgentService {
       readSecrets: secretReaderFor(paths, (file, label) =>
         secretStore(file, label),
       ),
-      clientName: 'marimo-agent',
-      clientVersion: '0.1.0',
+      clientName: MCP_CLIENT.name,
+      clientVersion: MCP_CLIENT.version,
       // The window redraws a badge from this. It is one field, so it travels
       // whole rather than as a diff the renderer would have to reconcile.
       onStatus: (serverId, status) => {
@@ -710,10 +711,21 @@ export class AgentService {
   /**
    * Stores one of a connector's secrets.
    *
-   * Through the same store every secret uses, which means the same rule: it is
-   * encrypted, and a machine with no keychain is refused rather than written to
-   * in the clear. A connector token is exactly as sensitive as any other, because
-   * most of them *are* one.
+   * Through the same store every secret uses, which means the same rules: it is
+   * encrypted, a machine with no keychain is refused rather than written to in
+   * the clear, and one connector's consent does not decide another's. A connector
+   * token is exactly as sensitive as any other, because most of them *are* one.
+   *
+   * Written the way this connector's own settings say to write it, which is the
+   * per-connector version of the choice `setApiKey` makes for a provider: a
+   * process with no keychain can read only a secret stored readable, so a
+   * connector a scheduled job is meant to use has to be written that way — and
+   * one the user left on `keychain` stays encrypted, because encrypting a good
+   * default is better than a job that works by having quietly gone readable.
+   *
+   * A draft the window has not saved yet has no entry to ask. Its secret is still
+   * worth storing — the id is the server's identity, so the file is the one the
+   * saved connector will read — and an unasked connector gets the safe answer.
    */
   async setMcpSecret(
     serverId: string,
@@ -721,11 +733,20 @@ export class AgentService {
     name: string,
     value: string,
   ): Promise<void> {
+    const settings = await this.runtime.settings();
+    const server = settings.mcpServers.find((entry) => entry.id === serverId);
     const store = secretStore(
       mcpSecretFile(this.options.paths, serverId, target, name),
-      `the ${name} for this connector`,
+      `${name} for this connector`,
     );
-    await store.set(value);
+    await store.set(value, {
+      /*
+       * The connector's own answer. A draft the window has not saved has no
+       * entry to ask, and gets the safe one: readable only when the document
+       * says so.
+       */
+      allowPlaintext: server?.secretStorage === 'plaintext',
+    });
   }
 
   /**
@@ -744,7 +765,7 @@ export class AgentService {
           reference.target,
           reference.name,
         ),
-        `the ${reference.name} for this connector`,
+        `${reference.name} for this connector`,
       );
       if (await store.has()) {
         set.push(`${reference.target}:${reference.name}`);

@@ -28,6 +28,7 @@ function server(overrides: Partial<McpServer> = {}): McpServer {
     command: 'notes-server',
     args: [],
     enabled: true,
+    secretStorage: 'keychain',
     trusted: false,
     ...overrides,
   };

@@ -545,6 +545,58 @@ describe('the catalogue', () => {
     expect(capable?.tools).not.toContain('list_todos');
     expect(capable?.tools).not.toContain('save_skill');
   });
+
+  /*
+   * The connector switches, drawn from the settings document rather than from
+   * anything connected.
+   *
+   * That is the same rule the recall switch follows, and it is the whole reason
+   * this catalogue builds no manager: the switch has to exist *before* a server
+   * is reachable, or the connectors that cannot be dialled yet — a wrong command,
+   * a secret the runner cannot read — would be the ones nobody could grant. The
+   * runtime here is given no manager at all, which is what proves it.
+   */
+  it('lists the install’s connectors, connected or not', async () => {
+    const instance = runtime();
+    expect((await instance.catalog()).connectors).toEqual([]);
+
+    await instance.updateSettings({
+      mcpServers: [
+        {
+          id: 'mcp:notes',
+          name: 'notes',
+          transport: 'stdio',
+          command: 'npx',
+          args: ['-y', 'notes-mcp'],
+          enabled: true,
+          trusted: false,
+          secretStorage: 'keychain',
+        },
+        {
+          id: 'mcp:remote',
+          name: 'remote',
+          transport: 'http',
+          url: 'https://example.test/mcp',
+          enabled: false,
+          trusted: true,
+          secretStorage: 'plaintext',
+        },
+      ],
+    });
+
+    const connectors = (await instance.catalog()).connectors;
+    expect(connectors.map((connector) => connector.id)).toEqual([
+      'mcp:notes',
+      'mcp:remote',
+    ]);
+    // Where it points, which is the one fact in the document that tells two
+    // connectors apart — and the switch beside it, so an unplugged server is
+    // still listed rather than silently dropped from the grant screen.
+    expect(connectors[0]).toMatchObject({name: 'notes', enabled: true});
+    expect(connectors[0]?.blurb).toContain('npx -y notes-mcp');
+    expect(connectors[1]?.blurb).toContain('https://example.test/mcp');
+    expect(connectors[1]?.enabled).toBe(false);
+  });
 });
 
 describe('changing an agent', () => {

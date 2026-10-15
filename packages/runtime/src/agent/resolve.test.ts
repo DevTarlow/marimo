@@ -193,6 +193,40 @@ describe('resolveAgentConfig', () => {
     expect(result.ok && result.config.preferences).toBeUndefined();
   });
 
+  /*
+   * The connector grant, carried to the configuration with its three answers
+   * intact.
+   *
+   * Absent is not the same as empty, and this is where the agent's side of that
+   * is decided: absent means every connector the install has — what a profile
+   * written before the field existed must go on meaning — while an empty list
+   * means none. A resolver that turned one into the other would either hand an
+   * old profile's connectors to nobody or take them away from it.
+   */
+  it('carries the connector grant, and leaves it absent when the profile names none', async () => {
+    const all = await resolve({
+      settings: defaultStoredSettings(),
+      profile: profile(),
+    });
+    expect(all.ok).toBe(true);
+    expect(all.ok && all.config.mcpServerIds).toBeUndefined();
+
+    const some = await resolve({
+      settings: defaultStoredSettings(),
+      profile: profile({mcpServerIds: ['mcp:notes', 'mcp:mail']}),
+    });
+    expect(some.ok && some.config.mcpServerIds).toEqual([
+      'mcp:notes',
+      'mcp:mail',
+    ]);
+
+    const none = await resolve({
+      settings: defaultStoredSettings(),
+      profile: profile({mcpServerIds: []}),
+    });
+    expect(none.ok && none.config.mcpServerIds).toEqual([]);
+  });
+
   it('refuses a turn with no folder, and says which agent', async () => {
     const result = await resolve({
       settings: defaultStoredSettings(),

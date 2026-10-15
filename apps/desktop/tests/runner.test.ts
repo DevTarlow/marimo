@@ -19,13 +19,17 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {
   FileSecretStore,
+  mcpSecretFile,
   ProfileStore,
+  SettingsStore,
   WorkspaceStore,
   resolveAppPaths,
 } from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
+import type {McpServer} from '@marimo/protocol';
 
 import {
+  connectorSecrets,
   describeReport,
   main,
   resolveRunnerPaths,
@@ -261,6 +265,121 @@ describe('runDue', () => {
     expect(report.appIsRunning).toBe(false);
     expect(report.total).toBe(1);
   });
+
+  /*
+   * The connector half of invariant 16, and the reason a connector has a
+   * `secretStorage` choice at all.
+   *
+   * A scheduled job's agent is the same agent the window runs, so it dials the
+   * same connectors — and this process has no `app` object and therefore no
+   * keychain. What it must not do is dial a server whose credential it could not
+   * read: the server answers `401`, the job records a refusal that reads as a
+   * wrong token, and the setting that would fix it is named nowhere. The report
+   * is the only surface a background run has.
+   */
+  it('reports an enabled connector whose secret it cannot decrypt', async () => {
+    await seedDueJob();
+    await new SettingsStore(paths.settings).patch({
+      mcpServers: [connector()],
+    });
+    await mkdir(paths.secretsDir, {recursive: true});
+    await writeFile(
+      mcpSecretFile(paths, 'mcp:notes', 'header', 'Authorization'),
+      `encrypted:${Buffer.from('a-token').toString('base64')}\n`,
+      'utf8',
+    );
+
+    const report = await runDue({paths});
+
+    // Not a failed run: the jobs still run, without that connector's tools.
+    expect(report.problem).toBeUndefined();
+    expect(report.connectorProblems).toHaveLength(1);
+    expect(report.connectorProblems?.[0]).toContain('notes');
+    expect(report.connectorProblems?.[0]).toMatch(/is encrypted/u);
+    // And the sentence points at the fix rather than at the server.
+    expect(report.connectorProblems?.[0]).toMatch(/Re-enter it/iu);
+  });
+});
+
+/** A connector with one header secret, as the settings document holds it. */
+function connector(): McpServer {
+  return {
+    id: 'mcp:notes',
+    name: 'notes',
+    transport: 'stdio',
+    // Never reached: the credential is read before the command is spawned, and
+    // that is the whole point of the case.
+    command: '/nonexistent/definitely-not-real',
+    enabled: true,
+    trusted: false,
+    secretStorage: 'keychain',
+    secrets: [{target: 'header', name: 'Authorization'}],
+  };
+}
+
+/*
+ * What the runner can make of a connector's secret, which is decided by the store
+ * it builds rather than by anything it is told: no cipher, so `plaintext:` is a
+ * value and `encrypted:` is a sentence. Both halves are asserted here because the
+ * difference is the whole feature — one lets a scheduled job use a connector, and
+ * the other must be reported rather than dialled around.
+ */
+describe('the connector secrets the runner reads', () => {
+  let dir: string;
+  let paths: AppPaths;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-runner-secrets-'));
+    paths = resolveAppPaths(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  async function writeSecret(contents: string): Promise<void> {
+    await mkdir(paths.secretsDir, {recursive: true});
+    await writeFile(
+      mcpSecretFile(paths, 'mcp:notes', 'header', 'Authorization'),
+      contents,
+      'utf8',
+    );
+  }
+
+  it('reads a plaintext: secret the user let the runner read', async () => {
+    await writeSecret(
+      `plaintext:${Buffer.from('a-token').toString('base64')}\n`,
+    );
+
+    await expect(connectorSecrets(paths)(connector())).resolves.toEqual({
+      env: {},
+      headers: {Authorization: 'a-token'},
+    });
+  });
+
+  it('reports an encrypted: one as unreadable, with the sentence', async () => {
+    await writeSecret(
+      `encrypted:${Buffer.from('a-token').toString('base64')}\n`,
+    );
+
+    const failure = await connectorSecrets(paths)(connector()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    const message = failure instanceof Error ? failure.message : '';
+    expect(message).toMatch(/is encrypted/u);
+    expect(message).toMatch(/Re-enter it/iu);
+  });
+
+  it('says nothing for a connector that declares no secret', async () => {
+    const {secrets: _none, ...withoutSecrets} = connector();
+    await expect(connectorSecrets(paths)(withoutSecrets)).resolves.toEqual({
+      env: {},
+      headers: {},
+    });
+  });
 });
 
 describe('describeReport', () => {
@@ -292,6 +411,18 @@ describe('describeReport', () => {
   it('names the jobs it ran', () => {
     const lines = describeReport({...base, ran: ['job-1']}).join('\n');
     expect(lines).toContain('job-1');
+  });
+
+  it('prints a connector that did not come up, without calling the run failed', () => {
+    // A connector that is down costs a job its tools; it does not stop the run,
+    // and a report that made it a failure would make a timer's exit code depend
+    // on somebody else's server.
+    const lines = describeReport({
+      ...base,
+      connectorProblems: ['notes: The Authorization is encrypted.'],
+    }).join('\n');
+    expect(lines).toContain('notes: The Authorization is encrypted.');
+    expect(lines).not.toContain('FAILED');
   });
 });
 

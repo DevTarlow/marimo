@@ -1179,6 +1179,25 @@ export const agentProfileSchema = z.object({
   /** Skill names this profile carries, from `profiles.catalog`. */
   enabledSkills: z.array(z.string()),
   /**
+   * Which connectors this agent may use.
+   *
+   * Absent means *every* connector the install has, which is what every profile
+   * written before this field existed carries — an upgrade must not take a
+   * user's connectors away from the agent that was using them. An empty array
+   * means none, so absent and empty are two different answers rather than the
+   * same one, exactly as they are for `enabledTools` above.
+   *
+   * The ids are the servers' own rather than their names: a connector can be
+   * renamed without losing its grant, and a name freed by a delete cannot be
+   * inherited by a new server the agent was never given.
+   *
+   * Optional for the reason `preferences` above is optional: a required field
+   * would fail this schema for every agent that already exists, and
+   * `ProfileStore.parseFile` skips a profile it cannot parse — a file whose
+   * profiles were all skipped is renamed aside and replaced with a fresh agent.
+   */
+  mcpServerIds: z.array(z.string().min(1)).optional(),
+  /**
    * What this agent answers with, when it is not the app's default.
    *
    * Optional for the reason `preferences` above is optional, and the reason is
@@ -1197,6 +1216,20 @@ export const profilePatchSchema = z.object({
   preferences: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
   enabledSkills: z.array(z.string()).optional(),
+  /**
+   * This agent's connectors, or `null` for every one of them.
+   *
+   * Three answers in one field, and all three are needed: absent leaves the
+   * grant alone, `null` clears it so the agent is offered every connector —
+   * including one added afterwards — and an array names exactly the ones it may
+   * use, where an empty array means none.
+   *
+   * The empty array is why clearing is a `null` rather than `[]`, which is the
+   * same reason `model` above needs one: "this agent uses none of them" is a real
+   * answer a user can give, and overloading `[]` to mean "back to all" would make
+   * it impossible to express *and* impossible to store.
+   */
+  mcpServerIds: z.array(z.string().min(1)).nullable().optional(),
   /**
    * The agent's own model, or `null` to go back to the app's default.
    *
@@ -2477,11 +2510,12 @@ export type PendingGate = z.infer<typeof pendingGateSchema>;
  * Two facts rather than one boolean, because each has a different remedy and a
  * single "off" would leave the user guessing which one they have.
  *
- * It used to carry a third — whether this install's API key could be read by a
- * process with no keychain — and it is gone with the key it was about. A
- * background run needs no secret at all now: the model is a local engine, and the
- * runner does not dial connectors. That is what makes switching this on a plain
- * choice rather than one with a trap behind it.
+ * There used to be no trap behind it at all: a background run needed no secret,
+ * because the app answered with its own bundled model and the runner dialled no
+ * connectors. Both are gone. A job answers through a provider and may use the
+ * connectors its agent was granted, so whether the runner can read the secrets
+ * behind either is a fact this has to state — which is what `keysReadable`
+ * answers.
  */
 export interface ServiceStatus {
   /** Whether the OS is set up to wake the runner. */
@@ -2489,14 +2523,17 @@ export interface ServiceStatus {
   /** The definition's location, shown so a user can go and look. */
   definitionPath: string;
   /**
-   * Whether a process with no keychain could use the agent's provider.
+   * Whether a process with no keychain could run this install's jobs.
    *
-   * The runner has no `app` object and therefore no `safeStorage`, so a key is
-   * readable to it only when the user said so. True here means "a scheduled job
-   * would work with this provider as configured": the provider needs no key, or
-   * its key was stored readable. False is not a fault — it is the state a user
-   * is in before they answer the question, and it is what the switch's own copy
-   * has to say rather than leaving a job to fail on the night it was needed.
+   * The runner has no `app` object and therefore no `safeStorage`, so a secret is
+   * readable to it only when the user said so — and a job may need two kinds: the
+   * active provider's key, and the secret of every connector switched on. True
+   * here means "a scheduled job would work as this install is configured": the
+   * provider needs no key or its key was stored readable, and every enabled
+   * connector either needs no secret or has it stored readable. False is not a
+   * fault — it is the state a user is in before they answer the question, and it
+   * is what the switch's own copy has to say rather than leaving a job to fail on
+   * the night it was needed.
    */
   keysReadable: boolean;
 }
@@ -2978,6 +3015,15 @@ export interface ProfileCatalog {
   tools: CatalogTool[];
   skills: CatalogEntry[];
   /**
+   * The connectors this install has, for the switches that grant them.
+   *
+   * Drawn from the settings document rather than from live connections, because
+   * the switch has to exist before the server connects: a card that filled in
+   * after the first successful dial would be one nobody could grant a connector
+   * that is not up yet — which is the same rule the recall switch follows.
+   */
+  connectors: CatalogConnector[];
+  /**
    * The same tools, grouped into the three choices the simple screen offers.
    *
    * Here rather than in the renderer because the names are the agent package's:
@@ -2985,6 +3031,23 @@ export interface ProfileCatalog {
    * the one thing that must not drift is which names a choice actually grants.
    */
   presets: CapabilityPreset[];
+}
+
+/**
+ * One connector as the agent's grant screen offers it.
+ *
+ * `enabled` is the server's own install-wide switch and not the grant: a
+ * connector that is switched off is still listed, because the grant is kept on
+ * the profile and a card that dropped it would silently forget which agents were
+ * allowed a server that was merely unplugged for a while.
+ */
+export interface CatalogConnector {
+  /** The server's own id, which is what a profile's grant stores. */
+  id: string;
+  name: string;
+  /** Where it points, said to the person deciding rather than to the model. */
+  blurb: string;
+  enabled: boolean;
 }
 
 /** One tool as the settings screen offers it. */

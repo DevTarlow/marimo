@@ -107,10 +107,14 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     cannot decrypt a key; so a provider's key is stored readable *only* when the
     user ticks that provider's "let the background runner read it" box, and a job
     whose agent needs an encrypted key fails with a sentence saying so rather than
-    with a 401. The related trap is silent in the other direction: a plaintext key
-    is written by the window and read by the runner through the *same* path, which
-    is why `paths.providerSecrets` is derived from the catalogue rather than
-    spelled out in either place.
+    with a 401. The same rule reaches connectors, which the runner now dials for a
+    job: each one carries its own `secretStorage`, its secrets are stored readable
+    only where the user says so, and `ServiceStatus.keysReadable` answers for the
+    whole job — provider and every enabled connector together. The related trap is
+    silent in the other direction: a plaintext key is written by the window and
+    read by the runner through the *same* path, which is why
+    `paths.providerSecrets` is derived from the catalogue rather than spelled out
+    in either place.
 17. **A model is a pair, never an id.** `{provider, model}` is the only shape this
     app stores or sends, because a model id means nothing without the endpoint
     that serves it — `glm-5.3-flash` at OpenCode Go and a file of the same name on

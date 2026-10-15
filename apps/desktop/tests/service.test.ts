@@ -113,4 +113,54 @@ describe('keysReadableIn', () => {
   it('is false when the key is encrypted and the runner has no keychain', () => {
     expect(keysReadableIn(withProvider('deepseek', 'keychain'))).toBe(false);
   });
+
+  /*
+   * And the connectors, because a job needs their secrets too.
+   *
+   * The flag answers for the *whole* job — a scheduled turn answers through a
+   * provider and may use the connectors its agent was granted — so a provider
+   * that is fine is not enough on its own. A connector with no secrets needs
+   * none; one the user let the runner read is readable; one left on the keychain
+   * is a connector the job would dial without a credential.
+   */
+  function withConnector(
+    overrides: Partial<StoredSettings['mcpServers'][number]> = {},
+  ): StoredSettings {
+    const settings = withProvider('llamacpp', 'keychain');
+    settings.mcpServers = [
+      {
+        id: 'mcp:notes',
+        name: 'notes',
+        transport: 'stdio',
+        command: 'notes-mcp',
+        enabled: true,
+        trusted: false,
+        secretStorage: 'keychain',
+        secrets: [{target: 'header', name: 'Authorization'}],
+        ...overrides,
+      },
+    ];
+    return settings;
+  }
+
+  it('is false when an enabled connector has a secret only a keychain could read', () => {
+    expect(keysReadableIn(withConnector())).toBe(false);
+  });
+
+  it('is true when every enabled connector was let be stored readable', () => {
+    expect(keysReadableIn(withConnector({secretStorage: 'plaintext'}))).toBe(
+      true,
+    );
+  });
+
+  it('is true for a connector that needs no secret at all', () => {
+    expect(keysReadableIn(withConnector({secrets: []}))).toBe(true);
+  });
+
+  it('is true for an encrypted connector that is switched off', () => {
+    // Nothing dials it, so there is nothing the runner has to read: a card that
+    // said otherwise would refuse to switch the service on for a server no job
+    // could ever reach.
+    expect(keysReadableIn(withConnector({enabled: false}))).toBe(true);
+  });
 });

@@ -438,6 +438,15 @@ export class AgentHost {
       config.profileId !== this.config.profileId ||
       config.workspaceRoot !== this.config.workspaceRoot ||
       !sameList(config.enabledTools, this.config.enabledTools) ||
+      /*
+       * The connector grant is a tool list from the model's side of the fence:
+       * changing it changes what the cached runner offers, so it belongs here
+       * rather than beside the dream settings below. Leaving it out would make a
+       * switch in Settings appear to do nothing until something else changed the
+       * configuration — which is the complaint every one of these lines exists to
+       * prevent.
+       */
+      !sameList(config.mcpServerIds, this.config.mcpServerIds) ||
       config.allowPrivateNetworkFetch !== this.config.allowPrivateNetworkFetch;
 
     /*
@@ -1260,6 +1269,27 @@ export class AgentHost {
   }
 
   /**
+   * The connected servers this agent was granted.
+   *
+   * The grant is the profile's, and an absent one means every server: that is the
+   * state every profile written before the field existed is in, so an upgrade
+   * behaves exactly as it did. Ids rather than names, because a grant has to
+   * survive a rename and must not be inherited by a new server given an old name.
+   *
+   * Read at the moment a runner is built rather than when the servers are handed
+   * over, because both halves move: a server can connect after the profile was
+   * written, and the profile can be edited while the app runs.
+   */
+  private grantedMcpServers(): readonly McpToolsetSource[] {
+    const ids = this.config.mcpServerIds;
+    if (ids === undefined) {
+      return this.mcpServers;
+    }
+    const granted = new Set(ids);
+    return this.mcpServers.filter((source) => granted.has(source.server.id));
+  }
+
+  /**
    * The runner for a model, built on first use and reused afterwards.
    *
    * Keyed by provider *and* model, not by the model alone. Two conversations can
@@ -1274,6 +1304,17 @@ export class AgentHost {
     if (cached) {
       return cached;
     }
+
+    /*
+     * The grant, applied to the servers *before* their tools are built. A server
+     * this agent was not given contributes nothing at all — no tool, no name, no
+     * refusal at call time — which is invariant 9: a capability the user turned
+     * off is absent rather than discouraged. Filtering here rather than in the
+     * manager is also what keeps the names of the servers that *were* granted
+     * exactly what they would have been: the list a turn is offered never
+     * mentions the others.
+     */
+    const mcpServers = this.grantedMcpServers();
 
     const agent = new LlmAgent({
       name: MAIN_AGENT_NAME,
@@ -1327,7 +1368,7 @@ export class AgentHost {
         ...(this.discordService ? {discordService: this.discordService} : {}),
         ...(this.deskService ? {deskService: this.deskService} : {}),
         ...(this.skillService ? {skillService: this.skillService} : {}),
-        ...(this.mcpServers.length > 0 ? {mcpServers: this.mcpServers} : {}),
+        ...(mcpServers.length > 0 ? {mcpServers} : {}),
       }),
     });
 

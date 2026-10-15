@@ -102,11 +102,15 @@ runtime or a second copy of the logic — and it is what lets it run from a time
 boot, over SSH, or in a container, none of which a plain Electron process can do.
 
 The cost is real and worth stating: with no `app` object there is no
-`safeStorage`, so an encrypted secret cannot be read. It stopped mattering when
-the app stopped having a model key — a background run needs no secret at all,
-because the model is a local engine and the runner dials no connectors. What the
-runner _does_ need is the same user-data directory the window is using, which is
-why the service definition bakes that path in.
+`safeStorage`, so an encrypted secret cannot be read. It stopped mattering for a
+while, when the app answered with a bundled model and the runner dialled no
+connectors; it matters again now that a job answers through a provider and may use
+the connectors its agent was granted. Both kinds of secret — the active provider's
+key, and each enabled connector's — are therefore stored readable only where the
+user says so, per key and per connector, and a job whose secret is encrypted says
+so rather than failing with a `401`. What the runner also needs is the same
+user-data directory the window is using, which is why the service definition bakes
+that path in.
 
 ### What answers, and where the key is
 

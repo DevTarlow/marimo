@@ -29,6 +29,7 @@ function server(overrides: Partial<McpServer> = {}): McpServer {
     command: process.execPath,
     args: [FIXTURE],
     enabled: true,
+    secretStorage: 'keychain',
     trusted: false,
     ...overrides,
   };

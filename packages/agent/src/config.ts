@@ -91,6 +91,21 @@ export interface AgentConfig {
    */
   enabledTools?: string[];
   /**
+   * The connectors this profile may use, by server id.
+   *
+   * Absent means every connected server, which is what every profile written
+   * before the field existed carries — an upgrade must not quietly take a user's
+   * connectors away from the agent that was using them. An empty array means
+   * none, and the two are therefore different answers rather than the same one,
+   * exactly as they are for `enabledTools` above.
+   *
+   * It is a grant over *servers* rather than over their tools, because a server's
+   * tool list is discovered when it connects and changes when it is upgraded: a
+   * per-tool grant would be a list that silently stopped covering what the server
+   * now offers, and the model would be offered a tool nobody had approved.
+   */
+  mcpServerIds?: string[];
+  /**
    * Names of the *user's* skills to carry in the instruction.
    *
    * Not the built-in ones: the operating protocol is unconditional and a

@@ -35,6 +35,7 @@ import {pathToFileURL} from 'node:url';
 import {RecallHost} from '../main/recall.js';
 
 import {PROVIDERS} from '@marimo/protocol';
+import type {McpServer} from '@marimo/protocol';
 import {
   AgentRuntime,
   createJobRunner,
@@ -44,11 +45,14 @@ import {
   isProcessHeld,
   JobScheduler,
   JobStore,
+  McpManager,
   resolveAppPaths,
+  secretReaderFor,
 } from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
+import type {McpResolvedSecrets} from '@marimo/agent';
 
-import {PRODUCT_NAME, USER_DATA_ENV} from '../shared/product.js';
+import {MCP_CLIENT, PRODUCT_NAME, USER_DATA_ENV} from '../shared/product.js';
 
 export interface RunDueReport {
   userData: string;
@@ -58,6 +62,19 @@ export interface RunDueReport {
   enabled: number;
   due: number;
   ran: string[];
+  /**
+   * Connectors that are enabled and did not come up, with the reason.
+   *
+   * Not a `problem`: a connector that is down costs a job the tools it was
+   * granted, and the jobs still run — a run that refused to start because one
+   * server was unreachable would be a worse answer than a run that does less and
+   * says so. They are reported because the alternative is silence: nobody is
+   * watching a timer's output, so the one place a person can find out why a
+   * scheduled job's answer was thin is the log this report is printed to. The
+   * reason is the manager's own sentence, which for a secret this process cannot
+   * decrypt names the setting that fixes it.
+   */
+  connectorProblems?: string[];
   /**
    * Why the runner could not do its job, when it could not.
    *
@@ -85,6 +102,51 @@ export function resolveRunnerPaths(
       ? override
       : defaultUserDataDir({appName: PRODUCT_NAME, env});
   return resolveAppPaths(userData);
+}
+
+/**
+ * The connector credentials this process can read.
+ *
+ * The runner's half of invariant 16, and the reason a connector has a
+ * `secretStorage` choice at all. This process has no `app` object, so it has no
+ * keychain and cannot decrypt: a connector whose secret the user stored readable
+ * is dialled with it, and one stored encrypted comes back `unreadable` with the
+ * store's own sentence — which the manager puts in the server's status, and this
+ * file puts in the report, rather than the runner dialling without a credential
+ * and earning a `401` from a server that never saw one.
+ *
+ * The store is built here rather than in `@marimo/runtime` for the reason the
+ * provider reader below is: the cipher is the one thing only the calling process
+ * knows, and this one has none to give.
+ */
+export function connectorSecrets(
+  paths: AppPaths,
+): (server: McpServer) => Promise<McpResolvedSecrets> {
+  return secretReaderFor(
+    paths,
+    (file, label) => new FileSecretStore(file, label),
+  );
+}
+
+/**
+ * The connectors that are enabled and did not come up, as sentences.
+ *
+ * Read from the manager after it has been given the server list, which is the
+ * only way to learn what happened: every failure is caught there by design, so a
+ * connector that could not be dialled is a status rather than an exception.
+ */
+function connectorProblemsIn(
+  mcp: McpManager,
+  servers: readonly McpServer[],
+): string[] {
+  const problems: string[] = [];
+  for (const server of servers) {
+    const status = mcp.statusOf(server.id);
+    if (status.state === 'error') {
+      problems.push(`${server.name}: ${status.detail}`);
+    }
+  }
+  return problems;
 }
 
 /**
@@ -161,6 +223,22 @@ export async function runDue(options: {
       await agent.conversationFor(profileId, sessionId),
   });
 
+  /*
+   * The connectors, dialled for the duration of this run.
+   *
+   * A job's agent is the same agent the window runs, so a scheduled job whose
+   * prompt needs a connector's tool must be offered it — otherwise the job
+   * quietly does less than it was asked to, and the user finds out by reading an
+   * answer that says it could not do something the app can do. This is the
+   * window's own manager over the window's own settings document; the only
+   * difference is the reader, which has no cipher here.
+   */
+  const mcp = new McpManager({
+    readSecrets: connectorSecrets(paths),
+    clientName: MCP_CLIENT.name,
+    clientVersion: MCP_CLIENT.version,
+  });
+
   const agent: AgentRuntime = new AgentRuntime({
     paths,
     appName: PRODUCT_NAME,
@@ -178,6 +256,12 @@ export async function runDue(options: {
         paths.providerSecrets[provider],
         `${PROVIDERS[provider].label} API key`,
       ).read(),
+    /*
+     * What the servers are offering, read per turn rather than captured: a
+     * connector that drops mid-run is a tool the next turn must not be offered,
+     * and the manager is the one thing that knows which are up.
+     */
+    mcpServers: () => mcp.toolsets(),
     recall: {
       stop: async () => {
         await recall.stop();
@@ -214,6 +298,17 @@ export async function runDue(options: {
   }
 
   /*
+   * The servers come up after the lock and before the first job, in that order
+   * for a reason at each end: dialling them while an app is running would put a
+   * second connection beside every server the app is already holding, and a job
+   * dispatched before they are up would be answered by an agent with no
+   * connectors — the thing this whole path exists to avoid.
+   */
+  const settings = await agent.settings();
+  await mcp.apply(settings.mcpServers);
+  const connectorProblems = connectorProblemsIn(mcp, settings.mcpServers);
+
+  /*
    * `onChange` is the scheduler saying it recorded something about a job —
    * which is every dispatch outcome, including a deferral and a gate. A `Set`
    * because one job can record twice in a run: once when it starts, once when
@@ -237,6 +332,9 @@ export async function runDue(options: {
     await scheduler.runOnce();
   } finally {
     await lock.release();
+    // Before the runtime, so a connector's child process is stopped by the object
+    // that started it rather than left to the process exiting.
+    await mcp.stop();
     await agent.dispose();
   }
 
@@ -248,6 +346,7 @@ export async function runDue(options: {
     enabled: after.jobs.filter((job) => job.enabled).length,
     due: ran.size,
     ran: [...ran],
+    ...(connectorProblems.length === 0 ? {} : {connectorProblems}),
   };
 }
 
@@ -271,6 +370,14 @@ export function describeReport(report: RunDueReport): string[] {
   }
 
   lines.push(`  data directory: ${report.userData}`);
+  /*
+   * Before the jobs, because a connector that is down is the explanation for
+   * several of them: "it answered without the tool I asked for" reads as the
+   * model's fault until this line says otherwise.
+   */
+  for (const problem of report.connectorProblems ?? []) {
+    lines.push(`  connector not connected: ${problem}`);
+  }
   if (report.ran.length === 0) {
     lines.push(
       `  jobs: ${report.total} (${report.enabled} enabled), none due.`,

@@ -173,6 +173,59 @@ describe('ProfileStore', () => {
     expect(created.preferences).toBeUndefined();
   });
 
+  /*
+   * The connector grant, which is the third field a patch can *unset*.
+   *
+   * All three answers a user can give have to survive the store: a list means
+   * "only these", an empty list means "none", and `null` means "back to every
+   * connector" — which is the field being *gone*, not an empty list, because the
+   * two are opposite answers. A patch that says nothing leaves whatever is there,
+   * which is what makes the switch beside a server safe to leave alone.
+   */
+  it('stores the connector grant, and unsets it with a null', async () => {
+    const profiles = store();
+    const profile = await profiles.activeProfile();
+    expect(profile.mcpServerIds).toBeUndefined();
+
+    const some = await profiles.update(profile.id, {
+      mcpServerIds: ['mcp:notes', 'mcp:notes', 'mcp:mail'],
+    });
+    expect(some.mcpServerIds).toEqual(['mcp:notes', 'mcp:mail']);
+
+    const none = await profiles.update(profile.id, {mcpServerIds: []});
+    expect(none.mcpServerIds).toEqual([]);
+
+    // Unset rather than emptied: absent is what every connector means.
+    const all = await profiles.update(profile.id, {mcpServerIds: null});
+    expect(all.mcpServerIds).toBeUndefined();
+
+    // And a patch about something else does not disturb the grant.
+    await profiles.update(profile.id, {mcpServerIds: ['mcp:notes']});
+    const renamed = await profiles.update(profile.id, {name: 'Other'});
+    expect(renamed.mcpServerIds).toEqual(['mcp:notes']);
+  });
+
+  /*
+   * The model, which is the other field a patch can unset, and which was in the
+   * schema without the store ever writing it — so the picker in Settings moved a
+   * value nothing kept.
+   */
+  it("stores the agent's own model, and unsets it with a null", async () => {
+    const profiles = store();
+    const profile = await profiles.activeProfile();
+
+    const chosen = await profiles.update(profile.id, {
+      model: {provider: 'gemini', model: 'gemini-3.1-pro'},
+    });
+    expect(chosen.model).toEqual({
+      provider: 'gemini',
+      model: 'gemini-3.1-pro',
+    });
+
+    const back = await profiles.update(profile.id, {model: null});
+    expect(back.model).toBeUndefined();
+  });
+
   it('refuses an unknown profile', async () => {
     await expect(store().update('nope', {name: 'x'})).rejects.toBeInstanceOf(
       UnknownProfileError,

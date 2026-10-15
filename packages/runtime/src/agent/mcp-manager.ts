@@ -482,6 +482,20 @@ function describeDelay(ms: number): string {
  * The counterpart to {@link mcpSecretFile}: this is the implementation both the
  * window and the runner can pass to the manager, differing only in the store
  * they hand it.
+ *
+ * A secret that exists but cannot be read *throws*, and that is the whole point
+ * of the three-valued read below. Dialling without it produces a `401` from a
+ * server that never saw a credential — the one message that sends a user to check
+ * a token that is perfectly correct — whereas the store's own sentence names what
+ * is actually wrong: a keychain this process does not have, or a connector the
+ * user has not yet let the background runner read. The manager already turns an
+ * exception here into the server's status, so the sentence arrives in Settings
+ * and in the runner's report rather than in a provider's error.
+ *
+ * A secret that is merely *absent* is skipped, not refused: a connector the user
+ * has not filled in yet is not broken, and an empty value would be sent as an
+ * empty header, which some servers treat as a wrong credential rather than as
+ * none.
  */
 export function secretReaderFor(
   paths: AppPaths,
@@ -493,15 +507,24 @@ export function secretReaderFor(
 
     for (const reference of server.secrets ?? []) {
       const file = mcpSecretFile(paths, server.id, reference.target, reference.name);
-      const store = stores(file, `the ${reference.name} for "${server.name}"`);
-      const value = await store.get();
-      if (value.length === 0) {
+      /*
+       * The label finishes the store's own sentences — "The <label> is encrypted
+       * and this process cannot decrypt it" — so it must not begin with "The".
+       */
+      const store = stores(file, `${reference.name} for "${server.name}"`);
+      const read = await store.read();
+      if (read.state === 'unreadable') {
+        // `config`, because the fix is a setting on this machine rather than
+        // anything the server did.
+        throw new McpError(read.reason, 'config');
+      }
+      if (read.state === 'absent') {
         continue;
       }
       if (reference.target === 'env') {
-        env[reference.name] = value;
+        env[reference.name] = read.value;
       } else {
-        headers[reference.name] = value;
+        headers[reference.name] = read.value;
       }
     }
 

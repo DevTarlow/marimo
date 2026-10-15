@@ -208,6 +208,18 @@ export async function resolveAgentConfig(
       allowPrivateNetworkFetch: settings.allowPrivateNetworkFetch,
       enabledTools: [...profile.enabledTools],
       enabledSkills: [...profile.enabledSkills],
+      /*
+       * The connectors this agent may use. Carried only when the profile names
+       * some, because absent means "every one of them" — what a profile written
+       * before the field existed carries, so an upgrade offers exactly what it
+       * offered before. An empty array is the opposite answer and travels as one:
+       * the host filters the connected servers by this list, so "none" is the
+       * absence of every connector's tools rather than a refusal when one is
+       * called.
+       */
+      ...(profile.mcpServerIds !== undefined
+        ? {mcpServerIds: [...profile.mcpServerIds]}
+        : {}),
       ...(options.skills !== undefined && options.skills.length > 0
         ? {userSkills: options.skills.map(toAgentSkill)}
         : {}),

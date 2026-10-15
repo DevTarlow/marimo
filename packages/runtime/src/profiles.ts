@@ -259,8 +259,23 @@ export class ProfileStore {
       const current = requireProfile(file, profileId);
       const parsed = profilePatchSchema.safeParse(patch);
       const clean = parsed.success ? parsed.data : {};
+      /*
+       * The two fields a patch may *unset*, resolved before the literal below
+       * because "unset" is a third case the spread cannot express: `null` means
+       * "back to the app's default" for a model and "every connector" for a
+       * grant, and the absence of the field is what says so. They are taken out
+       * of what is carried over and put back only when there is something to put
+       * back, so a cleared field cannot survive in the copy.
+       */
+      const {
+        mcpServerIds: storedGrant,
+        model: storedModel,
+        ...carried
+      } = current;
+      const grant = patchedValue(clean.mcpServerIds, storedGrant);
+      const model = patchedValue(clean.model, storedModel);
       const updated: AgentProfile = {
-        ...current,
+        ...carried,
         ...(clean.name !== undefined ? {name: clean.name} : {}),
         ...(clean.identity !== undefined ? {identity: clean.identity} : {}),
         /*
@@ -277,6 +292,11 @@ export class ProfileStore {
         ...(clean.enabledSkills !== undefined
           ? {enabledSkills: [...new Set(clean.enabledSkills)]}
           : {}),
+        // Deduplicated for the reason the two lists above are: the grant is a
+        // set, and naming one connector twice is a second answer to what the
+        // agent may use.
+        ...(grant === undefined ? {} : {mcpServerIds: [...new Set(grant)]}),
+        ...(model === undefined ? {} : {model}),
       };
       await this.writeFile(replaceProfile(updated, file));
       return updated;
@@ -498,6 +518,22 @@ function activeProfileOf(file: ProfileSnapshot): AgentProfile {
     file.profiles.find((entry) => entry.id === file.activeProfileId) ??
     (file.profiles[0] as AgentProfile)
   );
+}
+
+/**
+ * One value a patch may leave alone, replace, or unset.
+ *
+ * Three cases, and the third is why this is a function rather than a `??` at the
+ * call site: `undefined` keeps what is stored, `null` answers `undefined` so the
+ * field is *removed* and its own default applies again, and anything else is the
+ * new value. Two fields on a profile have that shape, and a rule with three cases
+ * written out twice is one where a case eventually goes missing from one of them.
+ */
+function patchedValue<T>(
+  patched: T | null | undefined,
+  stored: T | undefined,
+): T | undefined {
+  return patched === null ? undefined : (patched ?? stored);
 }
 
 function requireProfile(

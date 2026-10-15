@@ -22,7 +22,7 @@ paragraph you type is what the bot reads next. It cannot see anything outside
 the Space.
 
 You are not limited to one bot. Settings has **+ New bot**, and a new one gets
-a name, an identity you write, its own tools, the Spaces it works in, and — if you
+a name, an identity you write, its own tools, the Space it works in, and — if you
 want — a model of its own rather than the app's default. That is how you end up
 with a Writer that drafts into the website folder and a Researcher you send off to
 read things.
@@ -91,7 +91,7 @@ open it.
 
 The first time you start it, it asks which service should answer, because this
 app does not carry a model of its own. There are five to choose from, and one of
-them is the one that keeps everything on your machine: a
+them is the one that keeps everything on your own machine or network: a
 [llama.cpp](https://github.com/ggml-org/llama.cpp) server you run yourself, at an
 address you type. The others — DeepSeek, Google Gemini, OpenCode Go, OpenRouter —
 need an account and an API key, and their screens say what that key is and where
@@ -115,9 +115,10 @@ Next, choose how much it may do. There are three choices in plain words: "Just
 chat", "Help around my computer", and "Do things for me". You can change this at
 any time, and the same screen is where a second bot is made.
 
-Anything that changes something on your machine, such as writing a file or
-running a command, shows you what it wants to do and waits for your approval.
-That request survives a restart, so closing the window does not lose it.
+Before it runs a command, or writes over a file that is already there, it shows
+you what it wants to do and waits for your approval; a new file is written
+without asking. That request survives a restart, so closing the window does not
+lose it.
 
 Closing the window does not quit the app. It stays in the system tray so the moss
 ball and any scheduled tasks keep working, and you quit it from the tray menu.
@@ -141,7 +142,7 @@ The example worth walking through is the blog post. Say you have a Writer whose
 Space is the website folder. You ask the lead bot for a post about last week's
 outage and tell it to hand the writing over. Writer's name goes up over what it
 says, and its file writes show up under it as its own work rather than as the
-lead's. When it wants to save the draft it asks you, in this chat, under the turn
+lead's. When it needs your approval, it asks you in this chat, under the turn
 you are reading. When it finishes, the post is in the folder — and the Documents
 drawer is showing the same file the bot just wrote.
 
@@ -149,9 +150,10 @@ The moss ball floats above other windows. You can drag it, ask it something from
 the bar underneath, and change how long its answers are or whether it stays on
 top in Settings.
 
-There are two versions of the settings screen. Simple has the bot's name and one
-choice about what it may do. Power user shows everything, including the
-temperature and every tool as its own switch. Which service answers is on both,
+There are two versions of the settings screen. Simple has the bots list, what the
+bot is, what it can do, the desktop companion, the provider card, memory, recall
+and connectors. Power user shows everything, including every tool as its own
+switch. Which service answers is on both,
 because an app with no model of its own has to be fixable from the screen a first
 run lands on. Connecting a tool from somewhere else is on both screens too: a
 capability you have should not be behind a switch you have not turned on yet.
@@ -159,7 +161,7 @@ Deciding which of those tools each bot may use is in power, because that is one
 switch per bot per connector. One switch moves between the two screens, and
 neither is a different app.
 
-When a conversation gets long, you can compact the older half into a summary from
+When a conversation gets long, you can compact the older part into a summary from
 the `+` menu. The messages stay in the conversation file; the bot simply stops
 being sent them.
 
@@ -195,7 +197,7 @@ for that one, which is you accepting that it sits on disk readable.
 ## What is not finished yet
 
 The Windows and macOS installers are written but not built. Only the Linux
-AppImage has been packaged and run.
+AppImage has been run.
 
 There is no auto update, so a new version is a file you download again.
 
@@ -238,7 +240,7 @@ The rest it wants:
 If you run your own llama.cpp server on this machine, close games and video
 editors before starting it: the weights and the game want the same video memory.
 Keep some room on the disks you index, too, since the search index is written
-beside the folder it describes rather than into the app's own directory.
+inside the folder it describes rather than into the app's own directory.
 
 ## For developers
 

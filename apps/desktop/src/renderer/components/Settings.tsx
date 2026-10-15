@@ -17,7 +17,11 @@
  * The repair that matters most is therefore in both. The app carries no model
  * and runs no engine, so a fresh install cannot answer until it is pointed at a
  * provider — and the card that does it, the Provider card, is where the welcome
- * screen sends somebody on their first run.
+ * screen sends somebody on their first run. Connectors are in both sizes for the
+ * same reason from the other end: the card is where a server is added and
+ * trusted, and a capability nobody can see on the default screen is one nobody
+ * turns on. Only the *grant* differs between them, because handing one connector
+ * to one agent is a switch among the tools.
  *
  * The tool list is drawn in two groups, and the grouping is the point. Twenty
  * checkboxes with no distinction between reading a file and running a shell
@@ -36,6 +40,7 @@ import type {
   AgentModel,
   AgentProfile,
   CapabilityPreset,
+  CatalogConnector,
   CatalogTool,
   CompanionAnswerLength,
   ExperienceMode,
@@ -335,6 +340,39 @@ export function Settings({
    */
   const onByDefault = loaded.catalog.tools.filter((tool) => tool.byDefault);
   const offByDefault = loaded.catalog.tools.filter((tool) => !tool.byDefault);
+  const connectors = loaded.catalog.connectors;
+  const connectorGrant = grantedConnectors(connectors, loaded.profile);
+  /*
+   * Whether the agent's grant has ever been narrowed. `mcpServerIds` absent is
+   * the wide answer — every connector the install switched on — so the switches
+   * come up ticked and the line above them has to say why, or a wall of ticks
+   * reads as a choice nobody made.
+   */
+  const connectorsUnchosen = loaded.profile?.mcpServerIds === undefined;
+
+  const toggleConnector = (connector: CatalogConnector, on: boolean): void => {
+    const profile = loaded.profile;
+    if (profile === undefined) {
+      return;
+    }
+    const next = new Set(connectorGrant);
+    if (on) {
+      next.add(connector.id);
+    } else {
+      next.delete(connector.id);
+    }
+    void change(async () => {
+      await window.marimo.call('profiles.update', {
+        profileId: profile.id,
+        /*
+         * The whole list rather than the one id that moved: the field is what
+         * the agent may reach, and a list holding only the change would say it
+         * may reach nothing else.
+         */
+        patch: {mcpServerIds: [...next]},
+      });
+    });
+  };
 
   return (
     <div className="settings">
@@ -376,7 +414,7 @@ export function Settings({
               <em className="settings-why">
                 {power
                   ? 'Everything is on this page: which service answers, where it is reached, which of its models, and every single thing the agent is allowed to do. Turn it off for the everyday settings.'
-                  : 'The everyday settings, with the tuning left out. Turn this on to choose a service and a model of your own, to connect tools from elsewhere, and to see every ability as its own switch.'}
+                  : 'The everyday settings, with the tuning left out. Turn this on to write an identity for the agent, to tune how it answers, and to see every ability as its own switch.'}
               </em>
             </span>
           </label>
@@ -652,6 +690,38 @@ export function Settings({
                 onChange={toggle}
               />
             ))}
+
+            {/*
+              The third group, and the only one that can be empty — a heading
+              over nothing reads as a feature this build lacks rather than as a
+              step not taken yet, so an install with no connectors gets one line
+              instead.
+            */}
+            {connectors.length === 0 ? (
+              <p className="settings-muted">
+                No connectors are set up on this machine, so there is nothing
+                here to give an agent. The Connectors card below is where one is
+                added, and it appears here as soon as it is saved.
+              </p>
+            ) : (
+              <>
+                <h4 className="settings-group">Connectors</h4>
+                <p className="settings-why">
+                  {connectorsUnchosen
+                    ? 'This agent has never had connectors chosen for it, so it may use every connector that is switched on. Unchecking one is what narrows it.'
+                    : 'The connectors this agent may use. One that is not ticked is not offered to the model at all.'}
+                </p>
+                {connectors.map((connector) => (
+                  <ConnectorRow
+                    key={connector.id}
+                    connector={connector}
+                    on={connectorGrant.has(connector.id)}
+                    disabled={saving}
+                    onChange={toggleConnector}
+                  />
+                ))}
+              </>
+            )}
           </SettingsSection>
         ) : (
           <SettingsSection
@@ -908,17 +978,25 @@ export function Settings({
           power={loaded.settings.experienceMode === 'power'}
         />
 
-        {power && (
-          <Connectors
-            servers={loaded.settings.mcpServers}
-            statuses={loaded.statuses}
-            opened={opened}
-            onToggle={fold}
-            onChange={() => {
-              void load();
-            }}
-          />
-        )}
+        {/*
+          Both sizes, not the power one alone.
+
+          Which connectors exist is not tuning, and it is not an advanced
+          subject: an install where nothing can be reached until a server is
+          added looked like an app with no such feature from the screen a new
+          user lands on. The per-agent grant lives with the agent, above; this
+          card is the install's own list, and it is where a server is dialled.
+        */}
+        <Connectors
+          servers={loaded.settings.mcpServers}
+          statuses={loaded.statuses}
+          encryptionAvailable={loaded.settings.encryptionAvailable}
+          opened={opened}
+          onToggle={fold}
+          onChange={() => {
+            void load();
+          }}
+        />
 
         {/*
           Dream-RSI, power only — see the note at the top of its own file. Last
@@ -1454,6 +1532,83 @@ function ToolRow({
       <span>
         <code className="settings-tool">{tool.name}</code>
         <em className="settings-why">{tool.blurb}</em>
+      </span>
+    </label>
+  );
+}
+
+/**
+ * Which connectors an agent may use, as the switches are drawn.
+ *
+ * No list at all means every connector the install has switched on. That is the
+ * schema's own meaning rather than a convenience: the field narrows a grant, so
+ * its absence has to be the wide answer — read as "none", every agent written
+ * before the field existed would come back able to reach nothing.
+ *
+ * A connector named by the agent's own list stays in this set even when it is
+ * switched off at the install level, because the grant is not the connection:
+ * unplugging a server for a while must not quietly cost the agents that were
+ * allowed it, and the switch drawn beside it is disabled rather than absent so
+ * that fact is visible.
+ */
+function grantedConnectors(
+  connectors: readonly CatalogConnector[],
+  profile: AgentProfile | undefined,
+): Set<string> {
+  const chosen = profile?.mcpServerIds;
+  return new Set(
+    connectors
+      .filter((connector) =>
+        chosen === undefined
+          ? connector.enabled
+          : chosen.includes(connector.id),
+      )
+      .map((connector) => connector.id),
+  );
+}
+
+/**
+ * One connector, as this agent's grant reaches it.
+ *
+ * Drawn like a tool, because it is the same decision: a connector that is not
+ * ticked is not offered to the model. The one that differs is switched off at
+ * the install level, and that one is an unavailable switch rather than a working
+ * one — the app will not dial it, so a control that could be ticked would be a
+ * promise nothing keeps. What it shows is the grant, which survives the server
+ * being unplugged, and the line under it says so.
+ */
+function ConnectorRow({
+  connector,
+  on,
+  disabled,
+  onChange,
+}: {
+  connector: CatalogConnector;
+  on: boolean;
+  disabled: boolean;
+  onChange: (connector: CatalogConnector, on: boolean) => void;
+}): React.JSX.Element {
+  return (
+    <label className="settings-check">
+      <input
+        type="checkbox"
+        checked={on}
+        disabled={disabled || !connector.enabled}
+        onChange={(event) => {
+          onChange(connector, event.target.checked);
+        }}
+      />
+      <span>
+        <code className="settings-tool">{connector.name}</code>
+        <em className="settings-why">
+          {connector.enabled
+            ? connector.blurb
+            : `${connector.blurb} ${
+                on
+                  ? 'Switched off in the Connectors card, so it is not connected — this agent keeps its grant for when it is switched back on.'
+                  : 'Switched off in the Connectors card, so no agent can use it. Turn it on there and it can be given to this one.'
+              }`}
+        </em>
       </span>
     </label>
   );

@@ -13,6 +13,7 @@ import {parseCron} from './cron.js';
 import {mcpServerSchema, mcpServersAreDistinct} from './mcp.js';
 import {
   providerIdSchema,
+  providerKeyStorageSchema,
   providersPatchSchema,
   providersSchema,
 } from './providers.js';
@@ -2744,6 +2745,21 @@ export const agentCallSchemas = {
     target: z.enum(['env', 'header']),
     name: z.string().trim().min(1),
     value: z.string(),
+    /*
+     * Where to keep it, as the form in front of the user says.
+     *
+     * Carried with the write rather than read back off the saved connector, and
+     * that is the whole point: the consent lives in the same draft as the value,
+     * so a user who ticks "let the background runner read this" and then saves
+     * the secret — without saving the connector first — must get the readable
+     * file they just asked for. Reading the stored entry instead would write the
+     * old setting while the screen showed the new one, which is the direction
+     * that leaks rather than the direction that fails.
+     *
+     * Optional so a caller that has nothing to say falls back to the connector's
+     * own entry, and then to the safe answer.
+     */
+    secretStorage: providerKeyStorageSchema.optional(),
   }),
   /*
    * Dials a server without saving it, so somebody can find out that a command is

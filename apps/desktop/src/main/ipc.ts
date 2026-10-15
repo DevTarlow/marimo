@@ -415,6 +415,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
         params.target,
         params.name,
         params.value,
+        params.secretStorage,
       );
       const settings = await agent().settings();
       const server = settings.mcpServers.find(

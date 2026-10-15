@@ -969,6 +969,15 @@ async function main() {
          * it was right when a bundled model meant there was nothing to fix.
          */
         fail('a fresh install cannot reach the provider that answers for it');
+      } else if (!simpleScreen.titles.includes('Connectors')) {
+        /*
+         * The card an install adds an MCP server from belongs to the screen a
+         * first run lands on. It used to be power-only, which made the whole
+         * capability look absent to anybody who never flipped the switch — and
+         * the grant (which agent may use which connector) is the part that
+         * stays in power, because that is one switch among thirty.
+         */
+        fail('a fresh install cannot reach the connectors it has');
       } else if (simpleScreen.titles.length < 4) {
         fail(
           `the simple screen has only ${String(simpleScreen.titles.length)} section(s)`,
@@ -1019,7 +1028,17 @@ async function main() {
         });
       })()`);
         const parsed = value === undefined ? undefined : JSON.parse(value);
-        return parsed?.count >= 8 ? parsed : undefined;
+        /*
+         * Waited on by what the power screen *is*, not by how many sections it
+         * has. The count was the old proxy and it broke the moment a card moved
+         * to both screens: the simple screen reached the threshold and the probe
+         * returned before the switch had taken effect, which read as a switch
+         * that would not stay on. The checkbox and the density are the two
+         * effects this switch has, and neither moves when a card does.
+         */
+        return parsed?.checked === true && parsed?.density === 'compact'
+          ? parsed
+          : undefined;
       });
 
       if (powerScreen.checked !== true) {

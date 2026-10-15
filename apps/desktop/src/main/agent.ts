@@ -45,6 +45,7 @@ import type {
   PendingGate,
   ProfileCatalog,
   ProviderId,
+  ProviderKeyStorage,
   RecallModelStatus,
   RecallPiece,
   RecallQueryResult,
@@ -732,6 +733,7 @@ export class AgentService {
     target: 'env' | 'header',
     name: string,
     value: string,
+    secretStorage?: ProviderKeyStorage,
   ): Promise<void> {
     const settings = await this.runtime.settings();
     const server = settings.mcpServers.find((entry) => entry.id === serverId);
@@ -741,11 +743,15 @@ export class AgentService {
     );
     await store.set(value, {
       /*
-       * The connector's own answer. A draft the window has not saved has no
-       * entry to ask, and gets the safe one: readable only when the document
-       * says so.
+       * The form's answer first, then the saved connector's, then the safe one.
+       *
+       * The order matters and it is not defensive programming: the consent and
+       * the value are fields of one unsaved form, so the write has to obey what
+       * the user is looking at. A draft that has never been saved has no entry to
+       * ask at all, which is the case the last fallback is for.
        */
-      allowPlaintext: server?.secretStorage === 'plaintext',
+      allowPlaintext:
+        (secretStorage ?? server?.secretStorage) === 'plaintext',
     });
   }
 

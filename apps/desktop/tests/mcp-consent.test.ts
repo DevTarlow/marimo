@@ -177,4 +177,36 @@ describe('a connector secret', () => {
     const file = mcpSecretFile(paths, 'mcp:draft', 'header', 'Authorization');
     expect(await readFile(file, 'utf8')).toMatch(/^encrypted:/u);
   });
+
+  /*
+   * And the form's own answer wins over the saved connector's, because they are
+   * two fields of one thing the user is looking at.
+   *
+   * Without this the ordering is a leak rather than a nuisance: untick "let the
+   * runner read this", type the new value, save the secret without saving the
+   * connector, and the file is still written readable while the screen says it
+   * is encrypted. The reverse — ticking it and getting an encrypted file — is
+   * merely a job that fails with a sentence.
+   */
+  it('obeys the form rather than the saved connector', async () => {
+    await service.setMcpServer(connector({secretStorage: 'keychain'}));
+    await service.setMcpSecret(
+      'mcp:notes',
+      'header',
+      'Authorization',
+      'a-token',
+      'plaintext',
+    );
+    expect(await readFile(secretFile(), 'utf8')).toMatch(/^plaintext:/u);
+
+    await service.setMcpServer(connector({secretStorage: 'plaintext'}));
+    await service.setMcpSecret(
+      'mcp:notes',
+      'header',
+      'Authorization',
+      'another-token',
+      'keychain',
+    );
+    expect(await readFile(secretFile(), 'utf8')).toMatch(/^encrypted:/u);
+  });
 });

@@ -346,6 +346,41 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       ),
     }),
 
+    /*
+     * A space's documents.
+     *
+     * Five calls that name a space rather than a path: the runtime resolves the
+     * id through the workspaces document and the service refuses anything that
+     * leaves that folder, so what a window can read or write is exactly what the
+     * user loaded. The list's `notes` are the caps it hit, passed through
+     * untranslated — the window prints them rather than deciding for itself
+     * whether something was dropped.
+     */
+    'docs.list': async (params) =>
+      await (await agent().documentsFor(params.spaceId)).list(),
+
+    'docs.read': async (params) =>
+      await agent().readDocument(params.spaceId, params.path),
+
+    'docs.write': async (params) =>
+      await agent().writeDocument(
+        params.spaceId,
+        params.path,
+        params.text,
+        params.revision,
+      ),
+
+    'docs.create': async (params) =>
+      await agent().createDocument(params.spaceId, params.dir, params.name),
+
+    'docs.saveChat': async (params) =>
+      await agent().saveChatAsDocument(
+        params.profileId,
+        params.sessionId,
+        params.spaceId,
+        params.path,
+      ),
+
     'mcp.set': async (params) => {
       const servers = await agent().setMcpServer(params.server);
       return {servers, statuses: agent().mcpStatuses()};

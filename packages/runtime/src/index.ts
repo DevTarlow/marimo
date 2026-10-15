@@ -329,6 +329,28 @@ export {
 } from './workspaces.js';
 export type {LegacyWorkspaces, WorkspaceStoreOptions} from './workspaces.js';
 
+/*
+ * A Space's documents: the markdown files in the folder it points at.
+ *
+ * The protocol's own `DocumentRead`/`DocumentWrite` are deliberately not
+ * re-exported here — this package already re-exports the *versioned* document
+ * reader's `DocumentRead` from `@marimo/agent`, and two meanings of that name in
+ * one module is a type a caller cannot read.
+ */
+export {
+  DocumentService,
+  MAX_DOCUMENT_BYTES,
+  MAX_DOCUMENTS,
+  MAX_DOCUMENT_DEPTH,
+  renderChatDocument,
+} from './documents.js';
+export type {
+  ChatDocument,
+  ChatMessage,
+  DocumentList,
+  DocumentServiceOptions,
+} from './documents.js';
+
 /* Preferences. */
 export {
   defaultStoredSettings,

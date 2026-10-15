@@ -23,6 +23,7 @@ import type {
 } from '@marimo/protocol';
 
 import {Composer} from './components/Composer.js';
+import {Documents} from './components/Documents.js';
 import {Onboarding} from './components/Onboarding.js';
 import {Participants} from './components/Participants.js';
 import {RecallIntro} from './components/RecallIntro.js';
@@ -33,6 +34,7 @@ import {WorkspaceRail} from './components/WorkspaceRail.js';
 import {useAgent} from './hooks/useAgent.js';
 import {sessionMembers} from './participants.js';
 import {recallOfferOnRead} from './recall-offer.js';
+import {spaceForSession} from './workspace-groups.js';
 
 import './styles/chat.css';
 
@@ -40,6 +42,13 @@ export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [searching, setSearching] = useState(false);
+  /**
+   * Whether the documents drawer is open.
+   *
+   * The window's rather than the drawer's, because the drawer's column only
+   * exists while it is open: the grid that lays the window out reads this.
+   */
+  const [documents, setDocuments] = useState(false);
   /**
    * Whether the recall offer is up.
    *
@@ -194,6 +203,19 @@ export function App(): React.JSX.Element {
    * one is not a choice — with either, the composer draws no picker at all.
    */
   const mentionable = members.filter((member) => member.known);
+
+  /*
+   * The Space the documents drawer is about: the one the open conversation
+   * works in, falling back to the one the rail is on. The same function that
+   * answers the folder printed in the header, so the drawer cannot list a
+   * folder other than the one named directly above its button.
+   */
+  const space = spaceForSession({
+    workspaces: agent.workspaces,
+    sessions: agent.sessions,
+    sessionId: agent.sessionId,
+    activeWorkspaceId: agent.activeWorkspaceId,
+  });
 
   /*
    * Which model will answer, and where that choice lives.
@@ -351,7 +373,7 @@ export function App(): React.JSX.Element {
   }
 
   return (
-    <div className="app">
+    <div className="app" data-documents={documents ? 'open' : undefined}>
       <Search
         open={searching}
         onClose={() => {
@@ -447,6 +469,19 @@ export function App(): React.JSX.Element {
             }}
           >
             Search
+          </button>
+          <button
+            type="button"
+            className="button button-quiet button-small"
+            title="The markdown files in this Space"
+            /* Pressed is open: the same button closes it, which is what the
+               `aria-expanded` says to anything that cannot see the column. */
+            aria-expanded={documents}
+            onClick={() => {
+              setDocuments((shown) => !shown);
+            }}
+          >
+            Documents
           </button>
           {/*
             The dot, and the whole reason the memory review is a feature rather
@@ -622,6 +657,28 @@ export function App(): React.JSX.Element {
           }}
         />
       </main>
+
+      {/*
+        The third column. Rendered after the conversation rather than inside it,
+        because it is a column of the window and not a part of the transcript —
+        and it is the only thing in that column.
+      */}
+      <Documents
+        open={documents}
+        space={space}
+        profileId={agent.profile?.id}
+        sessionId={agent.sessionId}
+        sessionTitle={openSession?.title}
+        /*
+         * Whether there is a conversation to write down. Stored messages rather
+         * than the live turn: `docs.saveChat` reads the conversation from disk,
+         * so a chat whose first turn has not landed yet has nothing to save.
+         */
+        hasConversation={agent.messages.length > 0}
+        onClose={() => {
+          setDocuments(false);
+        }}
+      />
     </div>
   );
 }

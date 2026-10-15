@@ -13,6 +13,7 @@ import type {SessionSummary, Workspace} from '@marimo/protocol';
 import {
   folderForSession,
   groupSessions,
+  spaceForSession,
 } from '../src/renderer/workspace-groups.js';
 
 function workspace(id: string, name: string): Workspace {
@@ -173,6 +174,69 @@ describe('groupSessions', () => {
         activeSessionId: 'empty',
       })[0]?.sessions,
     ).toEqual([empty]);
+  });
+});
+
+describe('spaceForSession', () => {
+  const filed = session({id: 'filed', workspaceId: alpha.id});
+
+  it('answers the open conversation own space', () => {
+    expect(
+      spaceForSession({
+        workspaces: [alpha, beta],
+        sessions: [filed],
+        sessionId: 'filed',
+        activeWorkspaceId: beta.id,
+      }),
+    ).toBe(alpha);
+  });
+
+  it('falls back to the current space for one that has none', () => {
+    expect(
+      spaceForSession({
+        workspaces: [alpha, beta],
+        sessions: [session({id: 'loose'})],
+        sessionId: 'loose',
+        activeWorkspaceId: beta.id,
+      }),
+    ).toBe(beta);
+  });
+
+  it('falls back when the space it named has been forgotten', () => {
+    expect(
+      spaceForSession({
+        workspaces: [alpha],
+        sessions: [session({id: 'orphan', workspaceId: 'ws-deleted'})],
+        sessionId: 'orphan',
+        activeWorkspaceId: alpha.id,
+      }),
+    ).toBe(alpha);
+  });
+
+  it('answers nothing when there are no spaces at all', () => {
+    expect(
+      spaceForSession({
+        workspaces: [],
+        sessions: [session({id: 'anything'})],
+        sessionId: 'anything',
+        activeWorkspaceId: null,
+      }),
+    ).toBeNull();
+  });
+
+  /*
+   * The two are one decision, and this is the test that says so: the header
+   * prints the folder of the space the documents drawer lists, so a disagreement
+   * between them is a drawer showing a folder other than the one named above it.
+   */
+  it('answers the same space whose folder the header prints', () => {
+    const options = {
+      workspaces: [alpha, beta],
+      sessions: [filed],
+      sessionId: 'filed',
+      activeWorkspaceId: beta.id,
+    };
+    expect(folderForSession(options)).toBe(spaceForSession(options)?.path);
   });
 });
 

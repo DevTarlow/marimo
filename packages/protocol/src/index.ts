@@ -1490,6 +1490,56 @@ export interface SessionSummary {
   agentIds?: string[];
 }
 
+/* -------------------------------------------------------------------------- */
+/* Documents                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/** One markdown file a Space holds, as the library lists it. */
+export interface DocumentEntry {
+  /** Relative to the space's root, with forward slashes whatever the platform. */
+  path: string;
+  /** The file's name without its directory, for the row. */
+  name: string;
+  /** The directory it sits in, relative to the root, or `''` at the top. */
+  dir: string;
+  bytes: number;
+  modifiedAt: string;
+}
+
+/**
+ * Which version of a file a write is based on.
+ *
+ * Size and modification time rather than a hash, deliberately: the question a
+ * write has to answer is "has this changed since I read it", and both are facts
+ * the filesystem already keeps. A hash would mean reading the whole file to
+ * *write* it, which is a strange price for a check that only has to be right
+ * about a file an editor held open for a few seconds.
+ */
+export interface DocumentRevision {
+  bytes: number;
+  /** Milliseconds since the epoch, as `stat` reports them. */
+  modifiedAtMs: number;
+}
+
+/** A file's text, and the revision that text belongs to. */
+export interface DocumentRead {
+  path: string;
+  text: string;
+  revision: DocumentRevision;
+}
+
+/**
+ * What a write did.
+ *
+ * A refusal is a *value* rather than an error, because the one case worth naming
+ * — the file changed underneath the editor — is not a failure of anything. It is
+ * a question: the person has a draft and the folder has a newer file, and the
+ * window has to offer a choice rather than an apology.
+ */
+export type DocumentWrite =
+  | {ok: true; revision: DocumentRevision}
+  | {ok: false; conflict: true; revision: DocumentRevision};
+
 export interface ToolCallRecord {
   callId: string;
   tool: string;
@@ -3012,6 +3062,54 @@ export const agentCallSchemas = {
    * something a chat grows into: a conversation that started with one agent is
    * how somebody adds a second.
    */
+  /*
+   * A Space's documents.
+   *
+   * Every one of these names a *space* rather than a path, and that is the whole
+   * safety story: the main process resolves the space to its folder and refuses
+   * anything that leaves it, so a window cannot ask to read or write outside the
+   * folders the user loaded — the same rule the agent's own file tools live
+   * under.
+   */
+  'docs.list': z.object({spaceId: z.string().min(1)}),
+  'docs.read': z.object({
+    spaceId: z.string().min(1),
+    path: z.string().min(1),
+  }),
+  /*
+   * Writes a file, or refuses because the file moved on.
+   *
+   * `revision` is what the caller read, and a mismatch is the refusal above
+   * rather than a silent overwrite: an agent may have written the same file
+   * while a person had it open, and a document is the one thing in this app that
+   * no versioned store is standing behind.
+   */
+  'docs.write': z.object({
+    spaceId: z.string().min(1),
+    path: z.string().min(1),
+    text: z.string(),
+    revision: z.object({bytes: z.number().int(), modifiedAtMs: z.number()}),
+  }),
+  'docs.create': z.object({
+    spaceId: z.string().min(1),
+    /** Where to put it, relative to the root; absent means the root. */
+    dir: z.string().optional(),
+    name: z.string().trim().min(1),
+  }),
+  /*
+   * A conversation, written into a space as a document.
+   *
+   * The half of "documents are the folder's files" that makes the folder useful
+   * for something other than reviewing what the agent wrote: a chat that arrived
+   * somewhere is worth keeping where the work lives, and the file it produces is
+   * an ordinary markdown file that the agent can then edit like any other.
+   */
+  'docs.saveChat': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+    spaceId: z.string().min(1),
+    path: z.string().min(1),
+  }),
   'sessions.setParticipants': z.object({
     profileId: z.string().min(1),
     sessionId: z.string().min(1),
@@ -3143,6 +3241,17 @@ export interface AgentCallResults {
   'providers.fetch': {settings: PublicSettings};
   'sessions.setModel': {session: SessionSummary};
   'sessions.setParticipants': {session: SessionSummary};
+  /*
+   * `notes` for the same reason `recall.query` has one: a library that hit its
+   * cap and said nothing reads as a folder that holds exactly that much. The
+   * window prints them beside the list rather than deciding for itself whether
+   * something was dropped.
+   */
+  'docs.list': {files: DocumentEntry[]; notes: string[]};
+  'docs.read': DocumentRead;
+  'docs.write': DocumentWrite;
+  'docs.create': DocumentRead;
+  'docs.saveChat': DocumentRead;
   'recall.status': RecallModelStatus;
   'recall.install': {started: boolean};
   'recall.cancel': {cancelled: boolean};

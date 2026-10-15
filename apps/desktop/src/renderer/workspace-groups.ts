@@ -80,27 +80,43 @@ export function groupSessions(options: {
 }
 
 /**
- * The directory of the space the open conversation works in, for the header.
+ * The space the open conversation works in.
  *
  * The conversation's own space, or — for one that has none, or whose space has
  * been forgotten — the space a turn would actually fall back to. It answers the
  * same question `workspaceRootFor` does on the main-process side, from the
  * window's copy of the two lists.
+ *
+ * One function rather than two, because two places ask it: the header prints
+ * this space's folder, and the documents drawer lists this space's files. A
+ * second implementation of "which space is this" is how a drawer ends up
+ * listing a different folder from the path printed above it.
  */
+export function spaceForSession(options: {
+  workspaces: readonly Workspace[];
+  sessions: readonly SessionSummary[];
+  sessionId: string | null;
+  activeWorkspaceId: string | null;
+}): Workspace | null {
+  const open = options.sessions.find(
+    (session) => session.id === options.sessionId,
+  );
+  const filed = open?.workspaceId;
+  return (
+    (filed === undefined
+      ? undefined
+      : options.workspaces.find((entry) => entry.id === filed)) ??
+    options.workspaces.find((entry) => entry.id === options.activeWorkspaceId) ??
+    null
+  );
+}
+
+/** That space's directory, for the header. */
 export function folderForSession(options: {
   workspaces: readonly Workspace[];
   sessions: readonly SessionSummary[];
   sessionId: string | null;
   activeWorkspaceId: string | null;
 }): string | null {
-  const open = options.sessions.find(
-    (session) => session.id === options.sessionId,
-  );
-  const filed = open?.workspaceId;
-  const workspace =
-    (filed === undefined
-      ? undefined
-      : options.workspaces.find((entry) => entry.id === filed)) ??
-    options.workspaces.find((entry) => entry.id === options.activeWorkspaceId);
-  return workspace?.path ?? null;
+  return spaceForSession(options)?.path ?? null;
 }

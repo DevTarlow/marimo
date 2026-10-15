@@ -28,6 +28,7 @@ import {
 import type {ProcessLock} from '@marimo/runtime';
 import type {
   AppPaths,
+  DocumentService,
   EmbeddingPart,
   MediaKind,
   SecretRead,
@@ -39,6 +40,9 @@ import type {
   AgentProfile,
   AgentUiEvent,
   CompactResult,
+  DocumentRead,
+  DocumentRevision,
+  DocumentWrite,
   Job,
   McpServer,
   McpStatus,
@@ -1005,6 +1009,56 @@ export class AgentService {
       throw new Error(`Unknown workspace: ${workspaceId}`);
     }
     return workspace;
+  }
+
+  /**
+   * A space's documents.
+   *
+   * The window names a space and never a path: the runtime resolves the id and
+   * the service refuses anything that leaves the folder, so the five `docs.*`
+   * calls cannot reach a file the user did not load.
+   */
+  async documentsFor(spaceId: string): Promise<DocumentService> {
+    return await this.runtime.documentsFor(spaceId);
+  }
+
+  /** One document's text, and the revision a write has to be based on. */
+  async readDocument(spaceId: string, path: string): Promise<DocumentRead> {
+    return await this.runtime.readDocument(spaceId, path);
+  }
+
+  /** Writes a document, or answers that it moved on since it was read. */
+  async writeDocument(
+    spaceId: string,
+    path: string,
+    text: string,
+    revision: DocumentRevision,
+  ): Promise<DocumentWrite> {
+    return await this.runtime.writeDocument(spaceId, path, text, revision);
+  }
+
+  /** A new, empty document in one of a space's folders. */
+  async createDocument(
+    spaceId: string,
+    dir: string | undefined,
+    name: string,
+  ): Promise<DocumentRead> {
+    return await this.runtime.createDocument(spaceId, dir, name);
+  }
+
+  /** A conversation written into a space as a document. */
+  async saveChatAsDocument(
+    profileId: string,
+    sessionId: string,
+    spaceId: string,
+    path: string,
+  ): Promise<DocumentRead> {
+    return await this.runtime.saveChatAsDocument(
+      profileId,
+      sessionId,
+      spaceId,
+      path,
+    );
   }
 
   /** Re-files a conversation, or unfiles it with `null`. */

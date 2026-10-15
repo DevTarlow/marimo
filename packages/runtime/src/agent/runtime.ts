@@ -56,6 +56,9 @@ import type {
   CatalogEntry,
   CompactResult,
   DismissedMemory,
+  DocumentRead,
+  DocumentRevision,
+  DocumentWrite,
   FeedbackEntry,
   McpServer,
   MemoryProposal,
@@ -75,6 +78,7 @@ import type {
 import {reviewDelay} from '@marimo/agent';
 
 import type {AppPaths} from '../paths.js';
+import {DocumentService} from '../documents.js';
 import {DreamStore} from '../dream-store.js';
 import {ProfileStore} from '../profiles.js';
 import {FeedbackStore} from '../feedback.js';
@@ -892,6 +896,107 @@ export class AgentRuntime {
     const host = await this.ensureHost(profileId);
     const filed = await host.sessionWorkspaceId(sessionId);
     return workspaceRootFor(await this.workspaceStore.load(), filed);
+  }
+
+  /**
+   * The documents of one space, for the library and the editor.
+   *
+   * The id is resolved through the workspaces document here, and that is the
+   * whole safety story `docs.*` rests on: a window names a space and never a
+   * path, so the only files it can reach are the ones inside a folder the user
+   * loaded. An id nobody has is a sentence rather than an empty library — a
+   * removed space's documents are not "none".
+   *
+   * A fresh service per call, and no cache: it holds nothing but the root, and
+   * one that remembered a folder would be the thing that goes stale when a space
+   * is moved.
+   */
+  async documentsFor(spaceId: string): Promise<DocumentService> {
+    const workspace = await this.workspaceStore.byId(spaceId);
+    if (workspace === undefined) {
+      throw new Error(
+        `There is no space called "${spaceId}". It may have been removed from the list.`,
+      );
+    }
+    return new DocumentService({root: workspace.path});
+  }
+
+  /** One document's text, and the revision a write has to be based on. */
+  async readDocument(spaceId: string, path: string): Promise<DocumentRead> {
+    return await (await this.documentsFor(spaceId)).read(path);
+  }
+
+  /** Writes a document, or answers that it moved on since it was read. */
+  async writeDocument(
+    spaceId: string,
+    path: string,
+    text: string,
+    revision: DocumentRevision,
+  ): Promise<DocumentWrite> {
+    return await (await this.documentsFor(spaceId)).write(path, text, revision);
+  }
+
+  /** A new, empty document in one of a space's folders. */
+  async createDocument(
+    spaceId: string,
+    dir: string | undefined,
+    name: string,
+  ): Promise<DocumentRead> {
+    return await (await this.documentsFor(spaceId)).create(dir, name);
+  }
+
+  /**
+   * Writes a conversation into a space as a document.
+   *
+   * The messages come from this runtime's own `transcript` and the title from
+   * the conversation index, rather than from a second reader of the session
+   * files — so what the window drew and what the document says are the same
+   * projection. The *authors* are resolved here too: a helper's words are tagged
+   * with the agent that wrote them, and turning that id into the name the user
+   * sees is a question for the profile store.
+   */
+  async saveChatAsDocument(
+    profileId: string,
+    sessionId: string,
+    spaceId: string,
+    path: string,
+  ): Promise<DocumentRead> {
+    const documents = await this.documentsFor(spaceId);
+    const profile = await this.profileFor(profileId);
+    if (profile === undefined) {
+      throw new Error(`There is no agent called "${profileId}".`);
+    }
+    /*
+     * The index rather than `conversationFor`, which would read every event of
+     * the conversation a second time to answer one question the index already
+     * holds. A conversation the index does not have is a stale id, and a
+     * document made from it would be a stub in somebody's folder.
+     */
+    const summary = (await this.listSessions(profileId)).find(
+      (entry) => entry.id === sessionId,
+    );
+    if (summary === undefined) {
+      throw new Error(`There is no conversation called "${sessionId}".`);
+    }
+    const {messages} = await this.transcript(profileId, sessionId);
+    const names = new Map(
+      (await this.profiles()).map((entry) => [entry.id, entry.name]),
+    );
+    /*
+     * The lead first: the conversation's own choice of who answers a message
+     * nobody addressed, which is the agent that owns it unless a group chat
+     * named somebody else first.
+     */
+    const leadId = summary.agentIds?.[0] ?? profileId;
+
+    return await documents.saveChat(path, {
+      title: summary.title,
+      savedAt: new Date(),
+      messages: messages.map((message) => ({
+        author: authorOf(message, names.get(leadId) ?? profile.name, names),
+        text: message.text,
+      })),
+    });
   }
 
   /**
@@ -1723,6 +1828,29 @@ export class AgentRuntime {
     this.applied.set(profileId, signature);
     host.setMcpServers(sources);
   }
+}
+
+/**
+ * Who a message is written under in a saved document.
+ *
+ * A helper's words are tagged with the agent that wrote them and the lead's
+ * carry no tag at all, so the tag wins where there is one and the lead answers
+ * otherwise. An id no profile answers to is written as the id: a document that
+ * says `a_9f3` is still true, where putting those words under the lead's name
+ * would be a quotation from somebody who never said them.
+ */
+function authorOf(
+  message: TranscriptMessage,
+  lead: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  if (message.role === 'user') {
+    return 'You';
+  }
+  if (message.agentId === undefined) {
+    return lead;
+  }
+  return names.get(message.agentId) ?? message.agentId;
 }
 
 /**

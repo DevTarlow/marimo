@@ -872,6 +872,57 @@ async function main() {
       }
 
       /*
+       * The documents drawer, which is the other half of "a Space owns things":
+       * the folder's markdown files, listed and editable in the window. What is
+       * asserted here is only that the surface exists and opens — the library's
+       * contents depend on the folder a smoke run happens to have loaded, and the
+       * rules that matter (the path guard, the revision conflict) are unit tests
+       * with a real filesystem behind them.
+       */
+      const documents = await until('the documents button to appear', async () => {
+        const value = await evaluate(`(() => {
+          const button = [...document.querySelectorAll('button')].find(
+            (entry) => (entry.textContent ?? '').trim() === 'Documents',
+          );
+          return button === undefined ? undefined : JSON.stringify({found: true});
+        })()`);
+        return value === undefined ? undefined : JSON.parse(value);
+      });
+      if (documents.found !== true) {
+        fail('the window has no way into a space\u2019s documents');
+      } else {
+        await evaluate(`(() => {
+          const button = [...document.querySelectorAll('button')].find(
+            (entry) => (entry.textContent ?? '').trim() === 'Documents',
+          );
+          button?.click();
+        })()`);
+        const opened = await until('the drawer to open', async () => {
+          const value = await evaluate(`(() => {
+            const panel = document.querySelector('.documents');
+            return panel === null
+              ? undefined
+              : JSON.stringify({open: true, text: (panel.textContent ?? '').slice(0, 400)});
+          })()`);
+          return value === undefined ? undefined : JSON.parse(value);
+        });
+        if (opened.open !== true) {
+          fail('the documents drawer did not open');
+        } else if (!/space|document/i.test(opened.text)) {
+          fail(`the drawer says nothing about what it is: ${opened.text}`);
+        } else {
+          ok('the documents drawer opens onto the space it is about');
+        }
+        await evaluate(`(() => {
+          const button = [...document.querySelectorAll('button')].find(
+            (entry) => (entry.textContent ?? '').trim() === 'Documents',
+          );
+          button?.click();
+        })()`);
+      }
+
+
+      /*
        * The compact command, run the way a person runs it.
        *
        * On this machine the app carries a model and the weights are not in the

@@ -1370,6 +1370,180 @@ describe('the model a turn answers with', () => {
 });
 
 /*
+ * Who is in a conversation, and who answers when somebody is addressed.
+ *
+ * The membership lives on the conversation's index entry, so what is tested here
+ * is the write, the read, the ownership rule every other conversation write
+ * follows, and the routing an `@` produces. The turn's *answer* needs a provider
+ * and is tested in the agent package, against a loopback server; what this file
+ * can prove without one is that the refusal happens before a request and that the
+ * agent addressed is the agent resolved.
+ */
+describe('who is in a conversation', () => {
+  let dir: string;
+  let paths: AppPaths;
+  let lead: string;
+  let helper: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-participants-'));
+    paths = resolveAppPaths(dir);
+    await seedWorkspaces(paths, dir);
+    const profiles = new ProfileStore({
+      file: paths.profiles,
+      defaultIdentity: '',
+      defaultTools: [],
+      defaultSkills: [],
+    });
+    await profiles.load();
+    lead = (await profiles.activeProfile()).id;
+    helper = (await profiles.create('Researcher')).id;
+    // Back to the lead: creating a profile selects it, and these tests are about
+    // a conversation the lead owns with somebody else in it.
+    await profiles.select(lead);
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function runtime(
+    options: Partial<Omit<AgentRuntimeOptions, 'paths'>> = {},
+  ): AgentRuntime {
+    return new AgentRuntime({paths, readSecret: keyPresent, ...options});
+  }
+
+  it('round-trips the members, lead first', async () => {
+    const agent = runtime();
+    const session = await agent.createSession(lead);
+    const id = session?.id ?? '';
+
+    const updated = await agent.setParticipants(lead, id, [lead, helper]);
+
+    expect(updated.agentIds).toEqual([lead, helper]);
+    expect(await agent.sessionParticipants(lead, id)).toEqual([lead, helper]);
+    // And through a fresh runtime, which is what a reloaded window is.
+    expect(await runtime().sessionParticipants(lead, id)).toEqual([
+      lead,
+      helper,
+    ]);
+  });
+
+  /*
+   * Absent rather than an empty array: "just the agent that owns this chat" is
+   * the state every conversation starts in, and a sentinel would be a second way
+   * to say it that every reader would have to know about.
+   */
+  it('means "just the owner" when the list is empty', async () => {
+    const agent = runtime();
+    const session = await agent.createSession(lead);
+    const id = session?.id ?? '';
+    await agent.setParticipants(lead, id, [lead, helper]);
+
+    const cleared = await agent.setParticipants(lead, id, []);
+
+    expect(cleared.agentIds).toBeUndefined();
+    expect(await agent.sessionParticipants(lead, id)).toBeUndefined();
+  });
+
+  /*
+   * The rule every other path that touches a conversation follows, so a window
+   * cannot add itself to another agent's chat by guessing at an id.
+   */
+  it('refuses a conversation another agent owns', async () => {
+    const agent = runtime();
+    const session = await agent.createSession(lead);
+    const id = session?.id ?? '';
+
+    await expect(
+      agent.setParticipants(helper, id, [helper]),
+    ).rejects.toThrow(/Unknown session/u);
+    expect(await agent.sessionParticipants(lead, id)).toBeUndefined();
+  });
+
+  it('refuses a conversation that does not exist', async () => {
+    await expect(
+      runtime().setParticipants(lead, 'no-such-session', [lead]),
+    ).rejects.toThrow(/Unknown session/u);
+  });
+
+  /*
+   * An id that is not a participant is refused rather than quietly answered by
+   * the lead: a message that looks delivered and is not is worse than a refusal.
+   */
+  it('refuses a message addressed to somebody who is not in it', async () => {
+    const agent = runtime();
+    const session = await agent.createSession(lead);
+    const id = session?.id ?? '';
+
+    const events = [];
+    for await (const event of agent.run(lead, id, 'hello', undefined, helper)) {
+      events.push(event);
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({type: 'turn.failed', sessionId: id});
+    if (events[0]?.type === 'turn.failed') {
+      expect(events[0].message).toContain('Researcher');
+      expect(events[0].message).toMatch(/is not in this conversation/u);
+      expect(events[0].message).toContain('@');
+    }
+  });
+
+  it('refuses a message addressed to an agent this install does not have', async () => {
+    const agent = runtime();
+    const session = await agent.createSession(lead);
+    const id = session?.id ?? '';
+    // A member the install has since forgotten: the id is in the conversation, and
+    // there is no profile behind it.
+    await agent.setParticipants(lead, id, [lead, 'ghost']);
+
+    const events = [];
+    for await (const event of agent.run(lead, id, 'hello', undefined, 'ghost')) {
+      events.push(event);
+    }
+
+    expect(events[0]).toMatchObject({type: 'turn.failed'});
+    if (events[0]?.type === 'turn.failed') {
+      expect(events[0].message).toContain('"ghost"');
+    }
+  });
+
+  /*
+   * The routing itself, proved by *which agent's* configuration it resolved: the
+   * addressed one has no key of its own, so the turn is refused with that agent's
+   * sentence rather than the lead's. A turn that quietly answered as the lead
+   * would fail on the lead's key and read as a working install.
+   */
+  it('answers as the agent that was addressed', async () => {
+    const asked: ProviderId[] = [];
+    const agent = runtime({
+      readSecret: async (provider) => {
+        asked.push(provider);
+        return {state: 'present', value: 'test-key'};
+      },
+    });
+    const session = await agent.createSession(lead);
+    const id = session?.id ?? '';
+    await agent.setParticipants(lead, id, [lead, helper]);
+    // The addressed agent answers with a service this install has no key for.
+    await agent.updateProfile(helper, {
+      model: {provider: 'gemini', model: 'gemini-3.1-pro'},
+    });
+
+    const events = [];
+    for await (const event of agent.run(lead, id, 'hello', undefined, helper)) {
+      events.push(event);
+    }
+
+    // Resolved: the helper's own provider was asked for its key. The turn then
+    // fails at the provider, which is the next thing after this file's business.
+    expect(asked).toContain('gemini');
+    expect(events.some((event) => event.type === 'turn.failed')).toBe(true);
+  });
+});
+
+/*
  * Recall, as the runtime sees it: a setting, a service, and a process.
  *
  * The runtime does not own the engine — the window does — so what is tested here

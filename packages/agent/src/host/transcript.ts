@@ -15,9 +15,11 @@
  */
 import {isCompactedEvent, REQUEST_CONFIRMATION_FUNCTION_CALL_NAME} from '@google/adk';
 
+import {MAIN_AGENT_NAME} from '@marimo/protocol';
 import type {TranscriptMessage, ToolCallRecord} from '@marimo/protocol';
 
 import type {AdkEvent} from '../sessions/file-session-service.js';
+import {agentIdFor} from './agent-host.js';
 import {activeEvents} from './compaction.js';
 
 const MAX_RECORDED_RESULT = 4_000;
@@ -69,6 +71,13 @@ export function projectTranscript(events: AdkEvent[]): TranscriptMessage[] {
 function project(events: readonly AdkEvent[]): TranscriptMessage[] {
   const messages: TranscriptMessage[] = [];
   let assistant: TranscriptMessage | undefined;
+  /*
+   * Which agent the open bubble belongs to — the conversation's own, or a helper
+   * it asked. A change of author closes the bubble, because two agents' words in
+   * one bubble read as one answer from one mind, and the user has no way to tell
+   * which of them said the thing they are looking at.
+   */
+  let author: string | undefined;
 
   for (const event of events) {
     const parts = event.content?.parts ?? [];
@@ -86,6 +95,7 @@ function project(events: readonly AdkEvent[]): TranscriptMessage[] {
         // The next agent-authored event opens a fresh assistant bubble rather
         // than appending to the previous one.
         assistant = undefined;
+        author = undefined;
       }
       continue;
     }
@@ -94,13 +104,30 @@ function project(events: readonly AdkEvent[]): TranscriptMessage[] {
       continue;
     }
 
-    if (assistant === undefined) {
+    /*
+     * Who wrote this, where the conversation's own agent is `undefined`. Every
+     * event the host's own runner produces carries one fixed name, so anything
+     * else in this log is another agent — which is the check that matters: a
+     * helper whose name nobody recorded is still attributed rather than folded
+     * into the agent's voice.
+     */
+    const from = helperId(event.author);
+
+    /*
+     * A bubble belongs to one speaker, so a change of speaker starts a new one.
+     * That is the whole of the attribution: without it a helper's words and the
+     * agent's merge, and the user reads one answer from one mind where there
+     * were two.
+     */
+    if (assistant === undefined || from !== author) {
       assistant = {
         id: event.id || `event-${messages.length}`,
         role: 'assistant',
+        ...(from === undefined ? {} : {agentId: from}),
         text: '',
         createdAt: timestampOf(event),
       };
+      author = from;
       if (messages[messages.length - 1] !== assistant) {
         messages.push(assistant);
       }
@@ -275,4 +302,21 @@ function truncate(value: string): string {
   return value.length > MAX_RECORDED_RESULT
     ? `${value.slice(0, MAX_RECORDED_RESULT)}\n… [truncated]`
     : value;
+}
+
+/**
+ * The agent an event came from, or `undefined` for the conversation's own.
+ *
+ * `author` is the ADK agent's name. The conversation's own agent is always built
+ * under one fixed name, so anything else here was written by a helper the lead
+ * asked — and a helper is built from the profile it was resolved to, under that
+ * profile's id encoded into something ADK accepts as an identifier. Decoding it
+ * is what lets the window label a bubble with the agent the user chose rather
+ * than with a name the runtime invented.
+ */
+function helperId(author: string | undefined): string | undefined {
+  if (author === undefined || author === MAIN_AGENT_NAME) {
+    return undefined;
+  }
+  return agentIdFor(author);
 }

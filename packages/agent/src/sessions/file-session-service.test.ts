@@ -456,6 +456,79 @@ describe('FileSessionService', () => {
     expect(await service.getIndex()).toEqual([]);
   });
 
+  describe('who is in a conversation', () => {
+    it('round-trips the members, lead first', async () => {
+      await newSession('group');
+
+      const entry = await service.setSessionParticipants('group', [
+        'profile-lead',
+        'profile-helper',
+      ]);
+
+      expect(entry?.agentIds).toEqual(['profile-lead', 'profile-helper']);
+      // Through a second read, which is what the window does when it reloads.
+      expect((await service.getIndexEntry('group'))?.agentIds).toEqual([
+        'profile-lead',
+        'profile-helper',
+      ]);
+    });
+
+    /*
+     * Absent rather than an empty array, exactly as the model and the folder
+     * are: "just the agent that owns this chat" is the state every conversation
+     * starts in, and a sentinel would be a second way to say it.
+     */
+    it('removes the field when the list is empty', async () => {
+      await newSession('group');
+      await service.setSessionParticipants('group', ['profile-lead']);
+
+      const entry = await service.setSessionParticipants('group', []);
+
+      expect(entry?.agentIds).toBeUndefined();
+      expect(Object.hasOwn(entry ?? {}, 'agentIds')).toBe(false);
+    });
+
+    /*
+     * The failure the schema declaration exists to prevent: a field that parses
+     * through `.passthrough()` and is then dropped by the next write, so a group
+     * chat would quietly lose its members the first time anything else about it
+     * changed.
+     */
+    it('survives another write to the same conversation', async () => {
+      await newSession('group');
+      await service.setSessionParticipants('group', ['profile-lead']);
+
+      await service.renameSession('group', 'Release prep');
+
+      const entry = await service.getIndexEntry('group');
+      expect(entry?.title).toBe('Release prep');
+      expect(entry?.agentIds).toEqual(['profile-lead']);
+    });
+
+    it('leaves the timestamps alone', async () => {
+      await newSession('group');
+      const before = await service.getIndexEntry('group');
+
+      await service.setSessionParticipants('group', ['profile-lead']);
+
+      const after = await service.getIndexEntry('group');
+      expect(after?.updatedAt).toBe(before?.updatedAt);
+      expect(after?.createdAt).toBe(before?.createdAt);
+    });
+
+    it('reports an unknown conversation rather than inventing an entry', async () => {
+      expect(
+        await service.setSessionParticipants('no-such-session', ['profile-a']),
+      ).toBeUndefined();
+      expect(await service.getIndex()).toEqual([]);
+    });
+
+    it('reads a conversation written before the field existed', async () => {
+      await newSession('old');
+      expect((await service.getIndexEntry('old'))?.agentIds).toBeUndefined();
+    });
+  });
+
   describe('renaming a conversation', () => {
     it('replaces the title the first message produced', async () => {
       const session = await newSession();

@@ -25,7 +25,8 @@ import type {McpToolsetSource} from '../tools/index.js';
 import type {JobService} from '../tools/job-tools.js';
 import type {RecallAnswer, RecallLookup} from '../tools/recall-tools.js';
 import type {WebSearchProvider} from '../tools/web-search-tool.js';
-import {AgentHost} from './agent-host.js';
+import {AgentHost, agentNameFor} from './agent-host.js';
+import {projectTranscript} from './transcript.js';
 
 interface RecordedRequest {
   messages: Array<Record<string, unknown>>;
@@ -2260,3 +2261,327 @@ describe('AgentHost', () => {
   });
 });
 
+
+/*
+ * Handing work to a named agent, end to end.
+ *
+ * Real ADK, real session store, a loopback server standing in for the provider —
+ * the same harness the rest of this file uses, with a second agent on the other
+ * side of a tool call. What these tests are for is the part no unit test can
+ * reach: that the helper's words land in the parent's conversation attributed to
+ * the helper, that its approval card is answerable there, and that it cannot ask
+ * for a helper of its own.
+ */
+describe('a conversation with a helper agent', () => {
+  let workDir: string;
+  let fake: FakeDeepSeek | undefined;
+  const openHosts: AgentHost[] = [];
+
+  const RESEARCHER = {
+    id: 'researcher',
+    name: 'Researcher',
+    identity: 'You are the Researcher, a test helper.',
+  };
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(process.cwd(), '.marimo-delegate-'));
+  });
+
+  afterEach(async () => {
+    for (const host of openHosts.splice(0)) {
+      host.dispose();
+    }
+    await fake?.close();
+    fake = undefined;
+    await rm(workDir, {recursive: true, force: true});
+  });
+
+  function config(baseUrl: string, profileId?: string): AgentConfig {
+    return {
+      baseUrl,
+      model: 'test-model',
+      provider: 'deepseek',
+      apiKey: '',
+      temperature: 0,
+      systemPrompt: TEST_IDENTITY,
+      workspaceRoot: workDir,
+      allowPrivateNetworkFetch: false,
+      ...(profileId === undefined ? {} : {profileId}),
+    };
+  }
+
+  /** The seam, resolving one name and refusing everything else. */
+  function seam(baseUrl: string) {
+    return {
+      resolve: async (request: {agent: string; space?: string}) => {
+        if (request.agent.trim().toLowerCase() !== 'researcher') {
+          return {
+            problem:
+              `There is no agent called "${request.agent}" on this computer. ` +
+              'The ones that exist are "Researcher".',
+          };
+        }
+        if (request.space !== undefined && request.space !== 'Website') {
+          return {
+            problem:
+              `There is no Space called "${request.space}" on this computer. ` +
+              'The ones that exist are "Website".',
+          };
+        }
+        return {
+          profile: {...RESEARCHER, enabledTools: [], enabledSkills: []},
+          config: {
+            ...config(baseUrl, RESEARCHER.id),
+            systemPrompt: RESEARCHER.identity,
+          },
+        };
+      },
+    };
+  }
+
+  function askCall(id: string, task = 'read the logs') {
+    return toolCallChunks(id, 'ask_agent', {agent: 'Researcher', task});
+  }
+
+  /*
+   * Whether this request is the helper's.
+   *
+   * The system prompt is the mark, because it is the one thing the two agents do
+   * not share: each carries its own identity. Reading it here also means the
+   * assertion below is about the helper's prompt, which is the fact under test.
+   */
+  function isHelper(messages: Array<Record<string, unknown>>): boolean {
+    return String(
+      messages.find((message) => message['role'] === 'system')?.['content'] ?? '',
+    ).includes(`internal name is "${agentNameFor(RESEARCHER.id)}"`);
+  }
+
+  function createTestHost(baseUrl: string): AgentHost {
+    const host = new AgentHost({
+      sessionsDir: join(workDir, 'sessions'),
+      config: config(baseUrl),
+      delegate: seam(baseUrl),
+      delegateLimits: {timeoutMs: 5_000},
+    });
+    host.init();
+    openHosts.push(host);
+    return host;
+  }
+
+  it('starts a helper, keeps its words, and splits the bubbles by author', async () => {
+    fake = await startFakeDeepSeek((messages) =>
+      isHelper(messages)
+        ? textChunks('The logs show three warnings.')
+        : messages.some((message) => message['role'] === 'tool')
+          ? textChunks('Researcher found three warnings.')
+          : askCall('call_ask'),
+    );
+
+    const host = createTestHost(fake.baseUrl);
+    const session = (await host.createSession()).id;
+    const events = await collect(host.run(session, 'look into the logs'));
+
+    expect(typesOf(events)).not.toContain('turn.failed');
+
+    /*
+     * The helper sees the task and nothing else. `includeContents: 'none'` is
+     * what makes the tool's own promise true — it is told it cannot see this
+     * conversation — and the failure it prevents is a large prompt for a small
+     * task, made of an earlier conversation the user never meant to hand over.
+     */
+    const helperRequest = fake.requests.find((request) =>
+      isHelper(request.messages),
+    );
+    expect(helperRequest).toBeDefined();
+    expect(JSON.stringify(helperRequest?.messages)).not.toContain(
+      'look into the logs',
+    );
+    // Its own identity, rather than the lead's.
+    expect(
+      helperRequest?.messages.find(
+        (message) => message['role'] === 'system',
+      )?.['content'],
+    ).toContain(RESEARCHER.identity);
+
+    const messages = projectTranscript(await host.eventsFor(session));
+    const helper = messages.find((message) => message.agentId === RESEARCHER.id);
+    expect(helper?.text).toBe('The logs show three warnings.');
+    // The lead's summary is its own bubble, in the lead's own voice.
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: 'assistant',
+      text: 'Researcher found three warnings.',
+    });
+    expect(messages[messages.length - 1]?.agentId).toBeUndefined();
+  });
+
+  /*
+   * Depth one, by construction rather than by a number: the helper is built by
+   * the same method as the lead, and the dependency that offers `ask_agent` is
+   * only passed for the lead. A helper that could ask for a helper would be an
+   * unbounded tree of them, each spending the user's money.
+   */
+  it('does not offer the helper a way to ask for a helper', async () => {
+    fake = await startFakeDeepSeek((messages) =>
+      isHelper(messages) ? textChunks('Done.') : askCall('call_ask'),
+    );
+
+    const host = createTestHost(fake.baseUrl);
+    const session = (await host.createSession()).id;
+    await collect(host.run(session, 'look into the logs'));
+
+    const declared = (request: RecordedRequest | undefined): string[] =>
+      ((request?.body['tools'] ?? []) as Array<{
+        function?: {name?: string};
+      }>).map((tool) => tool.function?.name ?? '');
+
+    const lead = fake.requests[0];
+    const helper = fake.requests.find((request) => isHelper(request.messages));
+    expect(declared(lead)).toContain('ask_agent');
+    expect(helper).toBeDefined();
+    expect(declared(helper)).not.toContain('ask_agent');
+  });
+
+  it('hands the model a sentence when the agent it named does not exist', async () => {
+    fake = await startFakeDeepSeek((messages) =>
+      messages.some((message) => message['role'] === 'tool')
+        ? textChunks('There is no such agent.')
+        : toolCallChunks('call_ask', 'ask_agent', {
+            agent: 'Ghostwriter',
+            task: 'write it',
+          }),
+    );
+
+    const host = createTestHost(fake.baseUrl);
+    const session = (await host.createSession()).id;
+    const events = await collect(host.run(session, 'get it written'));
+
+    // The refusal is the tool's answer, so the turn finishes rather than failing.
+    expect(typesOf(events)).not.toContain('turn.failed');
+    const result = events
+      .filter((event) => event.type === 'tool.finished')
+      .map((event) => (event.type === 'tool.finished' ? event.result : ''))
+      .join('\n');
+    expect(result).toContain('There is no agent called "Ghostwriter"');
+    expect(result).toContain('"Researcher"');
+    // And no helper ran: two requests, both the lead's.
+    expect(fake.requests).toHaveLength(2);
+    expect(fake.requests.every((request) => !isHelper(request.messages))).toBe(
+      true,
+    );
+  });
+
+  it('refuses a space that does not exist, in words', async () => {
+    fake = await startFakeDeepSeek((messages) =>
+      messages.some((message) => message['role'] === 'tool')
+        ? textChunks('Then I cannot put it there.')
+        : toolCallChunks('call_ask', 'ask_agent', {
+            agent: 'Researcher',
+            task: 'write it',
+            space: 'Nowhere',
+          }),
+    );
+
+    const host = createTestHost(fake.baseUrl);
+    const session = (await host.createSession()).id;
+    const events = await collect(host.run(session, 'write it down'));
+
+    const result = events
+      .filter((event) => event.type === 'tool.finished')
+      .map((event) => (event.type === 'tool.finished' ? event.result : ''))
+      .join('\n');
+    expect(result).toContain('There is no Space called "Nowhere"');
+    expect(result).toContain('"Website"');
+  });
+
+  /*
+   * The round trip the whole design exists for: the helper asks to change
+   * something, a card is raised in the *parent's* conversation because both share
+   * one session, the user clicks it, and the helper carries on from where it
+   * stopped — finishing in the turn that click started.
+   *
+   * Two turns, and the shape of each is the point. The first parks: the helper
+   * stops at its gate, and the call raises a card of its own through
+   * `requestConfirmation`, so the conversation ends with nothing dangling for the
+   * provider to refuse. The second is the click, which resumes this tool; it
+   * re-enters the helper with the decision and returns the helper's answer.
+   */
+  it('raises the helper’s approval in the conversation and finishes it', async () => {
+    fake = await startFakeDeepSeek((messages) => {
+      if (!isHelper(messages)) {
+        // The lead's second turn is the one carrying the tool result.
+        return messages.some((message) => message['role'] === 'tool')
+          ? textChunks('All clear.')
+          : askCall('call_ask', 'clear the logs');
+      }
+      /*
+       * The helper's runs are told apart by what they carry, not by what the
+       * model said: the first is the task, and the second is the confirmation
+       * answering the gate — which is the only thing in it, because a resume
+       * repeats nothing.
+       */
+      const resumed = messages.some(
+        (message) =>
+          message['role'] === 'user' &&
+          JSON.stringify(message['content'] ?? '').includes(
+            'The user approved',
+          ),
+      );
+      return resumed
+        ? textChunks('Cleared.')
+        : toolCallChunks('call_shell', 'run_shell', {
+            command: 'rm -rf the logs',
+          });
+    });
+
+    const host = createTestHost(fake.baseUrl);
+    const session = (await host.createSession()).id;
+
+    const parked = await collect(host.run(session, 'clear the logs'));
+    expect(typesOf(parked)).not.toContain('turn.failed');
+
+    /*
+     * One card the window draws, raised by the parent's own call, naming what the
+     * helper wants. The helper's own gate is stored beside it — the child's runner
+     * is what resumes from that one — but it is the same decision, and the window
+     * groups the two under one stream.
+     */
+    const card = parked.find((event) => event.type === 'approval.request');
+    expect(card).toMatchObject({tool: 'ask_agent'});
+    expect(
+      card?.type === 'approval.request' ? card.hint : '',
+    ).toContain('Researcher');
+    expect(
+      card?.type === 'approval.request' ? card.hint : '',
+    ).toContain('run_shell');
+
+    /*
+     * The click. Resuming is a new turn carrying the confirmation, exactly as it
+     * is for any other gated call — which is why this is `approve` and not a
+     * second `run`.
+     */
+    const resumed = await collect(
+      host.approve({
+        sessionId: session,
+        callId: card?.type === 'approval.request' ? card.callId : '',
+        confirmed: true,
+      }),
+    );
+
+    const resumedResult = resumed
+      .filter((event) => event.type === 'tool.finished')
+      .map((event) => (event.type === 'tool.finished' ? event.result : ''))
+      .join('\n');
+    expect(resumedResult).toContain('Cleared.');
+
+    // Every word the helper wrote is in the transcript, attributed to it — and
+    // the lead's own summary is not.
+    const messages = projectTranscript(await host.eventsFor(session));
+    expect(
+      messages.some(
+        (message) =>
+          message.agentId === RESEARCHER.id && message.text.includes('Cleared.'),
+      ),
+    ).toBe(true);
+    expect(messages[messages.length - 1]?.agentId).toBeUndefined();
+  });
+});

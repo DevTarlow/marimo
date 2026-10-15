@@ -1,5 +1,10 @@
 export {AgentHost, pendingGatesIn} from './host/agent-host.js';
-export type {AgentHostOptions, ApproveParams} from './host/agent-host.js';
+export type {
+  AgentHostOptions,
+  ApproveParams,
+  DelegationResult,
+  DelegationSeam,
+} from './host/agent-host.js';
 /*
  * `PendingGate` is re-exported from the contract rather than declared here: it
  * is what the window draws a card from, so the protocol owns the shape and this

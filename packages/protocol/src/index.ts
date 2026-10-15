@@ -1474,6 +1474,20 @@ export interface SessionSummary {
    * with the big model" is a decision about a question, not about a bot.
    */
   model?: AgentModel;
+  /**
+   * The agents in this conversation, the lead first.
+   *
+   * Absent is a chat with one agent — the one that owns it — which is every
+   * conversation that existed before this field and most of them after it. A
+   * group chat names its members here, and the first is the lead: the one that
+   * answers a message nobody addressed, and the one whose model and identity the
+   * conversation's own bubbles are written with.
+   *
+   * A list of ids rather than full agents, because an agent is a document that
+   * can change between turns and a conversation should describe who is in it,
+   * not who they were when it was created.
+   */
+  agentIds?: string[];
 }
 
 export interface ToolCallRecord {
@@ -1499,6 +1513,20 @@ export const MAIN_AGENT_NAME = 'marimo';
 export interface TranscriptMessage {
   id: string;
   role: TranscriptRole;
+  /**
+   * The agent that wrote this, when it was not the conversation's own.
+   *
+   * A turn is not always one voice: the agent a chat was started with can hand a
+   * piece of work to another one, and that one's words land in the same
+   * transcript — they have to, because a delegated call's approval card is
+   * answered here. Without this the two sets of words merge into one bubble and
+   * read as a single answer from one mind, which is the failure this field exists
+   * to prevent.
+   *
+   * Absent means the conversation's own agent, which is every message in a chat
+   * with one participant and most messages in one with several.
+   */
+  agentId?: string;
   text: string;
   reasoning?: string;
   toolCalls?: ToolCallRecord[];
@@ -2397,6 +2425,43 @@ export type AgentUiEvent =
    */
   | {type: 'skills.changed'}
   /*
+   * A helper agent, while it works.
+   *
+   * Three events rather than a nested `AgentUiEvent`, deliberately. The child's
+   * work is a *tool call* from the parent's point of view — the parent's turn is
+   * suspended inside it — and the window draws it as one thing: a labelled group
+   * that opens, streams what the helper is saying, and closes with how it went.
+   * Nesting a whole event union inside another would mean every future variant
+   * being legal in two places, and the window having to be right about both.
+   */
+  | {
+      type: 'delegate.started';
+      sessionId: string;
+      /** The parent's tool call, so the window can group the stream under it. */
+      callId: string;
+      agentId: string;
+      name: string;
+      task: string;
+    }
+  | {
+      type: 'delegate.event';
+      sessionId: string;
+      callId: string;
+      agentId: string;
+      name: string;
+      text: string;
+    }
+  | {
+      type: 'delegate.finished';
+      sessionId: string;
+      callId: string;
+      agentId: string;
+      name: string;
+      ok: boolean;
+      ms: number;
+      error?: string;
+    }
+  /*
    * The recall model's own four, shaped like a download's and separate from
    * everything else on purpose: the card that draws them has different words to
    * say, and a shared progress event carrying an embedding download would make
@@ -2755,6 +2820,16 @@ export const agentCallSchemas = {
      * one it is talking to if the caller says. Absent means the window.
      */
     origin: z.enum(['window', 'pet']).optional(),
+    /**
+     * The agent the user addressed, when they named one.
+     *
+     * A group chat has a lead that answers by default, and `@` is how somebody
+     * asks a particular member instead. It has to be a *participant*: addressing
+     * an agent this conversation does not hold is refused rather than silently
+     * answered by the lead, because a message that looks delivered and is not is
+     * worse than a refusal.
+     */
+    agentId: z.string().min(1).optional(),
   }),
   'chat.approve': z.object({
     profileId: z.string().min(1),
@@ -2930,6 +3005,19 @@ export const agentCallSchemas = {
    * a conversation, and the conversation may not be the one the agent's card is
    * about.
    */
+  /*
+   * Who is in a conversation.
+   *
+   * A call rather than a field of `sessions.create` alone, because a group is
+   * something a chat grows into: a conversation that started with one agent is
+   * how somebody adds a second.
+   */
+  'sessions.setParticipants': z.object({
+    profileId: z.string().min(1),
+    sessionId: z.string().min(1),
+    /* The lead first. An empty list means "just the agent that owns it". */
+    agentIds: z.array(z.string().min(1)),
+  }),
   'sessions.setModel': z.object({
     profileId: z.string().min(1),
     sessionId: z.string().min(1),
@@ -3054,6 +3142,7 @@ export interface AgentCallResults {
   'settings.setApiKey': {settings: PublicSettings};
   'providers.fetch': {settings: PublicSettings};
   'sessions.setModel': {session: SessionSummary};
+  'sessions.setParticipants': {session: SessionSummary};
   'recall.status': RecallModelStatus;
   'recall.install': {started: boolean};
   'recall.cancel': {cancelled: boolean};

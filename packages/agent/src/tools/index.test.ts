@@ -479,9 +479,12 @@ describe('the tool catalogue', () => {
       discordService: {} as never,
       deskService: {} as never,
       recallService: recallStub(),
+      delegate: {
+        start: async () => ({problem: 'nothing is resolved here'}),
+        pendingGates: async () => [],
+      },
     };
   }
-
 
   /** Every tool the host can build, when everything is wired. */
   function everything(): string[] {
@@ -506,6 +509,7 @@ describe('the tool catalogue', () => {
         model: 'deepseek-chat',
         provider: 'deepseek',
         webSearch: {search: async () => []},
+        delegate: true,
         jobs: true,
         skills: true,
         discord: true,
@@ -529,6 +533,7 @@ describe('the tool catalogue', () => {
       model: 'deepseek-chat',
       provider: 'deepseek',
       webSearch: {search: async () => []},
+      delegate: true,
       jobs: true,
       skills: true,
       discord: true,
@@ -615,6 +620,10 @@ describe('the capability presets', () => {
           discordService: {} as never,
           deskService: {} as never,
           recallService: recallStub(),
+          delegate: {
+            start: async () => ({problem: 'nothing is resolved here'}),
+            pendingGates: async () => [],
+          },
         },
       ).map((tool) => tool.name),
     );

@@ -22,6 +22,7 @@ import {
 import type {Content, Part} from '@google/genai';
 import type {
   AgentModel,
+  AgentProfile,
   AgentUiEvent,
   CompactResult,
   PendingGate,
@@ -55,8 +56,13 @@ import type {
   SessionIndexEntry,
 } from '../sessions/file-session-service.js';
 import {composeInstruction} from '../skills/index.js';
-import {createTools} from '../tools/index.js';
-import type {McpToolsetSource} from '../tools/index.js';
+import {createAskAgentTool, createTools} from '../tools/index.js';
+import type {
+  AgentDelegation,
+  AgentLimits,
+  AskAgentTool,
+  McpToolsetSource,
+} from '../tools/index.js';
 import type {DeskService} from '../tools/desk-tools.js';
 import type {SkillService} from '../tools/skill-tools.js';
 import type {DiscordService} from '../tools/discord-tools.js';
@@ -164,6 +170,32 @@ export interface AgentHostOptions {
    * owns both resolves one from the other here.
    */
   onSessionsDeleted?: (sessionIds: readonly string[]) => void | Promise<void>;
+  /**
+   * How to build the agent an `ask_agent` call named.
+   *
+   * A seam rather than something this class can do, because resolving a name
+   * against the profiles, choosing the space it works in and reading its
+   * credential all belong to whoever owns those documents — the runtime. This
+   * host knows how to *run* an agent; it does not know who exists.
+   *
+   * Absent means there is nobody to ask, and the tool is absent with it: an
+   * install with one agent must not be offered a way to delegate.
+   */
+  delegate?: DelegationSeam;
+  /**
+   * Ceilings on a helper: steps, minutes, the size of what it hands back, and how
+   * many one turn may ask for.
+   */
+  delegateLimits?: Partial<AgentLimits>;
+  /**
+   * Where a helper's work goes while the turn that asked for it is suspended.
+   *
+   * Out of band rather than through the turn's generator, because a tool call
+   * cannot yield into the stream that is awaiting it. The same channel the MCP
+   * status events use, for the same reason: a helper that says nothing until it
+   * finishes is a turn that looks hung.
+   */
+  onDelegateEvent?: (event: AgentUiEvent) => void;
 }
 
 export interface ApproveParams {
@@ -171,6 +203,28 @@ export interface ApproveParams {
   callId: string;
   confirmed: boolean;
   payload?: unknown;
+}
+
+/**
+ * How a helper is resolved, or what stopped it being resolved.
+ *
+ * A problem is a *sentence* rather than a thrown error, deliberately. The tool
+ * that asks reports it as the tool's own answer, so the parent's turn carries on
+ * and can tell the user which agents exist; an exception would end the turn and
+ * turn "no such agent" into "your request failed".
+ */
+export interface DelegationResult {
+  /** The profile the helper is: the name its reply is attributed to. */
+  profile: AgentProfile;
+  /** Its configuration, already resolved: model, identity, tools, space. */
+  config: AgentConfig;
+}
+
+export interface DelegationSeam {
+  resolve: (request: {
+    agent: string;
+    space?: string;
+  }) => Promise<DelegationResult | {problem: string}>;
 }
 
 /** One gate's answer, as the user gave it. */
@@ -196,6 +250,33 @@ interface GateRound {
   sessionId: string;
   gates: Set<string>;
   decisions: Map<string, GateDecision>;
+}
+
+/**
+ * An agent id as ADK will accept it, and back again.
+ *
+ * `LlmAgent` requires a name that starts with a letter or an underscore and holds
+ * only letters, digits, underscores and hyphens — while a profile id is a UUID,
+ * which starts with a digit often enough to be a coin toss. Underscores are
+ * therefore escaped first and dashes become underscores, which is reversible and
+ * injective: two ids can only collide if they were the same id.
+ *
+ * The pair is here rather than in one file because the two halves have to agree
+ * exactly: the name is what ADK writes into every event the helper produces, and
+ * the transcript is what turns it back into the id the window labels a bubble
+ * with. A second implementation of either would be a helper attributed to an
+ * agent that does not exist.
+ */
+export function agentNameFor(agentId: string): string {
+  return `a_${agentId.replaceAll('_', '_u').replaceAll('-', '_d')}`;
+}
+
+/** The id behind a name this build wrote, or `undefined` for anything else. */
+export function agentIdFor(author: string | undefined): string | undefined {
+  if (author === undefined || !author.startsWith('a_')) {
+    return undefined;
+  }
+  return author.slice(2).replaceAll('_d', '-').replaceAll('_u', '_');
 }
 
 /**
@@ -252,19 +333,6 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   }
 }
 
-function confirmationResponse(callId: string, decision: GateDecision): Part {
-  return {
-    functionResponse: {
-      id: callId,
-      name: REQUEST_CONFIRMATION_FUNCTION_CALL_NAME,
-      response: {
-        confirmed: decision.confirmed,
-        ...(decision.payload !== undefined ? {payload: decision.payload} : {}),
-      },
-    },
-  };
-}
-
 export class AgentHost {
   static readonly APP_NAME = MAIN_AGENT_NAME;
   static readonly USER_ID = 'local';
@@ -311,6 +379,16 @@ export class AgentHost {
   private readonly onSessionsDeleted:
     | ((sessionIds: readonly string[]) => void | Promise<void>)
     | undefined;
+  /** How a named helper is resolved, when this install has more than one agent. */
+  private readonly delegate: DelegationSeam | undefined;
+  /**
+   * The `ask_agent` tools this host has built, one per runner.
+   *
+   * Kept so a new turn can clear their per-turn counts. A tool is built with the
+   * runner that carries it and the runner is cached, so without this the fourth
+   * helper of a conversation would be refused rather than the fourth of a turn.
+   */
+  private readonly askAgentTools = new Set<AskAgentTool>();
   /**
    * The question the current turn is answering.
    *
@@ -334,11 +412,12 @@ export class AgentHost {
     | undefined;
   private config: AgentConfig;
   /**
-   * The cached runner, keyed by model.
+   * The cached runner, keyed by provider, model and the name it is built under.
    *
-   * There is one model now, so this holds one entry — kept as a map because ADK
-   * binds the model into the agent and `runnerFor` is still the one place a
-   * runner is built, not because a second model is coming.
+   * The name is part of the key because it is part of the agent: a helper is
+   * built under the profile it was resolved from, and its events have to carry
+   * that name for the transcript to attribute them. Two conversations of one
+   * agent differ only by session, so they share an entry.
    */
   private readonly runners = new Map<string, Runner>();
   /**
@@ -359,9 +438,21 @@ export class AgentHost {
    * between turns: a recorder built from `config.profileId` would have to be
    * right about which agent a conversation belongs to at the moment a callback
    * happens, and the turn's own answer is the only one that cannot be stale.
+   *
+   * `config` and `author` are the same idea one step further: a group chat can
+   * answer as an agent that is not the one the host was last configured with, and
+   * the agent a turn is running as has to be a fact about *that turn* rather than
+   * about the host — otherwise a second participant's words arrive under the
+   * lead's name, which is exactly the confusion this feature exists to remove.
    */
   private active:
-    | {sessionId: string; profileId?: string; controller: AbortController}
+    | {
+        sessionId: string;
+        profileId?: string;
+        controller: AbortController;
+        config?: AgentConfig;
+        author?: string;
+      }
     | undefined;
 
   /**
@@ -381,6 +472,27 @@ export class AgentHost {
    * round costs a re-ask rather than a broken conversation.
    */
   private gateRound: GateRound | undefined;
+
+  /**
+   * The gates a helper is paused on, and whoever is waiting to hear about them.
+   *
+   * A separate round from `gateRound` because it answers a different question.
+   * The round above exists because *one* turn's gates have to be answered
+   * together as one message; this one exists because a helper runs inside the
+   * turn that asked for it, so its runner is the thing suspended — and the
+   * decision has to reach *it*, not the turn that is already blocked on the tool
+   * call. Same card, same click, two different places the answer has to land.
+   */
+  private readonly gateDecisions = new Map<string, GateDecision>();
+  /**
+   * The helpers running right now, so a stop reaches them.
+   *
+   * A helper outlives the call that started it in one direction only: it is
+   * still spending when the user presses Stop. Nothing else in the app can see
+   * it — it has no host of its own, on purpose — so the turn that owns it is the
+   * only thing that can put it down.
+   */
+  private readonly childRuns = new Set<AbortController>();
 
   constructor(options: AgentHostOptions) {
     this.options = options;
@@ -413,6 +525,7 @@ export class AgentHost {
     this.mcpServers = options.mcpServers ?? [];
     this.recallService = options.recallService;
     this.onSessionsDeleted = options.onSessionsDeleted;
+    this.delegate = options.delegate;
   }
 
   /** Prepares the runner cache. There is nothing to build until a turn runs. */
@@ -695,6 +808,39 @@ export class AgentHost {
   }
 
   /**
+   * The agents in a conversation, the lead first, or nothing for a chat with one.
+   *
+   * A read of the index entry, exactly like `sessionModel` above, and for the
+   * same reason: the composer draws who is in the chat before any turn runs.
+   */
+  async sessionParticipants(sessionId: string): Promise<string[] | undefined> {
+    return (await this.sessionService.getIndexEntry(sessionId))?.agentIds;
+  }
+
+  /**
+   * Sets who is in a conversation, the lead first. An empty list is "just the
+   * agent that owns it".
+   *
+   * Ownership is asserted like every other path that touches a conversation, so a
+   * window cannot add itself to another profile's chat by guessing at an id.
+   */
+  async setParticipants(
+    sessionId: string,
+    agentIds: readonly string[],
+    profileId?: string,
+  ): Promise<SessionSummary> {
+    await this.assertOwned(sessionId, profileId);
+    const entry = await this.sessionService.setSessionParticipants(
+      sessionId,
+      agentIds,
+    );
+    if (!entry) {
+      throw new Error(`Unknown session: ${sessionId}`);
+    }
+    return toSummary(entry);
+  }
+
+  /**
    * Names a conversation, replacing the title derived from its first message.
    *
    * Ownership is asserted like every other path that touches a conversation, so
@@ -880,17 +1026,26 @@ export class AgentHost {
    * set: a caller that set it and forgot to unset it would leave the *window*
    * answering in the pet's voice, and that is a bug nobody would trace back to
    * this line.
+   *
+   * `as` is the agent answering, when the user addressed one that is not the
+   * agent this host was last configured with. The caller has already resolved it
+   * — the host cannot, because it does not know who exists — and the turn runs
+   * with that agent's identity, tools and model under that agent's name, which is
+   * what makes the reply arrive attributed to the agent the user asked for
+   * rather than to the lead.
    */
   async *run(
     sessionId: string,
     text: string,
     instruction?: string,
     profileId?: string,
+    as?: {agentId: string; name: string; config: AgentConfig},
   ): AsyncGenerator<AgentUiEvent> {
+    const answering = as?.config ?? this.config;
     this.config =
       instruction === undefined
-        ? {...this.config, ...{instruction: undefined}}
-        : {...this.config, instruction};
+        ? {...answering, ...{instruction: undefined}}
+        : {...answering, instruction};
     /*
      * The question memory is retrieved *for*, kept for the length of the turn.
      * `approve` deliberately does not overwrite it: a resumed turn's content is a
@@ -899,7 +1054,12 @@ export class AgentHost {
      */
     this.memoryQuery = text;
     this.memoryBlockCache = undefined;
-    yield* this.drive(sessionId, {role: 'user', parts: [{text}]}, profileId);
+    yield* this.drive(
+      sessionId,
+      {role: 'user', parts: [{text}]},
+      profileId,
+      as === undefined ? undefined : {agentId: as.agentId, config: as.config},
+    );
   }
 
   /**
@@ -1096,24 +1256,25 @@ export class AgentHost {
    * means; for a review, it means nothing was found.
    */
   async ask(prompt: string, abortSignal?: AbortSignal): Promise<string> {
-    return await this.oneShot(prompt, this.config.model, abortSignal);
+    return await this.oneShot(prompt, this.config, abortSignal);
   }
 
   /**
-   * One question to one model, with the model named by the caller.
+   * One question to one model, with the configuration named by the caller.
    *
-   * The parameter survives from when a conversation could pick its own model and
-   * the silent-turn recovery had to ask the same one back; it is the configured
-   * model at every call site now.
+   * A configuration rather than a model id, because since the app stopped running
+   * a model of its own an id means nothing without the endpoint that serves it —
+   * and the two callers here are asking *this* install's provider, whose address,
+   * key and model all come from the same document.
    */
   private async oneShot(
     prompt: string,
-    model: string,
+    config: AgentConfig,
     abortSignal?: AbortSignal,
   ): Promise<string> {
-    const llm = this.llmFor(model);
+    const llm = this.llmFor(config);
     const request = {
-      model,
+      model: config.model,
       contents: [{role: 'user', parts: [{text: prompt}]}],
     } as unknown as Parameters<typeof llm.generateContentAsync>[0];
 
@@ -1133,14 +1294,21 @@ export class AgentHost {
     return text;
   }
 
-  /** The model client for the current configuration. */
-  private llmFor(model: string = this.config.model): OpenAiCompatLlm {
+  /**
+   * The model client for a configuration.
+   *
+   * Takes the configuration rather than reading `this.config`, because the two
+   * are not always the same one: a helper is built from a profile that is not the
+   * host's, and a client built from the wrong config would send the helper to the
+   * lead's address with the lead's credential.
+   */
+  private llmFor(config: AgentConfig = this.config): OpenAiCompatLlm {
     return new OpenAiCompatLlm({
-      model,
-      baseUrl: this.config.baseUrl,
-      provider: this.config.provider,
-      apiKey: this.config.apiKey,
-      temperature: this.config.temperature,
+      model: config.model,
+      baseUrl: config.baseUrl,
+      provider: config.provider,
+      apiKey: config.apiKey,
+      temperature: config.temperature,
       /*
        * Read at send time rather than captured, for the reason the option
        * documents: this client is cached per model and outlives the turn that
@@ -1148,8 +1316,8 @@ export class AgentHost {
        * now.
        */
       readSessionId: () => this.activeSessionId(),
-      ...(this.config.maxOutputTokens !== undefined
-        ? {maxOutputTokens: this.config.maxOutputTokens}
+      ...(config.maxOutputTokens !== undefined
+        ? {maxOutputTokens: config.maxOutputTokens}
         : {}),
     });
   }
@@ -1206,6 +1374,20 @@ export class AgentHost {
    * window has taken its card down by then.
    */
   async *approve(params: ApproveParams): AsyncGenerator<AgentUiEvent> {
+    const decision: GateDecision = {
+      confirmed: params.confirmed,
+      ...(params.payload !== undefined ? {payload: params.payload} : {}),
+    };
+
+    /*
+     * A helper's gate comes first, and it is answered by *waking the helper*
+     * rather than by resuming the turn. The turn is not paused on a card: it is
+     * suspended inside the tool call that started the helper, so there is nothing
+     * for a new turn to resume — the helper's own runner is what has to continue,
+     * and it will, in the call below.
+     */
+    this.gateDecisions.set(params.callId, decision);
+
     const round = await this.roundFor(params.sessionId);
     if (!round) {
       return;
@@ -1214,10 +1396,7 @@ export class AgentHost {
       return;
     }
 
-    round.decisions.set(params.callId, {
-      confirmed: params.confirmed,
-      ...(params.payload !== undefined ? {payload: params.payload} : {}),
-    });
+    round.decisions.set(params.callId, decision);
     if (round.decisions.size < round.gates.size) {
       return;
     }
@@ -1231,6 +1410,20 @@ export class AgentHost {
       ),
     );
     yield* this.drive(params.sessionId, {role: 'user', parts});
+  }
+
+  /**
+   * Registers a helper's run so the turn that owns it can stop it.
+   *
+   * Returns the function that unregisters it, which the caller must call in a
+   * `finally`: a controller left in the set is a set that grows for the life of
+   * the window and an abort aimed at a helper that finished long ago.
+   */
+  registerChildRun(controller: AbortController): () => void {
+    this.childRuns.add(controller);
+    return () => {
+      this.childRuns.delete(controller);
+    };
   }
 
   abort(sessionId: string): boolean {
@@ -1266,10 +1459,38 @@ export class AgentHost {
   private abortActive(): void {
     this.active?.controller.abort();
     this.active = undefined;
+    /*
+     * A helper is part of the turn that started it, so stopping the turn stops it
+     * too. It costs the provider real money per step and the user has no other
+     * way to reach it — it has no host of its own — so leaving one running would
+     * be a Stop button that stopped the answer and not the spending.
+     */
+    this.stopChildRuns();
+  }
+
+  private stopChildRuns(): void {
+    for (const child of this.childRuns) {
+      child.abort();
+    }
+    this.childRuns.clear();
   }
 
   /**
-   * The connected servers this agent was granted.
+   * Clears every `ask_agent` tool's per-turn count.
+   *
+   * The tools are reachable only through the runners that were built with them,
+   * so the host keeps this set rather than reaching into a runner: a helper's tool
+   * is built fresh per call and is in the set only until the call ends, while the
+   * lead's lives as long as its cached runner does.
+   */
+  private resetDelegations(): void {
+    for (const tool of this.askAgentTools) {
+      tool.reset();
+    }
+  }
+
+  /**
+   * The connected servers an agent was granted.
    *
    * The grant is the profile's, and an absent one means every server: that is the
    * state every profile written before the field existed is in, so an upgrade
@@ -1280,8 +1501,10 @@ export class AgentHost {
    * over, because both halves move: a server can connect after the profile was
    * written, and the profile can be edited while the app runs.
    */
-  private grantedMcpServers(): readonly McpToolsetSource[] {
-    const ids = this.config.mcpServerIds;
+  private grantedMcpServers(
+    config: AgentConfig = this.config,
+  ): readonly McpToolsetSource[] {
+    const ids = config.mcpServerIds;
     if (ids === undefined) {
       return this.mcpServers;
     }
@@ -1290,91 +1513,284 @@ export class AgentHost {
   }
 
   /**
-   * The runner for a model, built on first use and reused afterwards.
+   * An ADK agent for one configuration, under the name that attributes it.
    *
-   * Keyed by provider *and* model, not by the model alone. Two conversations can
-   * be pointed at two services that happen to serve a model of the same name —
-   * `glm-5.3-flash` at OpenCode Go and the same name on somebody's own server —
-   * and a cache keyed on the name alone would hand one of them the other one's
-   * address and credential.
+   * Two callers: the turn runner below, whose agent is the conversation's own and
+   * is always built under `MAIN_AGENT_NAME`; and `ask_agent`, whose helper is
+   * built under the id of the profile it resolved to. That name is not a label —
+   * it is what ADK writes into every event the agent produces, and therefore what
+   * the transcript splits bubbles on, so one name per agent is what keeps two
+   * agents' words from merging into one answer.
    */
-  private runnerFor(model: string): Runner {
-    const key = `${this.config.provider}\u0000${model}`;
-    const cached = this.runners.get(key);
-    if (cached) {
-      return cached;
-    }
-
+  buildAgent(
+    config: AgentConfig,
+    author: string,
+    description: string,
+  ): LlmAgent {
     /*
-     * The grant, applied to the servers *before* their tools are built. A server
-     * this agent was not given contributes nothing at all — no tool, no name, no
-     * refusal at call time — which is invariant 9: a capability the user turned
-     * off is absent rather than discouraged. Filtering here rather than in the
-     * manager is also what keeps the names of the servers that *were* granted
-     * exactly what they would have been: the list a turn is offered never
-     * mentions the others.
+     * The instruction is an async provider rather than a string, because most of
+     * it is read per *request*: memory may have been written midway through a turn
+     * and a profile edited while one is in flight, and both should reach the very
+     * next request rather than the next turn. The config is captured rather than
+     * read off `this`, so an agent built for a helper keeps the helper's identity
+     * for as long as it exists.
      */
-    const mcpServers = this.grantedMcpServers();
-
-    const agent = new LlmAgent({
-      name: MAIN_AGENT_NAME,
-      description: 'Marimo, a local desktop assistant.',
-      model: this.llmFor(model),
+    const mcpServers = this.grantedMcpServers(config);
+    /*
+     * Whether this agent answers *as* the turn: the conversation's own, or the
+     * participant the user addressed. A helper does not — see `configFor`.
+     */
+    const live = author === MAIN_AGENT_NAME || this.active?.author === author;
+    /** This agent's configuration as of *this request*, not of this build. */
+    const configNow = (): AgentConfig => this.configFor(config, live);
+    return new LlmAgent({
+      name: author,
+      description,
+      model: this.llmFor(config),
+      /*
+       * A helper gets no prior history, and that is the honesty of the tool's own
+       * promise: it is told it cannot see this conversation, so it must not be
+       * handed one. Without this ADK folds every earlier message of the parent's
+       * chat into the helper's request as "for context" text — a large prompt for
+       * a small task, and a helper that answers about the user's earlier questions
+       * rather than about the task it was given.
+       */
+      ...(author === MAIN_AGENT_NAME ? {} : {includeContents: 'none' as const}),
       instruction: async () =>
         composeInstruction({
-          base: this.config.systemPrompt,
+          base: configNow().systemPrompt,
           // Read per request for the same reason as the tools below it: someone
           // editing how they want to be talked to while a turn is running should
           // reach that turn's next request rather than the next turn.
-          ...(this.config.preferences !== undefined
-            ? {preferences: this.config.preferences}
+          ...(configNow().preferences !== undefined
+            ? {preferences: configNow().preferences}
             : {}),
-          // Read per request rather than per turn: the model may have just
-          // written to memory, and the next request should already see it. What
-          // of it is *shown* depends on the question, when recall is available.
+          /*
+           * Read per request rather than per turn: the model may have just
+           * written to memory, and the next request should already see it. What
+           * of it is *shown* depends on the question, when recall is available.
+           *
+           * The block is composed for the *parent conversation*, which is the one
+           * this file can retrieve against, and it is shared with a helper on
+           * purpose: the helper works for the same person, and a second retrieval
+           * against a task the user never wrote would rank their facts against
+           * the wrong question.
+           */
           memory: await this.memoryForPrompt(),
           // Whatever the surface that asked for this turn wanted, if there was
           // anything. `run` cleared it on its way in, so a turn that asked for
           // nothing — every turn from the window — carries no trace of the pet's.
-          ...(this.config.instruction !== undefined
-            ? {instruction: this.config.instruction}
+          // A helper is given none of it: the pet's brevity is not its business.
+          ...(configNow().instruction !== undefined &&
+          author === MAIN_AGENT_NAME
+            ? {instruction: configNow().instruction}
             : {}),
           // Which capabilities the prompt may describe. Read per request for the
           // same reason as memory above: a profile edited in Settings while a
           // turn is in flight should reach that turn's next request rather than
           // the next turn.
-          ...(this.config.enabledTools !== undefined
-            ? {tools: this.config.enabledTools}
+          ...(configNow().enabledTools !== undefined
+            ? {tools: configNow().enabledTools}
             : {}),
-          ...(this.config.enabledSkills !== undefined
-            ? {userSkillNames: this.config.enabledSkills}
+          ...(configNow().enabledSkills !== undefined
+            ? {userSkillNames: configNow().enabledSkills}
             : {}),
           // Read from the config on every request, like memory above it: a skill
           // saved midway through a turn is in the very next request that turn
           // makes, which is what makes `/learn` take effect immediately.
-          ...(this.config.userSkills !== undefined
-            ? {userSkills: this.config.userSkills}
+          ...(configNow().userSkills !== undefined
+            ? {userSkills: configNow().userSkills}
             : {}),
         }),
-      tools: createTools(this.config, {
+      tools: createTools(config, {
         memory: this.memory,
         ...(this.recallService === undefined
           ? {}
           : {recallService: this.recallService}),
-        model,
-        provider: this.config.provider,
+        model: config.model,
+        provider: config.provider,
         ...(this.webSearch ? {webSearch: this.webSearch} : {}),
         ...(this.jobService ? {jobService: this.jobService} : {}),
         ...(this.discordService ? {discordService: this.discordService} : {}),
         ...(this.deskService ? {deskService: this.deskService} : {}),
         ...(this.skillService ? {skillService: this.skillService} : {}),
         ...(mcpServers.length > 0 ? {mcpServers} : {}),
+        /*
+         * The helper tool, built here so a helper cannot have one: `buildAgent`
+         * is what constructs both the lead and the helper, and this dependency is
+         * only ever passed for an agent that is allowed to delegate. Depth one is
+         * therefore a fact about how the agent is put together rather than a
+         * number anything has to compare.
+         */
+        ...(this.delegate !== undefined && author === MAIN_AGENT_NAME
+          ? {delegate: this.askAgentDelegation(this.delegate)}
+          : {}),
       }),
     });
+  }
 
-    const runner = new Runner({
+  /**
+   * The tool's view of delegating: who exists, and how they are followed.
+   *
+   * The two callbacks that are not the seam itself are the host's own, because
+   * they read and write things only the host has — the conversation's pending
+   * gates, and the decisions the window sent back for them.
+   */
+  private askAgentDelegation(seam: DelegationSeam): AskAgentTool {
+    /*
+     * Kept as a local, because the generator below is a method of the object
+     * being built: `this` inside it is the tool, not the host.
+     */
+    const host = this;
+    const delegation: AgentDelegation = {
+      start: async (request) => {
+        const resolved = await seam.resolve(request);
+        if ('problem' in resolved) {
+          return resolved;
+        }
+        /*
+         * The helper is the agent it resolved to: its own configuration, its own
+         * name — which is the id its replies are attributed by — and its own
+         * profile's tools, because that grant is what the user decided about it.
+         */
+        const author = agentNameFor(resolved.profile.id);
+        const runner = this.buildRunner({
+          config: resolved.config,
+          author,
+          description: resolved.profile.name,
+        });
+        return {
+          agentId: resolved.profile.id,
+          author,
+          name: resolved.profile.name,
+          run: async function* (streamed) {
+            /*
+             * Every helper runs under a controller this host holds, so stopping
+             * the turn stops the helper: it costs money per step and the user has
+             * no other way to reach it, since it deliberately has no host of its
+             * own. The tool's own abort is relayed in rather than passed through,
+             * because one of the two is cancelled by `stopChildRuns` and a passed
+             * signal cannot be cancelled from outside.
+             */
+            const controller = new AbortController();
+            const stop = (): void => {
+              controller.abort();
+            };
+            streamed.signal.addEventListener('abort', stop, {once: true});
+            if (streamed.signal.aborted) {
+              controller.abort();
+            }
+            const unregister = host.registerChildRun(controller);
+            try {
+              const events = runner.runAsync({
+                userId: AgentHost.USER_ID,
+                sessionId: streamed.sessionId,
+                newMessage: streamed.newMessage,
+                abortSignal: controller.signal,
+                runConfig: {streamingMode: StreamingMode.SSE},
+              });
+              for (;;) {
+                const next = await events.next();
+                if (next.done === true || controller.signal.aborted) {
+                  return;
+                }
+                yield next.value;
+              }
+            } finally {
+              streamed.signal.removeEventListener('abort', stop);
+              unregister();
+            }
+          },
+        };
+      },
+      pendingGates: async (sessionId) =>
+        (await this.pendingGates(sessionId)).map((gate) => ({
+          callId: gate.callId,
+          tool: gate.tool,
+        })),
+      ...(this.options.onDelegateEvent === undefined
+        ? {}
+        : {onEvent: this.options.onDelegateEvent}),
+      ...(this.options.delegateLimits === undefined
+        ? {}
+        : {limits: this.options.delegateLimits}),
+    };
+    const tool = createAskAgentTool(delegation, delegation);
+    this.askAgentTools.add(tool);
+    return tool;
+  }
+
+  /**
+   * The runner for the conversation's own agent, built on first use and reused.
+   *
+   * Keyed by provider *and* model *and* author. The provider is in the key and
+   * not just the model because two conversations can be pointed at two services
+   * that happen to serve a model of the same name — `glm-5.3-flash` at OpenCode
+   * Go and the same name on somebody's own server — and a cache keyed on the name
+   * alone would hand one of them the other one's address and credential. The
+   * author is in the key because the name is bound into the agent, and therefore
+   * into every event it writes: two participants of one conversation can share a
+   * model and must not share an agent.
+   */
+  private runnerFor(model: string, author: string): Runner {
+    const key = `${this.config.provider}\u0000${model}\u0000${author}`;
+    const cached = this.runners.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const runner = this.buildRunner({
+      config: this.config,
+      author,
+      description: 'Marimo, a local desktop assistant.',
+    });
+    this.runners.set(key, runner);
+    return runner;
+  }
+
+  /**
+   * The configuration an agent built under this name should read right now.
+   *
+   * Two answers, and the difference between them is a whole class of bug.
+   *
+   * An agent built for a *turn* — the conversation's own, or the participant a
+   * message addressed — reads the live configuration, because `run` is what
+   * replaces it: the addressed agent's identity, and the companion's one-turn
+   * instruction come through there, and an agent that captured the object that
+   * was there when it was built would go on answering from a stale one. That is
+   * not hypothetical: the runner cache means one agent outlives many turns, and a
+   * pet's "answer briefly" that never left is that bug.
+   *
+   * A helper reads its own. It is built *during* the parent's turn, when the live
+   * configuration is by definition the parent's, and taking that would give it the
+   * lead's identity under its own name — the one thing that would make the
+   * transcript's attribution a lie.
+   */
+  private configFor(own: AgentConfig, live: boolean): AgentConfig {
+    return live ? (this.active?.config ?? this.config) : own;
+  }
+
+  /**
+   * A runner over this host's session service, for one agent.
+   *
+   * Never cached: the cache above belongs to the conversation's own agent, and a
+   * helper is built afresh per call. A helper's runner is used by exactly one
+   * invocation — the one that resolves it — so there is nothing to share, and a
+   * cache keyed on a caller-supplied name would be a cache two agents could
+   * collide in.
+   */
+  private buildRunner(request: {
+    config: AgentConfig;
+    author: string;
+    description: string;
+  }): Runner {
+    return new Runner({
       appName: this.appName,
-      agent,
+      agent: this.buildAgent(
+        request.config,
+        request.author,
+        request.description,
+      ),
       sessionService: this.sessionService,
       /*
        * One plugin or the other, never both.
@@ -1419,8 +1835,6 @@ export class AgentHost {
           : new RepeatedToolCallPlugin(),
       ],
     });
-    this.runners.set(key, runner);
-    return runner;
   }
 
   /**
@@ -1448,14 +1862,19 @@ export class AgentHost {
   /**
    * Which agent the turn in flight belongs to, for filing its tree.
    *
-   * Three places need this answer — the event loop's own recorder, the plugin's
-   * factory, and nothing else — and the order is the order of certainty. The
-   * turn's own profile is what a conversation is filed under; the config is the
-   * fallback for a caller that ran a turn without naming one, which is the
-   * approve path, where the host was built for exactly one profile anyway.
+   * The order is the order of certainty. The agent the turn is running *as* comes
+   * first, because a group chat is recorded under the agent that did the work
+   * rather than under the one that owns the chat; then the turn's own profile,
+   * which is what a conversation is filed under; and the config last, for a caller
+   * that ran a turn without naming one — the approve path, where the host was
+   * built for exactly one profile anyway.
    */
   private treeProfile(): string | undefined {
-    return this.active?.profileId ?? this.config.profileId;
+    return (
+      this.active?.author ??
+      this.active?.profileId ??
+      this.config.profileId
+    );
   }
 
   private openRecorder(context: {
@@ -1516,6 +1935,7 @@ export class AgentHost {
     sessionId: string,
     newMessage: Content,
     profileId?: string,
+    as?: {agentId: string; config: AgentConfig},
   ): AsyncGenerator<AgentUiEvent> {
     const messageId = randomUUID();
 
@@ -1536,13 +1956,26 @@ export class AgentHost {
       return;
     }
     const model = this.config.model;
-    const runner = this.runnerFor(model);
+    /*
+     * The agent answering: the addressed one when the user named a participant,
+     * and the host's own configuration otherwise. `as.agentId` is the ADK name as
+     * well as the contract's id — a helper is built under the profile it was
+     * resolved from — which is what makes the reply's events attributable without
+     * a second mapping anybody could get wrong.
+     */
+    const runner = this.runnerFor(
+      model,
+      as === undefined ? MAIN_AGENT_NAME : agentNameFor(as.agentId),
+    );
 
     const controller = new AbortController();
     this.active = {
       sessionId,
       ...(profileId === undefined ? {} : {profileId}),
       controller,
+      ...(as === undefined
+        ? {}
+        : {config: as.config, author: agentNameFor(as.agentId)}),
     };
     /*
      * A turn is where a round begins, and starting one abandons whatever the
@@ -1554,6 +1987,13 @@ export class AgentHost {
       gates: new Set<string>(),
       decisions: new Map(),
     };
+    /*
+     * And the delegation budget, which is a budget of *this* turn. The tools are
+     * cached with the runners that carry them, so a count kept inside one would
+     * otherwise still be sitting at its limit on the user's next message — a
+     * refusal they would have no way to understand.
+     */
+    this.resetDelegations();
     yield {type: 'turn.started', sessionId, messageId};
 
     let streamedText = '';
@@ -1598,7 +2038,7 @@ export class AgentHost {
      * places — see the factory in `runnerFor`.
      */
     const treeProfile =
-      profileId ?? this.active?.profileId ?? this.config.profileId;
+      profileId ?? this.active?.author ?? this.config.profileId;
 
     try {
       const events = runner.runAsync({
@@ -1879,7 +2319,13 @@ export class AgentHost {
       answer = (
         await this.oneShot(
           silentTurnPrompt(params.userText, params.reasoning),
-          this.config.model,
+          /*
+           * The agent that produced the silence answers for it. This runs inside
+           * the turn, where `this.config` is already the answering agent's — the
+           * addressed one, when the user named a participant — so the recovery is
+           * the same model as the turn it is rescuing rather than the lead's.
+           */
+          this.config,
           params.abortSignal,
         )
       ).trim();
@@ -1922,6 +2368,7 @@ function toSummary(entry: {
   workspaceId?: string;
   source?: SessionSource;
   model?: AgentModel;
+  agentIds?: string[];
 }): SessionSummary {
   return {
     id: entry.id,
@@ -1932,6 +2379,15 @@ function toSummary(entry: {
     ...(entry.workspaceId ? {workspaceId: entry.workspaceId} : {}),
     ...(entry.source ? {source: entry.source} : {}),
     ...(entry.model ? {model: entry.model} : {}),
+    /*
+     * Carried only when there is more than one, so a chat with one agent reports
+     * exactly what every conversation did before this field existed. Absent is
+     * the contract's word for "just the owner", and an array holding only the
+     * owner would be a second way to say it.
+     */
+    ...(entry.agentIds !== undefined && entry.agentIds.length > 1
+      ? {agentIds: entry.agentIds}
+      : {}),
   };
 }
 
@@ -2014,6 +2470,19 @@ function readGate(args: unknown): GateDetails {
   };
 }
 
+function confirmationResponse(callId: string, decision: GateDecision): Part {
+  return {
+    functionResponse: {
+      id: callId,
+      name: REQUEST_CONFIRMATION_FUNCTION_CALL_NAME,
+      response: {
+        confirmed: decision.confirmed,
+        ...(decision.payload !== undefined ? {payload: decision.payload} : {}),
+      },
+    },
+  };
+}
+
 /**
  * The gates a conversation has been asked and not yet answered.
  *
@@ -2030,6 +2499,13 @@ function readGate(args: unknown): GateDetails {
  * window reloaded, and pressing Approve on it would ask ADK to confirm a call
  * belonging to a turn that is over.
  *
+ * *Starting* is the load-bearing word, and a delegated helper is the case that
+ * shows why. Its own run is a second invocation inside its parent's turn, so the
+ * log alternates: the parent's id, the helper's, then the parent's again as the
+ * turn unwinds. An id that has already named an invocation is a turn resuming
+ * rather than a new one beginning, and the gates it is carrying stay live — which
+ * is what lets a helper's card survive the rest of its parent's turn.
+ *
  * Note the shape of a real approval: the question is asked in one invocation and
  * answered in the *next* one, because resuming is a new turn carrying the
  * confirmation. That is why this tracks the newest invocation rather than
@@ -2043,6 +2519,17 @@ export function pendingGatesIn(events: readonly AdkEvent[]): PendingGate[] {
   let invocation: string | undefined;
   let asked = new Map<string, PendingGate>();
   let answered = new Set<string>();
+  /*
+   * Every invocation the log has already named.
+   *
+   * The rule below is "a new invocation abandons the last turn's gates", and the
+   * word doing the work is *new*. A delegated helper runs inside its parent's
+   * turn, which means the parent's invocation is suspended, the helper's begins,
+   * and then the parent's own name appears again as the log unwinds — an id that
+   * has been seen before is a turn *resuming*, not a new one asking something
+   * else, and clearing on it would take down the card the helper had just put up.
+   */
+  const seen = new Set<string>();
 
   for (const event of events) {
     /*
@@ -2056,9 +2543,13 @@ export function pendingGatesIn(events: readonly AdkEvent[]): PendingGate[] {
     }
 
     if (event.invocationId !== undefined && event.invocationId !== invocation) {
+      const resuming = seen.has(event.invocationId);
       invocation = event.invocationId;
-      asked = new Map();
-      answered = new Set();
+      seen.add(event.invocationId);
+      if (!resuming) {
+        asked = new Map();
+        answered = new Set();
+      }
     }
 
     for (const part of event.content?.parts ?? []) {

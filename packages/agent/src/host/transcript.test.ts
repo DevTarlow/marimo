@@ -2,6 +2,7 @@ import {createEvent} from '@google/adk';
 import {describe, expect, it} from 'vitest';
 
 import type {AdkEvent} from '../sessions/file-session-service.js';
+import {agentNameFor} from './agent-host.js';
 import {buildCompactedEvent} from './compaction.js';
 import {projectTranscript} from './transcript.js';
 
@@ -17,6 +18,20 @@ function user(text: string): AdkEvent {
 function agent(parts: Array<Record<string, unknown>>): AdkEvent {
   return createEvent({
     author: 'marimo',
+    content: {role: 'model', parts: parts as never},
+  }) as AdkEvent;
+}
+
+/**
+ * Another agent's event, under the name the profile it came from is built as.
+ *
+ * Through `agentNameFor` rather than the id itself, because that is what the host
+ * builds the helper under — and the projection has to turn it back into the id,
+ * which is the whole of the attribution.
+ */
+function helper(agentId: string, parts: Array<Record<string, unknown>>): AdkEvent {
+  return createEvent({
+    author: agentNameFor(agentId),
     content: {role: 'model', parts: parts as never},
   }) as AdkEvent;
 }
@@ -320,6 +335,95 @@ describe('projectTranscript', () => {
      * every number of passes.
      */
     expect(messages[0]?.compacted).toBe(6);
+  });
+});
+
+/*
+ * A helper agent runs in the parent's conversation — it has to, because that is
+ * where its approval requests have to be visible — so without attribution its
+ * words and the lead's would merge into one bubble and read as a single answer
+ * from a single mind. The user would have no way to tell which of them said the
+ * thing they are looking at.
+ */
+describe('a helper agent in the conversation', () => {
+  it('is attributed, and the conversation’s own agent is not', () => {
+    const messages = projectTranscript([
+      user('look into it'),
+      helper('researcher', [{text: 'I read the logs.'}]),
+    ]);
+
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      agentId: 'researcher',
+      text: 'I read the logs.',
+    });
+  });
+
+  it('leaves the lead unattributed', () => {
+    const messages = projectTranscript([user('hi'), agent([{text: 'hello'}])]);
+    expect(messages[1]?.agentId).toBeUndefined();
+  });
+
+  /*
+   * The bubble breaks when the speaker changes. Two agents in one bubble is the
+   * failure this exists to prevent, and it is worse when the switch is
+   * invisible: the lead's summary reads as the helper's finding.
+   */
+  it('starts a new bubble when a helper takes over', () => {
+    const messages = projectTranscript([
+      user('look into it'),
+      agent([{text: 'Let me hand this over. '}]),
+      helper('researcher', [{text: 'Here is what I found.'}]),
+    ]);
+
+    expect(messages).toHaveLength(3);
+    expect(messages[1]).toMatchObject({text: 'Let me hand this over. '});
+    expect(messages[1]?.agentId).toBeUndefined();
+    expect(messages[2]).toMatchObject({
+      agentId: 'researcher',
+      text: 'Here is what I found.',
+    });
+  });
+
+  it('starts a new bubble when the lead takes the conversation back', () => {
+    const messages = projectTranscript([
+      user('look into it'),
+      helper('researcher', [{text: 'Found three problems.'}]),
+      agent([{text: 'So: three problems.'}]),
+    ]);
+
+    expect(messages).toHaveLength(3);
+    expect(messages[1]?.agentId).toBe('researcher');
+    expect(messages[2]?.agentId).toBeUndefined();
+    expect(messages[2]?.text).toBe('So: three problems.');
+  });
+
+  it('keeps two different helpers apart', () => {
+    const messages = projectTranscript([
+      user('do both'),
+      helper('researcher', [{text: 'from research'}]),
+      helper('writer', [{text: 'from writing'}]),
+    ]);
+
+    expect(messages.map((message) => message.agentId)).toEqual([
+      undefined,
+      'researcher',
+      'writer',
+    ]);
+  });
+
+  it('keeps one helper’s consecutive events in one bubble', () => {
+    const messages = projectTranscript([
+      user('look into it'),
+      helper('researcher', [{text: 'First, '}]),
+      helper('researcher', [{text: 'the answer.'}]),
+    ]);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({
+      agentId: 'researcher',
+      text: 'First, the answer.',
+    });
   });
 });
 

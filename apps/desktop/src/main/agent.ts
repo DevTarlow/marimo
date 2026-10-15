@@ -248,6 +248,16 @@ export class AgentService {
         jobService: this.jobService(),
         ...(await this.recallServiceFor(profileId, workspaceRoot)),
       }),
+      /*
+       * A helper agent's words, while the turn that asked for it is still
+       * awaiting the tool call. The same channel the MCP status events use, for
+       * the same reason: a tool call cannot yield into the stream awaiting it,
+       * and a helper that says nothing until it finishes is a turn that looks
+       * hung.
+       */
+      onEvent: (event) => {
+        options.sendEvent(event);
+      },
     });
 
     this.jobsStore = new JobStore({file: paths.jobs});
@@ -1033,6 +1043,21 @@ export class AgentService {
     return await this.runtime.setSessionModel(profileId, sessionId, model);
   }
 
+  /**
+   * Sets who is in a conversation, the lead first. An empty list clears it.
+   *
+   * A write and nothing else, like the model above it: the next turn resolves who
+   * is in the chat from the index entry, so there is no host to rebuild and no
+   * turn to interrupt.
+   */
+  async setParticipants(
+    profileId: string,
+    sessionId: string,
+    agentIds: string[],
+  ): Promise<SessionSummary> {
+    return await this.runtime.setParticipants(profileId, sessionId, agentIds);
+  }
+
   /** The folder a conversation works in, for judging an attached file. */
   async conversationFolder(
     profileId: string,
@@ -1123,12 +1148,17 @@ export class AgentService {
    * `origin` is which surface asked — the window, or the moss ball floating over
    * it. The two share a conversation, so it is not a second thread: it is the one
    * thing the turn needs that the message itself does not carry.
+   *
+   * `agentId` is the participant the user addressed with `@`. It rides the turn
+   * rather than the conversation, because `@` is a decision about one message:
+   * the next one goes back to the lead unless it is addressed too.
    */
   async send(
     profileId: string,
     sessionId: string,
     text: string,
     origin?: 'window' | 'pet',
+    agentId?: string,
   ): Promise<{accepted: boolean}> {
     /*
      * Checked here as well as inside the agent, purely so the answer is
@@ -1154,7 +1184,7 @@ export class AgentService {
       return {accepted: false};
     }
 
-    this.pump(this.runtime.run(profileId, sessionId, text, origin));
+    this.pump(this.runtime.run(profileId, sessionId, text, origin, agentId));
     return {accepted: true};
   }
 

@@ -31,6 +31,8 @@ import {
 } from '@marimo/agent';
 import type {
   AdkEvent,
+  AgentConfig,
+  DelegationResult,
   DeskService,
   DiscordService,
   JobService,
@@ -143,6 +145,16 @@ export interface AgentRuntimeOptions {
    * what was reachable when the runtime was built.
    */
   mcpServers?: () => readonly McpToolsetSource[];
+  /**
+   * Where a helper's words go while the turn that asked for it is suspended.
+   *
+   * Out of band, because a tool call cannot yield into the stream that is
+   * awaiting it: the turn is blocked inside `ask_agent`, so its own generator
+   * cannot carry anything to the window until the helper has finished. The window
+   * draws these as a labelled group inside the turn. The headless runner passes
+   * nothing and simply does not have this view.
+   */
+  onEvent?: (event: AgentUiEvent) => void;
   appName?: string;
   /**
    * The recall engine, so the app can stop it on the way out.
@@ -321,6 +333,15 @@ export class AgentRuntime {
        * build grants nothing when it is ticked.
        */
       ...(settings.recall.enabled ? {recall: true} : {}),
+      /*
+       * And the helper tool, which this install always has: `ensureHost` hands
+       * every host the delegation seam, because whether it can resolve a name is a
+       * fact about the profile store rather than about a setting. A catalogue that
+       * omitted it would be a capability with no switch — granted by the preset
+       * and unswitchable in Settings, which is the failure the comment below is
+       * about, in the direction that hides it.
+       */
+      delegate: true,
       /*
        * And every service this app wires, named explicitly. A tool the host
        * builds but the catalogue omits can never be granted — the switch for
@@ -916,6 +937,37 @@ export class AgentRuntime {
   }
 
   /**
+   * Who is in a conversation: the agents the user put in it, lead first.
+   *
+   * `undefined` is a chat with one agent — the one that owns it — which is every
+   * conversation that existed before this field and most of them after it.
+   */
+  async sessionParticipants(
+    profileId: string,
+    sessionId: string,
+  ): Promise<string[] | undefined> {
+    const host = await this.ensureHost(profileId);
+    return await host.sessionParticipants(sessionId);
+  }
+
+  /**
+   * Sets who is in a conversation. An empty list is "just the agent that owns it".
+   *
+   * `ensureHost` rather than `host`, for the reason `setSessionModel` uses it:
+   * this writes metadata about a chat, so it must work on an install whose model
+   * cannot be reached. Adding somebody to a conversation is a decision about the
+   * next question, not a reason to refuse the write.
+   */
+  async setParticipants(
+    profileId: string,
+    sessionId: string,
+    agentIds: string[],
+  ): Promise<SessionSummary> {
+    const host = await this.ensureHost(profileId);
+    return await host.setParticipants(sessionId, agentIds, profileId);
+  }
+
+  /**
    * Records what a provider says it serves.
    *
    * The store does the writing, including moving that provider's default model
@@ -1211,18 +1263,56 @@ export class AgentRuntime {
    * per turn and read from the settings at the moment it starts: a user who
    * moved the length slider while the moss was thinking gets the new length on
    * the next question, not this one.
+   *
+   * `agentId` is the agent the user addressed with `@`, when they did. The turn
+   * is still the *conversation's* — one host, one session, one turn at a time —
+   * but it is answered by that agent, with its identity, its tools and its model,
+   * and its words are attributed to it. An id that is not a participant is
+   * refused rather than answered by the lead: a message that looks delivered and
+   * is not is worse than a refusal.
    */
   async *run(
     profileId: string,
     sessionId: string,
     text: string,
     origin?: 'window' | 'pet',
+    agentId?: string,
   ): AsyncGenerator<AgentUiEvent> {
     const result = await this.host(profileId, sessionId);
     if (!result.ok) {
       yield refusal(sessionId, result.problem);
       return;
     }
+
+    /*
+     * The addressed agent, resolved before anything is sent. Resolved through the
+     * same function a helper is, so "who is in this chat" and "who may this turn
+     * be answered by" cannot disagree about a name.
+     */
+    let as: {agentId: string; name: string; config: AgentConfig} | undefined;
+    if (agentId !== undefined) {
+      const participants =
+        (await result.host.sessionParticipants(sessionId)) ?? [profileId];
+      if (!participants.includes(agentId)) {
+        yield refusal(
+          sessionId,
+          `"${await this.agentLabel(agentId)}" is not in this conversation. Add ` +
+            'them to it first, or send the message without @.',
+        );
+        return;
+      }
+      const delegated = await this.resolveDelegate({agent: agentId});
+      if ('problem' in delegated) {
+        yield refusal(sessionId, delegated.problem);
+        return;
+      }
+      as = {
+        agentId: delegated.profile.id,
+        name: delegated.profile.name,
+        config: delegated.config,
+      };
+    }
+
     /*
      * Read before the turn, not after: ADK appends the user's message as the
      * turn runs, so a read afterwards would answer "how long since the message
@@ -1242,7 +1332,7 @@ export class AgentRuntime {
         text,
       }),
     );
-    yield* result.host.run(sessionId, text, instruction, profileId);
+    yield* result.host.run(sessionId, text, instruction, profileId, as);
   }
 
   async *approve(
@@ -1339,6 +1429,116 @@ export class AgentRuntime {
   }
 
   /**
+   * The agents this install has, by trimmed case-folded name *and* by id.
+   *
+   * Both, because a person reads names and a document refers to ids, and the
+   * model is told the names. Two agents may share a name — the store only
+   * guarantees they are distinguishable in the picker — so the *first* match is
+   * the one the picker would draw first, which is the one the user meant.
+   */
+  private async profilesByName(): Promise<Map<string, AgentProfile>> {
+    const byName = new Map<string, AgentProfile>();
+    for (const profile of await this.profileStore.profiles()) {
+      const name = profile.name.trim().toLocaleLowerCase();
+      if (!byName.has(name)) {
+        byName.set(name, profile);
+      }
+      if (!byName.has(profile.id.toLocaleLowerCase())) {
+        byName.set(profile.id.toLocaleLowerCase(), profile);
+      }
+    }
+    return byName;
+  }
+
+  /** What to call an agent the user has not named successfully. */
+  private async agentLabel(agentId: string): Promise<string> {
+    return (await this.profileFor(agentId))?.name ?? agentId;
+  }
+
+  /**
+   * The agents a helper call could name, for the refusal that lists them.
+   *
+   * Ids are left out on purpose: a person asked for an agent by name and is owed
+   * the names that exist, not the identifiers their document happens to use.
+   */
+  private async existingAgentNames(): Promise<string[]> {
+    return (await this.profileStore.profiles()).map(
+      (profile) => `"${profile.name}"`,
+    );
+  }
+
+  /**
+   * Resolves a named agent — and the space it works in — into a configuration.
+   *
+   * The one place both the `ask_agent` tool and an addressed message come
+   * through, so "which agent is that" and "which folder does it work in" have a
+   * single answer. A name nobody has, and a space nobody has, are *sentences*
+   * rather than exceptions: both end up in front of the model or the user, and a
+   * thrown error would arrive as a failed turn instead of as an explanation.
+   *
+   * The model is the agent's own rather than the conversation's, which is the
+   * point of naming one: an agent configured for a bigger model is asked because
+   * of it. The space is the conversation's unless the caller named one.
+   */
+  private async resolveDelegate(request: {
+    agent: string;
+    space?: string;
+  }): Promise<DelegationResult | {problem: string}> {
+    const profiles = await this.profilesByName();
+    const profile = profiles.get(request.agent.trim().toLocaleLowerCase());
+    if (profile === undefined) {
+      const known = await this.existingAgentNames();
+      return {
+        problem:
+          `There is no agent called "${request.agent.trim()}" on this computer. ` +
+          (known.length > 0
+            ? `The ones that exist are ${listOf(known)}.`
+            : 'There are no other agents yet — they are created in Settings.'),
+      };
+    }
+
+    const file = await this.workspaceStore.load();
+    let spaceId = profile.spaceId;
+    if (request.space !== undefined) {
+      const wanted = request.space.trim().toLocaleLowerCase();
+      const named = file.workspaces.find(
+        (entry) =>
+          entry.name.trim().toLocaleLowerCase() === wanted ||
+          entry.id.toLocaleLowerCase() === wanted,
+      );
+      if (named === undefined) {
+        return {
+          problem:
+            `There is no Space called "${request.space.trim()}" on this ` +
+            `computer. The ones that exist are ${listOf(
+              file.workspaces.map((entry) => `"${entry.name}"`),
+            )}.`,
+        };
+      }
+      spaceId = named.id;
+    }
+
+    /*
+     * The space the helper works in. Its own when the agent is filed under one,
+     * the caller's when the model named one, and otherwise whatever the rail is
+     * on — the same two fallbacks a new conversation gets, so "where does this
+     * agent work" has one answer in the app rather than two.
+     */
+    const root = workspaceRootFor(file, spaceId);
+
+    const resolved = await resolveAgentConfig({
+      settings: await this.settingsStore.load(),
+      profile,
+      readSecret: this.options.readSecret,
+      skills: await this.skillsFor(profile),
+      ...(root === undefined ? {} : {workspaceRoot: root}),
+    });
+    return resolved.ok
+      ? {profile: resolved.profile, config: resolved.config}
+      : {problem: resolved.problem};
+  }
+
+  /**
    * The user's skills a profile carries, in the shape the prompt wants.
    *
    * Filtered by `enabledSkills` rather than passing everything: a skill is
@@ -1415,6 +1615,31 @@ export class AgentRuntime {
       ...(services.discordService
         ? {discordService: services.discordService}
         : {}),
+      /*
+       * How a helper is built, handed over always.
+       *
+       * Always rather than only when some setting allows it, because the fact it
+       * encodes is not a preference: this install has a profile store, so it may
+       * have more than one agent, and `ask_agent` exists exactly when one does.
+       * A host whose config names a profile that may delegate and whose seam has
+       * nobody to name is the one combination that would offer the tool and fail
+       * every call — and `resolveDelegate` answers that with a sentence listing
+       * the agents that do exist.
+       *
+       * Deliberately *not* `this.host(childProfileId)`. That would build a second
+       * live host for the helper — a second `active` flag, a second turn running
+       * at the same time as the one that asked for it — and one-turn-at-a-time is
+       * the invariant the whole app rests on. A helper is a *tool call* inside its
+       * parent's turn: it shares this host's session service, its session id and
+       * its stop button, and it is a fresh agent built from the child's own
+       * configuration rather than a second host.
+       */
+      delegate: {
+        resolve: async (request) => await this.resolveDelegate(request),
+      },
+      ...(this.options.onEvent === undefined
+        ? {}
+        : {onDelegateEvent: this.options.onEvent}),
       /*
        * Dream-RSI's sink, handed over unconditionally.
        *
@@ -1498,6 +1723,22 @@ export class AgentRuntime {
     this.applied.set(profileId, signature);
     host.setMcpServers(sources);
   }
+}
+
+/**
+ * A list of things to read, in a sentence.
+ *
+ * Quoted already by the caller, because the two callers quote different things —
+ * agent names and space names — and this is the only part they should share.
+ */
+function listOf(items: readonly string[]): string {
+  if (items.length === 0) {
+    return 'none';
+  }
+  if (items.length === 1) {
+    return items[0]!;
+  }
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]!}`;
 }
 
 /**

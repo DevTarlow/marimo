@@ -92,6 +92,16 @@ export interface SessionIndexEntry {
    * a scan of everything on disk.
    */
   model?: AgentModel;
+  /**
+   * The agents in this conversation, the lead first.
+   *
+   * Absent means one agent — the profile that owns the chat — which is every
+   * conversation that existed before this field and most of them after it. Ids
+   * rather than whole agents, because a profile is a document that can change
+   * between turns and a conversation should record who is in it, not who they
+   * were when it was made.
+   */
+  agentIds?: string[];
 }
 
 /**
@@ -138,6 +148,13 @@ const sessionIndexEntrySchema = z
       (value: unknown) => (typeof value === 'string' ? undefined : value),
       agentModelSchema.optional(),
     ),
+    /*
+     * Declared for the same reason `model` above is: a list left to
+     * `.passthrough()` would parse, and then be dropped by the next write — so a
+     * group chat would lose its members the first time anything else about it
+     * changed, and the lead would quietly be the only agent left in it.
+     */
+    agentIds: z.array(z.string().min(1)).optional(),
   })
   .passthrough();
 
@@ -262,6 +279,38 @@ export class FileSessionService extends BaseSessionService {
         delete entry.model;
       } else {
         entry.model = model;
+      }
+      await this.writeIndex(index);
+      return entry;
+    });
+  }
+
+  /**
+   * Sets who is in a conversation, the lead first.
+   *
+   * An empty list removes the field rather than storing an empty array, for the
+   * reason `setSessionModel` above removes its own: "just the agent that owns
+   * this chat" is the state every conversation starts in, and a sentinel would
+   * be a second way to say it that every reader would have to know about.
+   *
+   * `updatedAt` is left alone like the rest: adding somebody to a conversation
+   * is a decision about the chat rather than something that happened in it, and
+   * stamping it would reorder the sidebar for a change nobody said.
+   */
+  async setSessionParticipants(
+    sessionId: string,
+    agentIds: readonly string[],
+  ): Promise<SessionIndexEntry | undefined> {
+    return await this.withLock(async () => {
+      const index = await this.readIndex();
+      const entry = index.sessions[sessionId];
+      if (!entry) {
+        return undefined;
+      }
+      if (agentIds.length === 0) {
+        delete entry.agentIds;
+      } else {
+        entry.agentIds = [...agentIds];
       }
       await this.writeIndex(index);
       return entry;

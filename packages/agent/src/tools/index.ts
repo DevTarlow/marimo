@@ -22,6 +22,8 @@ import type {ProviderId} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
+import {createAskAgentTool} from './ask-agent-tool.js';
+import type {AgentDelegation} from './ask-agent-tool.js';
 import {deskTools} from './desk-tools.js';
 import type {DeskService} from './desk-tools.js';
 import {discordTools} from './discord-tools.js';
@@ -130,6 +132,7 @@ export const CAPABILITY_PRESETS: readonly CapabilityPreset[] = [
       ...SAFE_DEFAULT_TOOLS,
       'write_file',
       'http_fetch',
+      'ask_agent',
       'list_jobs',
       'create_job',
       'update_job',
@@ -194,6 +197,14 @@ export function describeTools(options: {
   provider: ProviderId;
   webSearch?: WebSearchProvider;
   /**
+   * Whether this install has another agent to hand work to.
+   *
+   * A boolean where `createTools` takes the seam itself: the catalogue only has
+   * to know whether the tool exists, and building a description executes
+   * nothing — the stand-in below is never called.
+   */
+  delegate?: boolean;
+  /**
    * Which of the app's services are wired.
    *
    * These have to be named, because the tools they bring are only built when the
@@ -242,6 +253,14 @@ export function describeTools(options: {
        * Stand-ins. Nothing here is executed — a description is a property of the
        * tool — so the services only need to exist, not to work.
        */
+      ...(options.delegate === true
+        ? {
+            delegate: {
+              start: async () => ({problem: 'nothing is resolved here'}),
+              pendingGates: async () => [],
+            },
+          }
+        : {}),
       ...(options.jobs === true ? {jobService: {} as never} : {}),
       ...(options.skills === true ? {skillService: {} as never} : {}),
       ...(options.discord === true ? {discordService: {} as never} : {}),
@@ -310,6 +329,9 @@ const TOOL_BLURBS: Record<string, string> = {
     'address can be anywhere — including inside your own network — so it is off ' +
     'until you ask for it.',
   web_search: 'Search the web and read the results. No account or key needed.',
+  ask_agent:
+    'Hand a piece of work to one of your other agents by name, and get its ' +
+    'answer back. It cannot see this chat, so the task has to stand alone.',
   recall:
     'Search your space and its own notes by what you mean, not by the exact words.',
   read_memory: 'Read its own notes about you and this space.',
@@ -385,6 +407,14 @@ export interface ToolDependencies {
    * retry. This function only decides what the model is offered.
    */
   mcpServers?: readonly McpToolsetSource[];
+  /**
+   * How a helper agent is built, when this install has more than one.
+   *
+   * Absent means the tool is absent — not "present and discouraged". A model
+   * that could be talked into calling `ask_agent` on an install with one agent
+   * would spend a turn discovering there is nobody to ask.
+   */
+  delegate?: AgentDelegation;
 }
 
 /** One connected MCP server and what it said it can do. */
@@ -490,6 +520,17 @@ function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
     tools.push(...discordTools({discord: deps.discordService}));
   }
 
+  /*
+   * The helper tool, with the rest and therefore *before* the profile's
+   * selection — a profile that may hand work to another agent lists it, and one
+   * that may not is never offered it. Depth is one by construction: a helper is
+   * built from the same pieces as this list, minus this dependency, so it has no
+   * way to ask for a helper of its own.
+   */
+  if (deps.delegate) {
+    tools.push(createAskAgentTool(deps.delegate, deps.delegate));
+  }
+
   const granted = filterTools(tools, config.enabledTools);
 
   /*
@@ -566,3 +607,15 @@ function filterTools(
 }
 
 export {resolveInsideWorkspace, PathOutsideWorkspaceError} from './paths.js';
+export {
+  createAskAgentTool,
+  DEFAULT_AGENT_LIMITS,
+} from './ask-agent-tool.js';
+export type {
+  AgentDelegation,
+  AgentEvent,
+  AgentGate,
+  AgentLimits,
+  AgentTools,
+  AskAgentTool,
+} from './ask-agent-tool.js';

@@ -338,6 +338,14 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       ),
     }),
 
+    'sessions.setParticipants': async (params) => ({
+      session: await agent().setParticipants(
+        params.profileId,
+        params.sessionId,
+        params.agentIds,
+      ),
+    }),
+
     'mcp.set': async (params) => {
       const servers = await agent().setMcpServer(params.server);
       return {servers, statuses: agent().mcpStatuses()};
@@ -593,6 +601,7 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
         params.sessionId,
         params.text,
         params.origin,
+        params.agentId,
       ),
 
     'chat.approve': async (params) =>

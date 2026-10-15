@@ -12,7 +12,7 @@
  */
 import {useCallback, useEffect, useRef, useState} from 'react';
 
-import {COMMAND_IDS, COMMANDS, THEME_MODES} from '@marimo/protocol';
+import {COMMAND_IDS, COMMANDS, PROVIDERS, THEME_MODES} from '@marimo/protocol';
 import type {
   AgentModel,
   AppInfo,
@@ -28,10 +28,11 @@ import {Onboarding} from './components/Onboarding.js';
 import {Participants} from './components/Participants.js';
 import {RecallIntro} from './components/RecallIntro.js';
 import {Search} from './components/Search.js';
-import {Settings} from './components/Settings.js';
+import {Settings, PROVIDER_SECTION} from './components/Settings.js';
 import {Transcript} from './components/Transcript.js';
 import {WorkspaceRail} from './components/WorkspaceRail.js';
 import {useAgent} from './hooks/useAgent.js';
+import {modelChoicesFor} from './model-search.js';
 import {sessionMembers} from './participants.js';
 import {recallOfferOnRead} from './recall-offer.js';
 import {spaceForSession} from './workspace-groups.js';
@@ -41,6 +42,16 @@ import './styles/chat.css';
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  /**
+   * The section Settings should open on, when something sent the user there.
+   *
+   * The composer's model picker is the caller that exists: a conversation pinned
+   * to a provider nobody has fetched can offer that provider's names only as
+   * placeholders, and the one button that asks an endpoint what it serves — Fetch
+   * Models — lives in the Provider card. Landing on eight folded headings would
+   * leave the user to finish the route they were just sent down.
+   */
+  const [settingsSection, setSettingsSection] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   /**
    * Whether the documents drawer is open.
@@ -243,26 +254,46 @@ export function App(): React.JSX.Element {
         };
   const currentModel = sessionModel ?? agentModel ?? appModel;
   /*
-   * The list the picker chooses within, and the reason it is short: the window
-   * has one catalogue — the *active* provider's, because that is the one
-   * `providers.fetch` asks. A conversation or an agent pinned elsewhere gets the
-   * single id stored for it rather than a list belonging to another endpoint,
-   * and the way back to the agent is what makes that a state it can leave.
+   * The list the picker chooses within, and it is *this choice's* provider's.
    *
-   * The stored value is always offered even when the catalogue has stopped
-   * carrying it, which is the rule Settings follows too: a model that has been
-   * retired may still answer, and a trigger showing something other than what is
-   * stored is worse than one showing a name the endpoint no longer advertises.
+   * The resolution chain above has already decided which endpoint answers, so
+   * what the control offers is that endpoint's models: the ones it reported when
+   * the app has asked it, and the catalogue's names with `fetched: false` until
+   * then. Reading the active provider's list here instead was the bug — an agent
+   * or a conversation pinned elsewhere was handed an empty list belonging to an
+   * endpoint it was not using.
    */
-  const catalogue =
+  const choices =
+    currentModel === undefined
+      ? undefined
+      : modelChoicesFor(
+          settings?.availableModels ?? {},
+          currentModel.provider,
+          currentModel.model,
+        );
+  /*
+   * The provider behind those names, when nobody has asked it what it serves.
+   *
+   * Two things follow from it and both are about not stating a guess as an
+   * answer: the picker says the names are this build's, and it offers the route
+   * to the one control that can replace them — Fetch Models, which lives in the
+   * Provider card because that is where the key it needs is.
+   *
+   * Nothing is claimed before the payload arrives: "nobody has asked" is a fact
+   * about a settings file, and a window that had not read one yet would be saying
+   * it about every provider it knows.
+   */
+  const unfetchedProvider =
     currentModel !== undefined &&
-    currentModel.provider === settings?.providers.active
-      ? settings.availableModels
-      : [];
-  const models =
-    currentModel === undefined || catalogue.includes(currentModel.model)
-      ? catalogue
-      : [currentModel.model, ...catalogue];
+    settings !== null &&
+    choices?.fetched === false
+      ? currentModel.provider
+      : undefined;
+  const modelHint =
+    unfetchedProvider === undefined
+      ? undefined
+      : `${PROVIDERS[unfetchedProvider].label} has not been asked what it ` +
+        'serves yet, so these are the names this build ships with.';
   /*
    * What a model the conversation did not choose falls back to, in one word for
    * the trigger. Absent is meaningful: it says this conversation has a choice of
@@ -347,6 +378,9 @@ export function App(): React.JSX.Element {
       <Settings
         onClose={() => {
           setShowSettings(false);
+          // Cleared with the dialog: the next visit is the user's own, and a
+          // section opened for them once must not keep opening itself.
+          setSettingsSection(null);
           /*
            * The pane is re-read on the way back. A grant changed in Settings is
            * not visible in the conversation, and coming back to a window built
@@ -356,6 +390,7 @@ export function App(): React.JSX.Element {
           void agent.reload();
           loadSettings();
         }}
+        {...(settingsSection === null ? {} : {openSection: settingsSection})}
         lastReview={agent.lastReview}
         onExperienceModeChange={(mode) => {
           /*
@@ -596,7 +631,28 @@ export function App(): React.JSX.Element {
           busy={busy}
           disabled={disabled || !agent.ready}
           model={currentModel}
-          models={models}
+          models={choices?.models ?? []}
+          {...(modelHint === undefined ? {} : {modelHint})}
+          {...(unfetchedProvider === undefined
+            ? {}
+            : {
+                modelAction: {
+                  /*
+                   * Named, because the card it opens shows the *app's* provider
+                   * and the one that needs fetching is whichever this
+                   * conversation answers through: a row saying only "in
+                   * Settings" would leave the user to work out which of five
+                   * entries the button they were sent to belongs to.
+                   */
+                  label:
+                    `Fetch ${PROVIDERS[unfetchedProvider].label} models ` +
+                    'in Settings…',
+                  onUse: () => {
+                    setSettingsSection(PROVIDER_SECTION);
+                    setShowSettings(true);
+                  },
+                },
+              })}
           inherited={inherited}
           onSelectModel={async (model) => {
             const sessionId = agent.sessionId;

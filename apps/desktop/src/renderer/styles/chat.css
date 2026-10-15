@@ -2186,8 +2186,14 @@
  * The row that gives the choice up, above the list. A row of the popover rather
  * than an option in the listbox — it is not a model — so it is separated from
  * the list the keyboard walks.
+ *
+ * The other row that is not a model wears the same clothes: the way through to
+ * the control that asks a provider what it serves is a way out of this list
+ * rather than an entry in it, and drawing it differently would suggest it chose
+ * something.
  */
-.model-picker-default {
+.model-picker-default,
+.model-picker-action {
   display: block;
   width: 100%;
   margin-top: var(--space-2);
@@ -2199,8 +2205,21 @@
   transition: background var(--transition-fast);
 }
 
-.model-picker-default:hover {
+.model-picker-default:hover,
+.model-picker-action:hover {
   background: var(--surface-hover);
+}
+
+/*
+ * Where the list came from, when it is not the provider's own answer. Above the
+ * list, because it is read before a name is picked, and muted because it is a
+ * caveat rather than the choice.
+ */
+.model-picker-hint {
+  margin: var(--space-2) 0 0;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 
 .model-picker-list {
@@ -2261,6 +2280,22 @@
 }
 
 .settings-agent-row .model-picker-trigger {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+}
+
+/*
+ * The agent's provider, drawn as a chip like the model beside it rather than as
+ * a form field.
+ *
+ * A plain `.settings-input` in this row would be `flex: 1` and take every pixel
+ * the name and the other controls left — and the model it belongs to is the
+ * point of the row, so the one control that is not the subject must not be the
+ * widest thing on it.
+ */
+.settings-agent-row .settings-agent-provider {
+  flex: none;
+  max-width: 16ch;
   padding: var(--space-1) var(--space-2);
   font-size: var(--text-xs);
 }

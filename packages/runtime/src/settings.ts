@@ -33,7 +33,6 @@ import {
   defaultDiscordSettings,
   discordSettingsSchema,
   dreamSettingsSchema,
-  fallbackModelsFor,
   providerIdSchema,
   recallSettingsSchema,
   settingsPatchSchema,
@@ -41,6 +40,7 @@ import {
   windowStateSchema,
 } from '@marimo/protocol';
 import type {
+  AvailableModels,
   ProviderConfig,
   ProviderId,
   Providers,
@@ -48,19 +48,6 @@ import type {
   SettingsPatch,
   StoredSettings,
 } from '@marimo/protocol';
-
-/**
- * The placeholder model list for each provider, before each has been asked.
- *
- * Derived from the catalogue rather than spelled out, because a provider missing
- * from here is a provider whose picker opens on an empty select — the failure
- * that looks like "the app has no models" rather than like a missing line.
- */
-export function defaultAvailableModels(): Record<ProviderId, string[]> {
-  return Object.fromEntries(
-    providerIdSchema.options.map((id) => [id, fallbackModelsFor(id)]),
-  ) as Record<ProviderId, string[]>;
-}
 
 export function defaultStoredSettings(): StoredSettings {
   return {
@@ -73,7 +60,16 @@ export function defaultStoredSettings(): StoredSettings {
      * run can explain in one sentence, and every other provider is one pick away.
      */
     providers: defaultProviders(),
-    availableModels: defaultAvailableModels(),
+    /*
+     * Nothing fetched yet, and that is the honest state of a file that has never
+     * been pointed at an endpoint. Filling it in with the catalogue's names was
+     * tried and is worse than it looks: the window could not then tell a list an
+     * endpoint reported from one this build guessed, so it could neither say
+     * "these are placeholders" nor offer to go and ask. The names themselves are
+     * `fallbackModelsFor`, and the renderer's `modelChoicesFor` is what reaches
+     * for them where a picker is drawn.
+     */
+    availableModels: {},
     /*
      * Power, which is the app in full — and deliberately not the friendly one.
      *
@@ -646,35 +642,43 @@ function firstNonEmpty(candidates: unknown[]): string {
 }
 
 /**
- * What each provider last reported.
+ * What each provider last reported, and only that.
  *
- * A provider with no stored list falls back to the placeholder, because the
- * picker has to show *something* before the first refresh and an empty select is
- * a worse answer than a name that may already be stale. A list stored before the
- * catalogue was keyed by provider was a flat array, and it was DeepSeek's.
+ * A provider this file does not mention — or one whose value is not a list of
+ * names — comes back *absent* rather than filled with the catalogue's
+ * placeholders. That fallback used to live here, and it was the wrong side of
+ * the line: a placeholder is a guess about an endpoint nobody asked, and a
+ * reader that cannot tell it from an answer can only show it as one. The picker
+ * that has to show something before the first fetch reaches for the same names
+ * through `modelChoicesFor`, where it can say which of the two it is showing.
+ *
+ * A list stored before the catalogue was keyed by provider was a flat array, and
+ * it was DeepSeek's.
  */
-function readAvailableModels(raw: unknown): Record<ProviderId, string[]> {
+function readAvailableModels(raw: unknown): AvailableModels {
   const byProvider = asRecord(raw);
   const legacyDeepSeek = Array.isArray(raw) ? raw : undefined;
-  return Object.fromEntries(
-    providerIdSchema.options.map((id) => [
-      id,
-      storedModelList(
-        byProvider[id] ?? (id === 'deepseek' ? legacyDeepSeek : undefined),
-        id,
-      ),
-    ]),
-  ) as Record<ProviderId, string[]>;
+  const stored: AvailableModels = {};
+  for (const id of providerIdSchema.options) {
+    const list = storedModelList(
+      byProvider[id] ?? (id === 'deepseek' ? legacyDeepSeek : undefined),
+    );
+    if (list !== undefined) {
+      stored[id] = list;
+    }
+  }
+  return stored;
 }
 
-function storedModelList(value: unknown, provider: ProviderId): string[] {
+/** The names a stored value holds, or `undefined` when it holds no answer. */
+function storedModelList(value: unknown): string[] | undefined {
   const list = Array.isArray(value)
     ? value.filter(
         (entry): entry is string =>
           typeof entry === 'string' && entry.length > 0,
       )
     : [];
-  return list.length > 0 ? list : fallbackModelsFor(provider);
+  return list.length > 0 ? list : undefined;
 }
 
 /**

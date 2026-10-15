@@ -1327,8 +1327,9 @@ describe('the model a turn answers with', () => {
     expect(after.availableModels.deepseek).toEqual(['deepseek-v4-pro']);
     expect(after.providers.configs.deepseek.model).toBe('deepseek-v4-pro');
     // No other endpoint's answer is invented: each list is about one service, and
-    // a store that rewrote its neighbours would be making facts up.
-    expect(after.availableModels.gemini).toEqual(before.availableModels.gemini);
+    // one that has never been asked has no list at all rather than a placeholder
+    // written in its name.
+    expect(after.availableModels.gemini).toBeUndefined();
     expect(after.providers.configs.gemini).toEqual(
       before.providers.configs.gemini,
     );

@@ -73,6 +73,8 @@ export function Composer({
   busy,
   disabled,
   models,
+  modelHint,
+  modelAction,
   model,
   inherited,
   onSelectModel,
@@ -100,6 +102,29 @@ export function Composer({
   disabled: boolean;
   /** What this model's provider offers. Must contain `model.model`. */
   models: readonly string[];
+  /**
+   * A sentence about where that list came from, when it is not the provider's
+   * own answer.
+   *
+   * Drawn inside the picker rather than beside it: the model control is a chip
+   * at the end of the foot row, and a line of prose next to it would be wider
+   * than the conversation. Absent once the endpoint has been asked, because
+   * there is then nothing to explain.
+   */
+  modelHint?: string;
+  /**
+   * The way to the control that asks a provider what it serves, when the names
+   * on offer are placeholders.
+   *
+   * The composer cannot fetch: the request needs a stored key and an address,
+   * and the button that makes it belongs to the Provider card, where the key
+   * lives beside it. So what this carries is the route — `ModelPicker`'s
+   * `action`, labelled by the caller — rather than a second fetch path that
+   * would have to grow the same refusals a second time. The label is the
+   * caller's because it names a provider, and the provider catalogue is not
+   * something this component reads.
+   */
+  modelAction?: {label: string; onUse: () => void};
   /**
    * The model that will answer, as a pair.
    *
@@ -564,6 +589,8 @@ export function Composer({
                       },
                     }
                   : {note: inherited})}
+                {...(modelHint === undefined ? {} : {hint: modelHint})}
+                {...(modelAction === undefined ? {} : {action: modelAction})}
                 onChange={(next) => {
                   void onSelectModel({provider: chosen.provider, model: next});
                 }}

@@ -1011,18 +1011,22 @@ export type Settings = z.infer<typeof settingsSchema>;
 export type SettingsPatch = z.infer<typeof settingsPatchSchema>;
 
 /**
- * What an endpoint last said it serves, per provider.
+ * What each endpoint last said it serves, keyed by provider.
  *
  * Out of the patchable half on purpose, and that is the whole reason this type
  * exists beside `Settings`: a list a provider reported is a *fact* rather than a
  * preference, and a window holding a copy from before a refresh would otherwise
  * be able to overwrite the newer list with its guess — silently, because both
  * writes succeed.
+ *
+ * **Absent means the provider has never been asked**, which is why every entry
+ * is optional and why a list nobody fetched is not filled in with the
+ * catalogue's `fallbackModels` here. Those names are what this build ships with
+ * rather than what an endpoint said, and a window that could not tell the two
+ * apart could not offer to go and ask — see `modelChoicesFor` in the renderer,
+ * which is where a placeholder becomes a list to show and says so.
  */
-export interface AvailableModels {
-  /** Fetched from `GET /models`, replacing the catalogue's placeholders. */
-  [provider: string]: string[];
-}
+export type AvailableModels = Partial<Record<ProviderId, string[]>>;
 
 /**
  * The settings as they are on disk: the preferences, plus what was fetched.
@@ -1397,13 +1401,16 @@ export type PublicSettings = Settings & {
    */
   encryptionAvailable: boolean;
   /**
-   * What the active provider last said it serves, or its catalogue placeholder.
+   * What every provider last said it serves, by id.
    *
-   * The *active* provider's list, because that is the one a model picker is
-   * choosing within; every provider's stored list is in the settings document the
-   * window already has.
+   * Every provider's rather than only the active one's, because a model is a
+   * pair: an agent or a conversation pinned to another endpoint is offered that
+   * endpoint's models, and a window given only the active provider's list is a
+   * control that cannot show anything for the choice it is holding. A provider
+   * absent from this record has never been asked, and the catalogue's names are
+   * what a picker shows for it in the meantime.
    */
-  availableModels: string[];
+  availableModels: AvailableModels;
   /**
    * The last discovery-log write that failed, or nothing.
    *

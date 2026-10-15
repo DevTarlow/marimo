@@ -9,6 +9,11 @@
  * So this asserts the *shape* rather than one call site: whatever a settings
  * payload grows into, no key may appear in it.
  *
+ * The shape is not a copy of what the window gets. It is what
+ * `settingsForWindow` — the function `settings.get` builds its answer with —
+ * returns for a real settings document, so a field added to the payload is in
+ * front of the walk below rather than beside it.
+ *
  * The payload grew a field that is *named* like a credential when the provider
  * catalogue came back — `providerKeys` — and it is the one field here whose name
  * the walk below cannot be allowed to pass over. It carries booleans, so the
@@ -19,6 +24,9 @@
 import {describe, expect, it} from 'vitest';
 
 import {defaultStoredSettings} from '@marimo/runtime';
+import type {PublicSettings} from '@marimo/protocol';
+
+import {settingsForWindow} from '../src/main/public-settings.js';
 
 /** The fields of a settings payload that could ever hold a credential. */
 const FORBIDDEN = ['apikey', 'key', 'token', 'secret', 'password'] as const;
@@ -115,20 +123,44 @@ function plainRecord(value: unknown): Record<string, unknown> | undefined {
 
 describe('a settings payload', () => {
   /*
-   * The real shape, as `settings.get` builds it: the stored settings spread,
-   * plus the facts the window is allowed to see.
+   * The real shape, as `settings.get` builds it: two providers have been asked
+   * what they serve, which is the state the window has to be able to draw an
+   * agent pinned to either of them from — and one provider has never been asked,
+   * which is a fact the payload carries by leaving it out.
    */
-  function payload(): Record<string, unknown> {
-    return {
-      ...defaultStoredSettings(),
-      modelReady: true,
+  function payload(): PublicSettings {
+    return settingsForWindow({
+      settings: {
+        ...defaultStoredSettings(),
+        availableModels: {
+          deepseek: ['deepseek-flash'],
+          gemini: ['gemini-3.6-flash'],
+        },
+      },
+      readiness: {ok: true},
       providerKeys: {deepseek: true, llamacpp: false},
       encryptionAvailable: true,
-      availableModels: ['deepseek-flash'],
       profiles: [],
       activeProfileId: 'p1',
-    };
+    });
   }
+
+  /*
+   * Every provider's list, not the active one's. The window had one catalogue
+   * before — whichever `providers.fetch` happened to fill last — so a picker
+   * standing for an agent on another endpoint had nothing to offer, and the
+   * single fact this test holds is that both answers cross.
+   */
+  it('carries the list of every provider that has been asked', () => {
+    expect(payload().availableModels).toEqual({
+      deepseek: ['deepseek-flash'],
+      gemini: ['gemini-3.6-flash'],
+    });
+    // And nobody has asked llama.cpp, so it is absent rather than filled in with
+    // the catalogue's placeholder: the window is what turns one into the other,
+    // and it can only do that while the two are still distinguishable.
+    expect(payload().availableModels.llamacpp).toBeUndefined();
+  });
 
   it('carries no credential field anywhere in it', () => {
     expect(credentialFieldsIn(payload())).toEqual([]);

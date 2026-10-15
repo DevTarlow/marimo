@@ -28,7 +28,9 @@ export function ModelPicker({
   disabled = false,
   placement = 'below',
   note,
+  hint,
   defaultChoice,
+  action,
   onChange,
 }: {
   /** What the provider offers. The caller guarantees `value` is among them. */
@@ -45,6 +47,15 @@ export function ModelPicker({
    */
   note?: string;
   /**
+   * Where the list came from, when it is not simply what the provider serves.
+   *
+   * Drawn above the list, which is where it is read: a name that is a
+   * placeholder rather than an answer has to say so before somebody picks it,
+   * not after. Absent for a list an endpoint actually reported, because there is
+   * nothing to explain.
+   */
+  hint?: string;
+  /**
    * The row that gives the choice up, offered only when there is something to
    * give it up to.
    *
@@ -56,6 +67,16 @@ export function ModelPicker({
    * same control drawn twice.
    */
   defaultChoice?: {label: string; onUse: () => void};
+  /**
+   * A row that takes the user somewhere this control cannot go itself.
+   *
+   * The composer is the case it exists for: a conversation pinned to a provider
+   * nobody has fetched has models to offer only as placeholders, and the one
+   * button that asks an endpoint — in the Provider card — is in a window this
+   * picker is not. Absent where the list is an answer, so the row is not a
+   * standing invitation to leave a screen that is already the right one.
+   */
+  action?: {label: string; onUse: () => void};
   onChange: (model: string) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
@@ -224,6 +245,26 @@ export function ModelPicker({
               }}
             >
               {defaultChoice.label}
+            </button>
+          )}
+
+          {hint !== undefined && <p className="model-picker-hint">{hint}</p>}
+
+          {/*
+            Above the list rather than under it, for the reason the hint is: the
+            list is what is scrolled, and a row below a three-hundred-row
+            catalogue is a row nobody reaches.
+          */}
+          {action !== undefined && (
+            <button
+              type="button"
+              className="model-picker-action"
+              onClick={() => {
+                close();
+                action.onUse();
+              }}
+            >
+              {action.label}
             </button>
           )}
 

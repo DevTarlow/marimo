@@ -61,6 +61,7 @@ import {
 
 import {chosenPreset} from '../capabilities.js';
 import {describe} from '../describe.js';
+import {modelChoicesFor} from '../model-search.js';
 import {Connectors} from './Connectors.js';
 import {Dream} from './Dream.js';
 import {Memory} from './Memory.js';
@@ -124,14 +125,33 @@ interface Loaded {
   activeSpaceName: string | undefined;
 }
 
+/**
+ * The Provider card's title, named once.
+ *
+ * Something outside this file opens that card: the composer's model picker,
+ * when a conversation is pinned to a provider that has never been asked what it
+ * serves. A title spelled out in both places is one that can drift, and a
+ * section name nothing matches fails *silently* — the settings file tolerates
+ * unknown names by design, so the card would simply stay folded.
+ */
+export const PROVIDER_SECTION = 'Provider';
+
 export function Settings({
   onClose,
   onExperienceModeChange,
   lastReview,
+  openSection,
 }: {
   onClose: () => void;
   /** What the last background look read and found, for the Memory card. */
   lastReview?: {events: number; found: number} | null;
+  /**
+   * A card to open on the first read, for a caller that sent the user here.
+   *
+   * Added to whatever the file already had open rather than replacing it: this
+   * is somebody arriving with one question, not somebody rearranging the page.
+   */
+  openSection?: string;
   /**
    * Told which size the dialog is now drawn at.
    *
@@ -205,7 +225,13 @@ export function Settings({
        * instead would be taking the same list back, or throwing away the fold
        * somebody just made if the write was slower than the read.
        */
-      setOpenSections((current) => current ?? settings.expandedSections);
+      setOpenSections(
+        (current) =>
+          current ??
+          (openSection === undefined
+            ? settings.expandedSections
+            : [...new Set([...settings.expandedSections, openSection])]),
+      );
     } catch (failure) {
       setProblem(describe(failure));
     }
@@ -1096,37 +1122,88 @@ function AgentModelChoice({
   };
   const chosen = profile.model;
   const shown = chosen ?? fallback;
-  const catalogue =
-    shown.provider === settings.providers.active
-      ? settings.availableModels
-      : [];
-  const models = catalogue.includes(shown.model)
-    ? catalogue
-    : [shown.model, ...catalogue];
+  /*
+   * The provider is part of what this row chooses, so it is drawn beside the
+   * model rather than assumed to be the app's: an agent pinned to another
+   * endpoint is the case the whole control exists for, and a row that offered
+   * only the active provider's list could not express that choice — it could
+   * only show the one id already stored.
+   */
+  const choices = modelChoicesFor(
+    settings.availableModels,
+    shown.provider,
+    shown.model,
+  );
+  const descriptor = PROVIDERS[shown.provider];
 
   return (
-    <ModelPicker
-      models={models}
-      value={shown.model}
-      disabled={disabled}
-      /*
-       * One or the other: a model this agent chose can be given up, and one it
-       * did not has nothing to give up.
-       */
-      {...(chosen === undefined
-        ? {note: 'default'}
-        : {
-            defaultChoice: {
-              label: 'Follow the app default',
-              onUse: () => {
-                onChoose(profile.id, null);
+    <>
+      <select
+        className="settings-input settings-agent-provider"
+        aria-label={`Provider for ${profile.name}`}
+        value={shown.provider}
+        disabled={disabled}
+        onChange={(event) => {
+          const next = PROVIDER_IDS.find((id) => id === event.target.value);
+          if (next === undefined) {
+            return;
+          }
+          /*
+           * Choosing a provider chooses a model with it, because a model id
+           * means nothing at another endpoint — and the value written is the one
+           * the settings file already holds for that provider, which is what the
+           * app itself would answer with there. Writing `null` instead would
+           * drop the agent back onto the app's default, which is the provider
+           * the user just moved it off.
+           */
+          onChoose(profile.id, {
+            provider: next,
+            model: settings.providers.configs[next].model,
+          });
+        }}
+      >
+        {PROVIDER_IDS.map((id) => (
+          <option key={id} value={id}>
+            {PROVIDERS[id].label}
+          </option>
+        ))}
+      </select>
+      <ModelPicker
+        models={choices.models}
+        value={shown.model}
+        disabled={disabled}
+        /*
+         * Said in the popover rather than beside the chip: the row is a name and
+         * three choices, and a sentence about one of them would wrap it. The
+         * refresh it points at is the card further up this same screen.
+         */
+        {...(choices.fetched
+          ? {}
+          : {
+              hint:
+                `${descriptor.label} has not been asked what it serves yet, so ` +
+                'these are the names this build ships with. Fetch Models is in ' +
+                'the Provider card above.',
+            })}
+        /*
+         * One or the other: a model this agent chose can be given up, and one it
+         * did not has nothing to give up.
+         */
+        {...(chosen === undefined
+          ? {note: 'default'}
+          : {
+              defaultChoice: {
+                label: 'Follow the app default',
+                onUse: () => {
+                  onChoose(profile.id, null);
+                },
               },
-            },
-          })}
-      onChange={(model) => {
-        onChoose(profile.id, {provider: shown.provider, model});
-      }}
-    />
+            })}
+        onChange={(model) => {
+          onChoose(profile.id, {provider: shown.provider, model});
+        }}
+      />
+    </>
   );
 }
 
@@ -1264,14 +1341,19 @@ function ProviderSection({
   const descriptor = PROVIDERS[active];
   const config = settings.providers.configs[active];
   /*
-   * The stored value is always offered, even once the provider's list stops
-   * carrying it: a model the endpoint has retired may still answer, and a field
-   * showing something other than what is stored is worse than one showing a name
-   * that is no longer advertised.
+   * This provider's models, and whether it has actually been asked.
+   *
+   * The provider here is the one the card is showing, which is also the one the
+   * picker above chooses and the one Fetch Models asks — three controls whose
+   * subject has to be the same value, or the button refreshes a list the field
+   * below is not drawing.
    */
-  const models = settings.availableModels.includes(config.model)
-    ? settings.availableModels
-    : [config.model, ...settings.availableModels];
+  const choices = modelChoicesFor(
+    settings.availableModels,
+    active,
+    config.model,
+  );
+  const models = choices.models;
   const baseUrl = baseUrlDraft ?? config.baseUrl;
   /*
    * Whether a key is *set*, and never what it is: the payload carries the fact
@@ -1359,7 +1441,7 @@ function ProviderSection({
       );
       setNote(
         `${descriptor.label} returned ` +
-          `${String(refreshed.availableModels.length)} model(s).`,
+          `${String(refreshed.availableModels[active]?.length ?? 0)} model(s).`,
       );
       await onSaved();
     } catch (failure) {
@@ -1373,7 +1455,11 @@ function ProviderSection({
   const canFetch = !busy && (!descriptor.requiresApiKey || keyStored);
 
   return (
-    <SettingsSection title="Provider" opened={opened} onToggle={onToggle}>
+    <SettingsSection
+      title={PROVIDER_SECTION}
+      opened={opened}
+      onToggle={onToggle}
+    >
       <p className="settings-muted">
         Which service answers, how the app reaches it, and which of its models.
         Every provider keeps its own address, model and key, so trying one and
@@ -1575,6 +1661,20 @@ function ProviderSection({
           </button>
         </div>
         {note !== null && <p className="settings-muted">{note}</p>}
+        {/*
+          The half that stops a placeholder from reading as an answer. The names
+          above are what this build ships with until somebody presses the button
+          beside them, and a field that showed them silently is one nobody has
+          any reason to refresh — a model the endpoint retired stays on offer and
+          the list looks complete either way.
+        */}
+        {!choices.fetched && (
+          <p className="settings-muted">
+            {descriptor.label} has not been asked what it serves yet, so these
+            are the names this build ships with. &ldquo;Fetch Models&rdquo; asks
+            it.
+          </p>
+        )}
         {problem !== null && <p className="settings-problem">{problem}</p>}
       </div>
 

@@ -37,6 +37,7 @@ import type {AppPaths} from '@marimo/runtime';
 
 import {attachableFiles} from './attach.js';
 import type {AgentService} from './agent.js';
+import {settingsForWindow} from './public-settings.js';
 import {safeStorageCipher} from './secrets.js';
 import type {Companion} from './companion.js';
 import {disable, enable, statusOf} from './service.js';
@@ -120,12 +121,9 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
     const readiness = await providerReadiness(service);
     const dreamProblem = service.dreamProblem();
 
-    return {
-      ...settings,
-      modelReady: readiness.ok,
-      ...(readiness.problem === undefined
-        ? {}
-        : {modelProblem: readiness.problem}),
+    return settingsForWindow({
+      settings,
+      readiness,
       providerKeys: await service.providerKeys(),
       /*
        * Asked every time rather than cached: on Linux a keyring that was locked
@@ -133,12 +131,10 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
        * know before it offers a field whose storage will refuse it.
        */
       encryptionAvailable: safeStorageCipher.available(),
-      availableModels:
-        settings.availableModels[settings.providers.active] ?? [],
       ...(dreamProblem === undefined ? {} : {dreamProblem}),
       profiles: profiles.profiles,
       activeProfileId: profiles.activeProfileId,
-    };
+    });
   }
 
   /**

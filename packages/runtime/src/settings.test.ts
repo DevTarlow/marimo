@@ -23,7 +23,6 @@ import {MAX_MEMORY_BYTES} from '@marimo/agent';
 
 import {
   chooseModel,
-  defaultAvailableModels,
   readLegacyProfileSeed,
   SettingsStore,
 } from './settings.js';
@@ -275,16 +274,15 @@ describe('SettingsStore, on a file from the provider era', () => {
     );
 
     // The fetched list travels the same way: DeepSeek's is what the file stored,
-    // the list belonging to the engine is gone, and the providers the file never
-    // mentioned keep the catalogue's placeholders.
+    // the list belonging to the engine is gone, and every provider the file never
+    // mentioned is *absent* rather than filled in with the catalogue's names —
+    // see `readAvailableModels`, and the picker that supplies those names where
+    // it can also say nobody has asked.
     expect(settings.availableModels.deepseek).toEqual([
       'deepseek-flash',
       'deepseek-v4-pro',
     ]);
-    expect(settings.availableModels['builtin']).toBeUndefined();
-    expect(settings.availableModels.gemini).toEqual(
-      defaultAvailableModels().gemini,
-    );
+    expect(Object.keys(settings.availableModels)).toEqual(['deepseek']);
 
     // The engine's own knobs have no reader now — the tier plan and the global
     // plaintext opt-in went with the engine — and they are the only part that is
@@ -391,12 +389,17 @@ describe('SettingsStore providers', () => {
    * fetched or typed, or the first thing a fresh install shows is an empty
    * picker — which reads as "the app has no models" rather than as an unset
    * field.
+   *
+   * What it does *not* have is a model list: an endpoint nobody has asked has
+   * said nothing, and the catalogue's names are a placeholder the renderer draws
+   * where it can also say so. A store that filled them in here could not tell the
+   * window which of the two it was handing back.
    */
-  it('points a fresh install at the catalogue defaults', async () => {
+  it('points a fresh install at the catalogue defaults, with nothing fetched', async () => {
     const settings = await store().load();
 
     expect(settings.providers).toEqual(defaultProviders());
-    expect(settings.availableModels).toEqual(defaultAvailableModels());
+    expect(settings.availableModels).toEqual({});
   });
 
   /*
@@ -493,10 +496,54 @@ describe('SettingsStore providers', () => {
      * store that rewrote its neighbours would be inventing answers about services
      * it never asked.
      */
-    expect(after.availableModels.gemini).toEqual(before.availableModels.gemini);
+    expect(after.availableModels.gemini).toBeUndefined();
     expect(after.providers.configs.gemini).toEqual(
       before.providers.configs.gemini,
     );
+  });
+
+  /*
+   * The lists are per provider, and one fetch must not cost another's.
+   *
+   * The window used to be handed the active provider's list alone, so this is
+   * the half that has to hold for every *other* provider to have anything to
+   * show: an agent pinned to Gemini keeps Gemini's names when the app goes and
+   * re-asks DeepSeek, and neither fetch touches the third provider nobody has
+   * asked at all.
+   */
+  it('keeps the other providers’ lists when one of them is fetched again', async () => {
+    const settings = store();
+    await settings.setAvailableModels('gemini', ['gemini-3.6-flash']);
+    await settings.setAvailableModels('deepseek', ['deepseek-v4-pro']);
+
+    const after = await settings.setAvailableModels('deepseek', [
+      'deepseek-v4-pro',
+      'deepseek-v5',
+    ]);
+
+    expect(after.availableModels.deepseek).toEqual([
+      'deepseek-v4-pro',
+      'deepseek-v5',
+    ]);
+    expect(after.availableModels.gemini).toEqual(['gemini-3.6-flash']);
+    expect(after.providers.configs.gemini.model).toBe('gemini-3.6-flash');
+    // Never asked, so never answered: the window tells the two apart, and a
+    // placeholder written here would erase the difference.
+    expect(after.availableModels.llamacpp).toBeUndefined();
+  });
+
+  /*
+   * An empty answer is not an answer. `providers.fetch` refuses to store one —
+   * there is nothing to choose from in it — and a file that somehow holds one
+   * reads as "never asked" rather than as a provider with no models, which is a
+   * list a picker could not draw anything from.
+   */
+  it('reads an empty stored list as one nobody has filled in', async () => {
+    await write({availableModels: {deepseek: [], gemini: ['gemini-3.6-flash']}});
+    const settings = await store().load();
+
+    expect(settings.availableModels.deepseek).toBeUndefined();
+    expect(settings.availableModels.gemini).toEqual(['gemini-3.6-flash']);
   });
 });
 

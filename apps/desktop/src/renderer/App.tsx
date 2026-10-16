@@ -479,6 +479,7 @@ export function App(): React.JSX.Element {
         }}
         {...(settingsSection === null ? {} : {openSection: settingsSection})}
         lastReview={agent.lastReview}
+        {...(info === null ? {} : {userDataFolder: info.userData})}
         onExperienceModeChange={(mode) => {
           /*
            * The density is this window's, and the switch is in the dialog, so

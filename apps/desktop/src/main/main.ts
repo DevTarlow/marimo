@@ -30,7 +30,7 @@ import {
 
 import {IPC_EVENT_CHANNEL, defaultWindowState} from '@marimo/protocol';
 import type {AgentUiEvent, ThemeMode, WindowState} from '@marimo/protocol';
-import {defaultStoredSettings} from '@marimo/runtime';
+import {defaultStoredSettings, resetInstall} from '@marimo/runtime';
 
 import {PRODUCT_NAME} from '../shared/product.js';
 
@@ -39,6 +39,8 @@ import {Companion} from './companion.js';
 import {noticeFor, trayMenu} from './tray.js';
 import type {TrayItem} from './tray.js';
 import {AgentService} from './agent.js';
+import {disable, statusOf} from './service.js';
+import type {ServiceContext} from './service.js';
 import {registerMediaScheme} from './media/decode-window.js';
 import {
   applyUserDataPath,
@@ -95,6 +97,17 @@ const windowIcon = join(moduleDir, '..', '..', 'assets', 'marimo-logo.png');
  * button a couple of hundred milliseconds after letting go of the edge.
  */
 const SETTLE_MS = 200;
+
+/**
+ * How long the window has to paint "this is happening" before the process goes.
+ *
+ * A reset answers the call and then ends the app, and without a pause the reply
+ * and the exit are the same frame — so the screen somebody is looking at never
+ * says anything, and the app appears to have crashed rather than to have done
+ * what it was asked. Short, because every millisecond here is a millisecond in
+ * which a write already in flight can put a file back.
+ */
+const RESET_EXIT_MS = 400;
 
 let mainWindow: BrowserWindow | undefined;
 let agent: AgentService | undefined;
@@ -327,6 +340,109 @@ let toldAboutTray = false;
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
 
+  /*
+   * One description of this install's background service, used by the card that
+   * switches it on and by the reset that switches it off. Two copies would be
+   * two answers to "which unit is mine", and the one that was wrong would be the
+   * one that left a timer waking every minute against an install that no longer
+   * exists.
+   */
+  const serviceContext: ServiceContext = {
+    paths,
+    // The app's own binary. Asked to be Node by the unit, this is the same
+    // process image the runner runs as.
+    execPath: process.execPath,
+    appPath: app.getAppPath(),
+    home: homedir(),
+    // Resolved now and written into the definition rather than read when the
+    // timer fires: a service started at login may not have these.
+    configHome: process.env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config'),
+    // Read per call rather than captured: the provider can change while the
+    // app is open, and a copy taken here would answer about the one that was
+    // active when the window opened.
+    readSettings: async () =>
+      agent === undefined ? defaultStoredSettings() : await agent.settings(),
+  };
+
+  /*
+   * The debounced geometry write the window is holding, declared here rather
+   * than beside `remember` below because the reset has to cancel it: a resize
+   * 200 ms before the reset would otherwise write `window-state.json` back after
+   * the file had been deleted.
+   */
+  let settle: NodeJS.Timeout | undefined;
+
+  /**
+   * Erases this install, then starts the app again as a fresh one.
+   *
+   * The order is the whole of it, and each step prevents a failure that is
+   * invisible when it happens:
+   *
+   * 1. **The OS timer and the login item, first.** Both live outside the
+   *    user-data folder, so deleting that folder would leave a scheduled runner
+   *    waking every minute against an install that is no longer there, and
+   *    Marimo starting itself at the next login. Best effort — neither is worth
+   *    failing the whole reset over, and both are reported to the log.
+   * 2. **The agent stops.** That is what releases the app lock, ends the MCP
+   *    child processes and shuts the recall engine down; deleting files under a
+   *    live engine leaves a child holding a directory that is gone.
+   * 3. **The window's own writes are cancelled.** Its `close` handler runs
+   *    `remember()` unconditionally and would write back the geometry this is
+   *    about to delete, and a recent drag may still be sitting on the debounce.
+   * 4. **The folder is emptied** — see `resetInstall`, which is the part with a
+   *    test.
+   * 5. **The process ends.** This is not tidiness: every store in this app reads
+   *    its document once and keeps the answer, so a window that stayed open
+   *    would write the old settings back on the next click and the reset would
+   *    undo itself. `app.relaunch()` starts the new instance after this one has
+   *    exited, which is why the single-instance lock is not raced.
+   */
+  const resetMarimo = async (): Promise<void> => {
+    quitting = true;
+
+    try {
+      app.setLoginItemSettings({openAtLogin: false});
+    } catch (failure) {
+      // A platform that cannot answer is a platform where this was not set.
+      console.error('[marimo] could not clear start at login:', failure);
+    }
+
+    try {
+      if ((await statusOf(serviceContext)).installed) {
+        await disable(serviceContext);
+      }
+    } catch (failure) {
+      console.error(
+        '[marimo] could not remove the background service:',
+        failure,
+      );
+    }
+
+    await shutdown();
+
+    if (settle !== undefined) {
+      clearTimeout(settle);
+      settle = undefined;
+    }
+    mainWindow?.removeAllListeners('close');
+
+    const report = await resetInstall(paths);
+    if (report.failures.length > 0) {
+      /*
+       * The only place this can go. The window is on its way out and the next
+       * launch is a fresh install with nowhere to show a message about the last
+       * one; a file the OS would not release is the ordinary case, and it is the
+       * app's own profile rather than the user's data.
+       */
+      console.error('[marimo] reset left files behind:', report.failures);
+    }
+
+    app.relaunch();
+    setTimeout(() => {
+      app.exit(0);
+    }, RESET_EXIT_MS);
+  };
+
   const disagreement = userDataDisagreement();
   if (disagreement !== undefined) {
     /*
@@ -377,23 +493,8 @@ async function bootstrap(): Promise<void> {
     },
     companion: () => companion,
     ...(startupWarning === undefined ? {} : {warning: startupWarning}),
-    service: {
-      paths,
-      // The app's own binary. Asked to be Node by the unit, this is the same
-      // process image the runner runs as.
-      execPath: process.execPath,
-      appPath: app.getAppPath(),
-      home: homedir(),
-      // Resolved now and written into the definition rather than read when the
-      // timer fires: a service started at login may not have these.
-      configHome:
-        process.env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config'),
-      // Read per call rather than captured: the provider can change while the
-      // app is open, and a copy taken here would answer about the one that was
-      // active when the window opened.
-      readSettings: async () =>
-        agent === undefined ? defaultStoredSettings() : await agent.settings(),
-    },
+    service: serviceContext,
+    onReset: resetMarimo,
   });
 
   /*
@@ -445,9 +546,9 @@ async function bootstrap(): Promise<void> {
    * would make "restore" mean "open at full size, un-maximised".
    *
    * The write is debounced because a drag fires an event per pixel and the same
-   * value would be written each time.
+   * value would be written each time. `settle` is declared above, beside the
+   * reset that has to be able to cancel it.
    */
-  let settle: NodeJS.Timeout | undefined;
   const remember = (): void => {
     if (settle !== undefined) {
       clearTimeout(settle);

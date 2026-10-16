@@ -76,6 +76,7 @@ import {Memory} from './Memory.js';
 import {ModelPicker} from './ModelPicker.js';
 import type {PopoverAnchor} from './Popover.js';
 import {Recall} from './Recall.js';
+import {ResetMarimo} from './ResetMarimo.js';
 import {SettingsSection} from './SettingsSection.js';
 
 /**
@@ -138,6 +139,7 @@ export function Settings({
   onExperienceModeChange,
   lastReview,
   openSection,
+  userDataFolder,
 }: {
   onClose: () => void;
   /** What the last background look read and found, for the Memory card. */
@@ -149,6 +151,15 @@ export function Settings({
    * is somebody arriving with one question, not somebody rearranging the page.
    */
   openSection?: string;
+  /**
+   * The folder the reset card names as the place everything it erases lives.
+   *
+   * Passed in rather than read here, for the reason the window reads `app.info`
+   * once: it is a fact about this install, and a second read from inside one
+   * card would be a second answer that could disagree with the first. Absent
+   * until that read has landed, and the card draws without it.
+   */
+  userDataFolder?: string;
   /**
    * Told which size the dialog is now drawn at.
    *
@@ -1247,6 +1258,25 @@ export function Settings({
             }}
           />
         )}
+
+        {/*
+          Last, and on both screens.
+
+          A repair behind an advanced mode is a repair nobody finds, which is the
+          same reason the provider card and the connector list are on both — and
+          last because it is the thing fewest people want, and because a card
+          that erases the rest should not sit above any of it.
+
+          `saving` is passed as well as the card's own state: a settings write
+          already in flight can land after the folder is emptied, and a
+          `settings.json` that comes back is a reset that silently undid itself.
+        */}
+        <ResetMarimo
+          opened={opened}
+          onToggle={fold}
+          disabled={saving}
+          {...(userDataFolder === undefined ? {} : {folder: userDataFolder})}
+        />
       </div>
     </div>
   );

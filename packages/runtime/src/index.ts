@@ -22,6 +22,14 @@ export {
 } from './paths.js';
 export type {AppPaths} from './paths.js';
 
+/*
+ * Back to a fresh install: everything under the user-data directory, and nothing
+ * outside it. Electron-free like the paths it speaks in, because the folder is
+ * the unit and both processes resolve it from the same definition.
+ */
+export {resetInstall} from './reset.js';
+export type {ResetReport} from './reset.js';
+
 /* Secrets, with the cipher injected. */
 export {FileSecretStore} from './secrets.js';
 export type {SecretCipher, SecretRead} from './secrets.js';

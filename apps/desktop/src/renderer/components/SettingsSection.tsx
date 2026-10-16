@@ -21,6 +21,7 @@ export function SettingsSection({
   title,
   opened,
   onToggle,
+  danger,
   children,
 }: {
   /** The panel's name, and the key its state is stored under. */
@@ -28,13 +29,25 @@ export function SettingsSection({
   /** Every panel currently open. */
   opened: ReadonlySet<string>;
   onToggle: (title: string, expanded: boolean) => void;
+  /**
+   * Drawn in the warning colour, for the one card whose subject is destruction.
+   *
+   * A folded card hides its own warning, so the heading is what has to carry it:
+   * the reset is the last heading on a screen of folded cards, and the one
+   * somebody scans past should still look like the one that cannot be undone.
+   */
+  danger?: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   const expanded = opened.has(title);
 
   return (
     <details
-      className="settings-section"
+      className={
+        danger === true
+          ? 'settings-section settings-section-danger'
+          : 'settings-section'
+      }
       open={expanded}
       onToggle={(event) => {
         const next = event.currentTarget.open;

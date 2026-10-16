@@ -2839,6 +2839,21 @@ export interface AppInfo {
  */
 export const agentCallSchemas = {
   'app.info': z.object({}),
+  /*
+   * Takes this install back to the state it was in before anything was
+   * configured, and starts the app again.
+   *
+   * No payload, and deliberately: what makes this safe is the window's warning
+   * and the phrase somebody has to type, and a field here that the handler read
+   * and the window set would be a second, quieter guard — which is a guard two
+   * places have to agree about rather than one the person saw.
+   *
+   * The call answers only that it was accepted. Everything it starts — stopping
+   * the agent, taking the OS timer down, emptying the user-data folder, ending
+   * the process — is the main process's own business, and the window is usually
+   * gone before a result would matter.
+   */
+  'app.reset': z.object({}),
 
   /* The agents this install has. */
   'profiles.list': z.object({}),
@@ -3285,6 +3300,11 @@ export type AgentCallParams<M extends AgentCallMethod> = z.infer<
 /** What each call answers with. */
 export interface AgentCallResults {
   'app.info': AppInfo;
+  /**
+   * Accepted, not finished. The process that answered is on its way out, and
+   * the window that asked is usually gone before this reply is read.
+   */
+  'app.reset': {resetting: boolean};
   'profiles.list': {profiles: AgentProfile[]; activeProfileId: string};
   'sessions.list': {sessions: SessionSummary[]};
   'sessions.create': {session: SessionSummary};

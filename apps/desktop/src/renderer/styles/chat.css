@@ -1281,6 +1281,39 @@
 }
 
 /*
+ * The one card whose subject is destruction.
+ *
+ * Its warning is inside the fold, so the heading is the only part visible to
+ * somebody scanning the page — and a warning nobody scrolls to is not a warning.
+ * The colour is deliberately unused elsewhere on this screen, so it means one
+ * thing here.
+ */
+.settings-section-danger {
+  border-color: var(--danger);
+}
+
+.settings-section-danger .settings-section-head h3,
+.settings-section-danger .settings-section-chevron {
+  color: var(--danger);
+}
+
+.settings-danger {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.settings-reset-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/*
  * How much of the app to show.
  *
  * A card like the sections below it, but not one that folds: this is the control

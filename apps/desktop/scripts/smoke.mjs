@@ -1645,6 +1645,88 @@ async function main() {
       }
 
       /*
+       * The reset card, and deliberately everything about it short of the press.
+       *
+       * Pressing it would empty this throwaway directory and restart the app in
+       * the middle of the walk, so what is checked is what makes the press safe:
+       * the card is there and is the last one, it is drawn in the one colour that
+       * means destruction on this screen, its button is dead on arrival, and only
+       * the phrase — the one the built bundle draws, since the label and the check
+       * share a constant — arms it. A button that was born armed, or one that took
+       * a prefix of the words, is a factory reset nobody asked for.
+       */
+      await openSection('Reset Marimo');
+      const resetCard = await until('the reset card to answer', async () => {
+        const state = await evaluate(`(() => {
+        const sections = [...document.querySelectorAll('details.settings-section')];
+        const section = sections.find(
+          (entry) => entry.querySelector('h3')?.textContent === 'Reset Marimo',
+        );
+        if (section === undefined) return undefined;
+        const button = section.querySelector('button.button-danger');
+        return JSON.stringify({
+          last: sections[sections.length - 1] === section,
+          danger: section.classList.contains('settings-section-danger'),
+          label: button?.textContent.trim() ?? '',
+          disabled: button?.disabled ?? null,
+        });
+      })()`);
+        return state === undefined ? undefined : JSON.parse(state);
+      });
+
+      /** Types into the real field, through the real setter. */
+      const typeResetPhrase = async (value) =>
+        await evaluate(`(() => {
+        const section = [...document.querySelectorAll('.settings-section')]
+          .find((entry) => entry.querySelector('h3')?.textContent === 'Reset Marimo');
+        const input = section.querySelector('input.settings-input');
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(input, ${JSON.stringify(value)});
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        return input.value;
+      })()`);
+
+      /** Whether the button is armed, once React has had a frame to redraw. */
+      const resetArmed = async () =>
+        await until('the reset button to answer', async () => {
+          const value = await evaluate(`(() => {
+          const section = [...document.querySelectorAll('.settings-section')]
+            .find((entry) => entry.querySelector('h3')?.textContent === 'Reset Marimo');
+          const button = section?.querySelector('button.button-danger');
+          return button === null || button === undefined ? undefined : !button.disabled;
+        })()`);
+          return value === undefined ? undefined : value;
+        });
+
+      if (resetCard.last !== true) {
+        fail('the reset card is not the last one on the settings screen');
+      } else if (resetCard.danger !== true) {
+        fail('the reset card is not drawn as the dangerous one');
+      } else if (resetCard.disabled !== true) {
+        fail('the reset button is armed before anybody has typed anything');
+      } else if (!/Erase everything and restart/u.test(resetCard.label)) {
+        fail(`the reset button says: ${resetCard.label}`);
+      } else {
+        await typeResetPhrase('reset');
+        const partial = await resetArmed();
+        await typeResetPhrase('Reset Everything ');
+        const armed = await resetArmed();
+        // Left as it arrived: every check after this one expects a fresh install.
+        await typeResetPhrase('');
+
+        if (partial !== false) {
+          fail('the reset button arms on part of the phrase');
+        } else if (armed !== true) {
+          fail('the reset button did not arm on the phrase');
+        } else {
+          ok(
+            'the reset is last, drawn as the dangerous one, and armed only by ' +
+              'its phrase',
+          );
+        }
+      }
+
+      /*
        * Removing a bot, through the menu a person uses: the row's `…`, the item,
        * and the second press that is the confirmation.
        *

@@ -83,6 +83,16 @@ export interface IpcDependencies {
    * is a question about answering IPC calls.
    */
   service?: ServiceContext;
+  /**
+   * Erases this install and starts the app again.
+   *
+   * Injected for the reason the service context above is: it stops the agent,
+   * switches the OS timer and the login item off, empties the user-data folder
+   * and relaunches the process — which is the shape of a program ending, and
+   * not the shape of answering a call. Absent in a build with no such flow, and
+   * the handler says so rather than appearing to work.
+   */
+  onReset?: () => Promise<void>;
 }
 
 /** Every call this app answers, with its result type pinned to the protocol. */
@@ -299,6 +309,21 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       themeMode: themeMode(),
       theme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light',
     }),
+
+    /*
+     * The last thing this process does, and the one call that does not go
+     * through `agent()`: an install whose settings file is unreadable enough to
+     * keep the agent from starting is exactly the install somebody reaches for
+     * this from, so a reset that needed a working agent would be a repair that
+     * only works when nothing is broken.
+     */
+    'app.reset': async () => {
+      if (dependencies.onReset === undefined) {
+        throw new Error(`${PRODUCT_NAME} cannot reset itself in this build.`);
+      }
+      await dependencies.onReset();
+      return {resetting: true};
+    },
 
     'settings.set': async (params) => {
       await agent().updateSettings(params.patch);

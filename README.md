@@ -206,7 +206,11 @@ your conversations, the folders you have loaded, your settings and your keys. Yo
 can move it with the `MARIMO_USER_DATA_DIR` environment variable, and you can
 delete it to start over — the service you chose is asked for its key again the
 next time you open the app, which is also what makes this folder safe to hand to
-somebody else once the key files are gone. If you turned the recording on, that folder also holds one file per
+somebody else once the key files are gone. Settings has **Reset Marimo** at the
+bottom, which does the deleting for you: it erases everything in that folder,
+switches off start-at-login and the background job timer, and starts the app again
+as a fresh install. There is no undo, so it asks you to type a phrase first, and
+it never touches your own folders or the files in them. If you turned the recording on, that folder also holds one file per
 conversation of what the bot tried; a conversation's file is moved aside when
 you delete the conversation, so the record does not outlive the chat it is about.
 A Space's documents are not in there at all: those are your own files, in your own

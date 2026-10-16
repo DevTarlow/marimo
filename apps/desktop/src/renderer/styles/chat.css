@@ -1914,6 +1914,76 @@
 }
 
 /*
+ * The setup flow, which is the welcome screen with steps in it.
+ *
+ * It borrows the first-run shell above and changes three things about it. It
+ * *scrolls*, because a step is taller than a card: the bot form is a name, three
+ * ability cards and a checkbox, and the model step is five providers and four
+ * fields. It fills the column, so the buttons a step ends with sit where the
+ * composer will be rather than floating in the middle. And it reads left to
+ * right, because centred text is right for one question and wrong for a form.
+ */
+.setup {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-items: stretch;
+  text-align: left;
+  margin: 0;
+  padding: var(--space-5) var(--space-4);
+}
+
+.setup-inner {
+  width: 100%;
+  max-width: var(--content-width);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * The four step names, with the one being read carrying the weight.
+ *
+ * Names rather than "step 2 of 4": what is being decided is the useful half, and
+ * a count is only how much is left.
+ */
+.setup-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.setup-step[aria-current='step'] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.setup-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+/* A step's form is its fields, one under another, with no rows of its own. */
+.setup-form {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The label over the ability cards, which are not a `<label>`-able control. */
+.setup-label {
+  margin-top: var(--space-3);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+/*
  * The recall download, which is the one thing in this app that takes minutes.
  *
  * A bar rather than only a number, for the reason the memory readout is one: "2.1

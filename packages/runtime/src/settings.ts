@@ -133,6 +133,13 @@ export function defaultStoredSettings(): StoredSettings {
     // exist before. Not a secret, and it never leaves the machine, but it is
     // theirs to agree to rather than a default they discover.
     dream: defaultDreamSettings(),
+    /*
+     * The setup flow has not run: a file that says nothing is either a fresh
+     * install or one from a build before the flow existed, and both want to be
+     * asked once. What this must not be is a claim about readiness — a user who
+     * declined is `setupSeen: true` and still unable to answer.
+     */
+    setupSeen: false,
   };
 }
 

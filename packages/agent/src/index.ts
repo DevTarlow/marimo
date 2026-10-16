@@ -57,6 +57,7 @@ export type {
 } from './sessions/file-session-service.js';
 export {projectTranscript} from './host/transcript.js';
 export {
+  ASK_AGENT_TOOL,
   CAPABILITY_PRESETS,
   capabilityPresets,
   createTools,

@@ -37,6 +37,16 @@ import {useAgent} from './hooks/useAgent.js';
 export function Pet(): React.JSX.Element {
   const agent = useAgent();
   const [draft, setDraft] = useState('');
+  /**
+   * Whether the app can answer at all, from the same settings read below.
+   *
+   * True until a payload says otherwise, which is the shape this window had
+   * before the question existed: a companion that refused to be typed into for
+   * the first frame of every launch would be a box that looks broken, and a
+   * question typed in that moment is answered by the same refusal it would have
+   * met a second later.
+   */
+  const [canAnswer, setCanAnswer] = useState(true);
   /*
    * How much of the conversation floats above the moss, and how the window
    * behaves — the user's answers from Settings, which is in the *other* window.
@@ -64,6 +74,13 @@ export function Pet(): React.JSX.Element {
         const {settings: loaded} = await window.marimo.call('settings.get', {});
         if (!cancelled) {
           setSettings(loaded.companion);
+          /*
+           * The one thing this window does about the app being unable to
+           * answer: its ask bar goes quiet. The moss has no room for a setup
+           * flow of its own, and a chat bar under a companion that cannot reply
+           * is the same dead end the main window stopped offering.
+           */
+          setCanAnswer(loaded.modelReady);
         }
       } catch {
         // The defaults are what this window showed before any of this was
@@ -305,8 +322,20 @@ export function Pet(): React.JSX.Element {
         <input
           className="pet-input"
           value={draft}
-          placeholder={busy ? 'Working…' : 'Ask Marimo…'}
+          placeholder={
+            !canAnswer
+              ? 'Pick a provider first'
+              : busy
+                ? 'Working…'
+                : 'Ask Marimo…'
+          }
           aria-label="Message"
+          title={
+            canAnswer
+              ? undefined
+              : 'Marimo has no provider yet. Settings, in the main window, is where one is chosen.'
+          }
+          disabled={!canAnswer}
           onChange={(event) => {
             setDraft(event.target.value);
           }}
@@ -336,7 +365,7 @@ export function Pet(): React.JSX.Element {
             type="button"
             className="pet-send"
             aria-label="Send"
-            disabled={draft.trim().length === 0}
+            disabled={!canAnswer || draft.trim().length === 0}
             onClick={submit}
           >
             ↑

@@ -795,6 +795,27 @@ export const settingsSchema = z.object({
    * that tells them apart is whether there was a file at all.
    */
   experienceMode: experienceModeSchema.catch('power'),
+  /**
+   * Whether the setup flow has had its turn.
+   *
+   * The flow that makes a first bot, loads a Space and points the app at a
+   * provider is a *first run*, and a first run is a fact rather than a state
+   * that can be recomputed: an install with no key looks the same on its first
+   * launch and on its fiftieth, and the difference that matters is whether
+   * somebody has already been walked through it. Without this, a user who chose
+   * "set this up later" would be handed the wizard again every time they opened
+   * the app, and a user whose key stopped being readable would be asked to name
+   * their first bot a second time.
+   *
+   * True means the flow has run or been declined; it is not a claim that the app
+   * can answer. `modelReady` is that claim, and it is the main process's.
+   *
+   * `.catch` for the reason the two list fields have it: this is flat, so a
+   * hand-edited value that is not a boolean would otherwise fail the whole
+   * settings parse and cost the user every other preference they have. Falling
+   * back to false offers the flow once more, which is the cheap direction.
+   */
+  setupSeen: z.boolean().catch(false),
   /** Background, accent and text size: how the app looks, not what it does. */
   appearance: appearanceSchema,
   /**
@@ -3401,6 +3422,19 @@ export interface ProfileCatalog {
    * which is exactly what the seeding rule already answers for it.
    */
   identitySeeds: Record<string, string>;
+  /**
+   * The tool that hands work from one agent to another, when this install has it.
+   *
+   * Carried as data for the reason `presets` above is: the name belongs to the
+   * agent package, and a window with its own copy of the string would grant a
+   * name nothing answers to. That failure is silent rather than loud — a
+   * profile's grant naming no tool is filtered away at the host, not refused —
+   * so the screen that offers it would tick a box and change nothing.
+   *
+   * Absent on an install whose tool set has no such tool, which is what stops a
+   * setup flow from promising a capability this build cannot carry out.
+   */
+  delegationTool?: string;
 }
 
 /**

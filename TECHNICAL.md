@@ -79,7 +79,7 @@ pnpm build:web   # the renderer bundle — `build` alone leaves it stale
 | Done        | Secrets: one file per provider key and per connector secret, encrypted in the OS keychain, stored readable only when the user asks for that one to be readable by the background runner, and a machine with no keychain told so rather than written to in the clear |
 | Done        | Scheduled jobs while the app is open, and a headless runner plus an OS service that keeps them going while it is closed                                                                                                                 |
 | Done        | The desktop companion: a frameless, transparent, click-through moss ball that answers in bubbles above itself, with its own chat bar underneath and its own settings for how long it answers, how much it shows, and whether it floats  |
-| Done        | A first run that asks which service should answer: the catalogue, a Fetch Models button and a key field, because an app carrying no model of its own cannot say anything until somebody picks one                                       |
+| Done        | A first run in four steps: load a Space, make a bot (and as many more as you want, or none), and choose the service that answers — with no message box anywhere until the app can actually answer, and one flag so the flow is a first run rather than a screen that comes back |
 | Done        | A memory review: after a conversation goes quiet the agent proposes what is worth remembering and asks before writing it — reading a long session in stretches rather than only once it ends, and remembering the facts you turned down |
 | Done        | Memory in two halves: who the user is, which follows them between projects, and what this folder is, which does not — with a correction able to replace an old fact rather than sit beside it, and every bullet dated |
 | Done        | A way to say an answer was wrong. It is recorded, never written straight into memory, and the next review reads it |
@@ -454,6 +454,42 @@ for the first time, and gets the simple screen; a file that exists with no such
 field means somebody already using the app, and gets the app in full. A schema
 default cannot tell those two apart, which is why the store owns that decision
 and the field carries a `.catch` for the hand-edited typo.
+
+**The first run itself is a four-step flow, and one flag decides whether it is
+offered.** A fresh install has three things missing at once — a Space to work in,
+a bot to give work to, and the service that answers — and the flow is those in the
+order they are useful. It writes as it goes, exactly as Settings does, so quitting
+in the middle loses nothing, and each step reads what already exists rather than
+creating a second copy of it. The last step is the only one that cannot be
+skipped: until a provider is chosen and readable the window offers no message box
+at all, because a field whose every message ends in the same refusal is worse than
+no field.
+
+Which screen a launch gets is `firstRunScreen` in
+`apps/desktop/src/renderer/first-run.ts` — four answers (`waiting`, `setup`,
+`cannotAnswer`, `app`) from four facts — and it lives outside `App.tsx` because
+this package has no DOM test environment: the arithmetic is worth testing, and two
+of its four rules are about moments rather than states. Nothing loaded is not a
+state to draw, or every launch flashes a wizard at somebody whose app works. And
+the flow is _sticky_ once it is up, because its own last step is what turns
+`modelReady` true and a screen recomputed from settings alone would vanish between
+saving a key and reading what happened.
+
+`setupSeen` is what makes the flow a first run rather than a screen that returns
+whenever the app cannot answer. It is set when the flow closes either way — a
+provider working, or "set this up later" — and an install that still cannot answer
+afterwards gets the short card that names the problem and opens Settings, which is
+also where an existing install lands when its key stops being readable later. The
+flag is not a claim about readiness; `modelReady` is that claim, and it is the main
+process's.
+
+The one grant the flow writes on the user's behalf is `ask_agent` on the lead,
+offered as a checkbox in plain words: Marimo is told by its own identity to hand
+work to the bots the person makes, and without that tool it cannot. The tool's name
+travels to the window through `ProfileCatalog.delegationTool` rather than being
+spelled out in the renderer, for the reason the capability presets do — a grant
+naming a tool that does not exist is filtered away at the host rather than refused,
+so a second copy of the string would tick a box and change nothing.
 
 ### The window and the service must agree about where data lives
 

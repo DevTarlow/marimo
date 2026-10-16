@@ -25,6 +25,7 @@ import {dirname} from 'node:path';
 
 import {
   AgentHost,
+  ASK_AGENT_TOOL,
   capabilityPresets,
   describeTools,
   MAX_MEMORY_BYTES,
@@ -422,6 +423,16 @@ export class AgentRuntime {
        * tool answers to never reaches a profile.
        */
       presets: capabilityPresets(tools.map((tool) => tool.name)),
+      /*
+       * And the one tool the setup flow grants by name, carried the same way the
+       * presets are: the name is the agent package's, and the window offers a
+       * checkbox that writes it into the lead's profile. Named here only when
+       * the narrowed tool list actually holds it, so a build whose tool set lost
+       * it cannot offer a box that grants nothing.
+       */
+      ...(tools.some((tool) => tool.name === ASK_AGENT_TOOL)
+        ? {delegationTool: ASK_AGENT_TOOL}
+        : {}),
       /*
        * What Reset puts back, per profile. The lead is the *first profile in the
        * document* — the one `freshFile` created at install — and it is the only

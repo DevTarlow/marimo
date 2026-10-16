@@ -802,6 +802,75 @@ describe('SettingsStore disabledCommands', () => {
 });
 
 /**
+ * Whether the setup flow has had its turn.
+ *
+ * The flag exists so the flow is a first run rather than a screen that returns
+ * whenever the app cannot answer. The cases that matter are therefore the three
+ * states a launch can be in: never seen, seen and declined, and a file written
+ * before the field existed — which is a person who has been using the app and
+ * wants to be left alone.
+ */
+describe('SettingsStore setupSeen', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-setup-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): SettingsStore {
+    return new SettingsStore(join(dir, 'settings.json'));
+  }
+
+  it('offers the flow to a fresh install', async () => {
+    expect((await store().load()).setupSeen).toBe(false);
+  });
+
+  it('remembers that it ran, through a restart and a later write', async () => {
+    const settings = store();
+    await settings.patch({setupSeen: true});
+    await settings.patch({temperature: 0.2});
+
+    // A window opened later reads the file rather than the default.
+    expect((await store().load()).setupSeen).toBe(true);
+  });
+
+  it('gives a file written before the field existed the flow once more', async () => {
+    /*
+     * False, which is the cheap direction: an existing install is asked once
+     * after an upgrade and never again. True would be worse than chatty — a
+     * user whose key stopped being readable would be sent to the short card
+     * with no way to be walked through it.
+     */
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify({sidebarWidth: 300}, null, 2),
+      'utf8',
+    );
+    const settings = await store().load();
+
+    expect(settings.setupSeen).toBe(false);
+    expect(settings.sidebarWidth).toBe(300);
+  });
+
+  it('costs the flag its own value rather than every other setting', async () => {
+    // The reason it carries a `.catch`: flat fields fail the whole document.
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify({setupSeen: 'yes', sidebarWidth: 300}, null, 2),
+      'utf8',
+    );
+    const settings = await store().load();
+
+    expect(settings.setupSeen).toBe(false);
+    expect(settings.sidebarWidth).toBe(300);
+  });
+});
+
+/**
  * How much of the app to draw.
  *
  * The one setting whose default depends on *how* the document was read rather

@@ -100,31 +100,37 @@ self-contained AppImage; the Windows and macOS installers are not built. If
 someone gave you the app, or you built it yourself, this is what happens when you
 open it.
 
-The first time you start it, it asks which service should answer, because this
-app does not carry a model of its own. There are five to choose from, and one of
-them is the one that keeps everything on your own machine or network: a
-[llama.cpp](https://github.com/ggml-org/llama.cpp) server you run yourself, at an
-address you type. The others — DeepSeek, Google Gemini, OpenCode Go, OpenRouter —
-need an account and an API key, and their screens say what that key is and where
-to get it. Whichever you pick, the card has a **Fetch Models** button that asks
-the service what it serves, so you choose from the list it reports rather than
-from a list this app guessed at.
+The first time you start it, a short setup walks you through three things: a Space
+to work in, a bot to give work to, and the service that answers. Each step can be
+skipped except the last one, and you can change all of it later in Settings.
 
-Keys are kept in your operating system's keychain, encrypted. The card also has
-one box you may never need: **let the background runner read this key**. A
-scheduled task runs without a window, so it has no keychain to unlock — if you
-want a task to run on a service rather than on your own server, that box is what
-makes it possible, and it means the key sits on disk readable. It is off unless
-you tick it.
-
-Then load a folder. The app calls it a Space, it can read there and nowhere else,
+First, load a folder. The app calls it a Space, it can read there and nowhere else,
 and a chat is filed under the Space it started in so you can keep projects apart.
 The markdown files in it are the Space's documents, which the **Documents** button
 above the chat lists and opens.
 
-Next, choose how much it may do. There are three choices in plain words: "Just
-chat", "Help around my computer", and "Do things for me". You can change this at
-any time, and the same screen is where a second bot is made.
+Then make a bot. Give it a name and choose how much it may do — there are three
+choices in plain words: "Just chat", "Help around my computer", and "Do things for
+me". The same step has one box worth understanding: **let Marimo hand work to your
+bots**. Marimo is the bot you talk to, and without that it can talk about a bot you
+made but cannot ask it to do anything. You can make more bots on the next step, or
+skip straight on — Settings has **+ New bot** whenever you want one.
+
+Last, pick the service that answers, because this app does not carry a model of its
+own. There are five to choose from, and one of them keeps everything on your own
+machine or network: a [llama.cpp](https://github.com/ggml-org/llama.cpp) server you
+run yourself, at an address you type. The others — DeepSeek, Google Gemini, OpenCode
+Go, OpenRouter — need an account and an API key, and the step says what that key is
+and where to get it. It also has a **Fetch models** button that asks the service what
+it serves, so you choose from the list it reports rather than from a list this app
+guessed at. Until a service is chosen and reachable, the window offers no message
+box: there would be nothing to answer with.
+
+Keys are kept in your operating system's keychain, encrypted. The step has one box
+you may never need: **let scheduled jobs use this key while the app is closed**. A
+scheduled task runs without a window, so it has no keychain to unlock — if you want a
+task to run on a service rather than on your own server, that box is what makes it
+possible, and it means the key sits on disk readable. It is off unless you tick it.
 
 Before it runs a command, or writes over a file that is already there, it shows
 you what it wants to do and waits for your approval; a new file is written

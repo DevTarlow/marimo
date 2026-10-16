@@ -22,7 +22,7 @@ import type {ProviderId} from '@marimo/protocol';
 
 import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
-import {createAskAgentTool} from './ask-agent-tool.js';
+import {ASK_AGENT_TOOL, createAskAgentTool} from './ask-agent-tool.js';
 import type {AgentDelegation} from './ask-agent-tool.js';
 import {deskTools} from './desk-tools.js';
 import type {DeskService} from './desk-tools.js';
@@ -133,7 +133,13 @@ export const CAPABILITY_PRESETS: readonly CapabilityPreset[] = [
       ...SAFE_DEFAULT_TOOLS,
       'write_file',
       'http_fetch',
-      'ask_agent',
+      /*
+       * The constant rather than the string: the window offers this one tool by
+       * name in the setup flow, and one spelling of it in the package that owns
+       * the tool is what keeps the two grants the same grant.
+       */
+      ASK_AGENT_TOOL,
+
       'list_jobs',
       'create_job',
       'update_job',
@@ -609,6 +615,7 @@ function filterTools(
 
 export {resolveInsideWorkspace, PathOutsideWorkspaceError} from './paths.js';
 export {
+  ASK_AGENT_TOOL,
   createAskAgentTool,
   DEFAULT_AGENT_LIMITS,
 } from './ask-agent-tool.js';

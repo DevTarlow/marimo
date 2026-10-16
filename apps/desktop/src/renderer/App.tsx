@@ -29,8 +29,11 @@ import {Participants} from './components/Participants.js';
 import {RecallIntro} from './components/RecallIntro.js';
 import {Search} from './components/Search.js';
 import {Settings, PROVIDER_SECTION} from './components/Settings.js';
+import {Setup} from './components/Setup.js';
 import {Transcript} from './components/Transcript.js';
 import {WorkspaceRail} from './components/WorkspaceRail.js';
+import {firstRunScreen} from './first-run.js';
+import type {FirstRunPhase} from './first-run.js';
 import {useAgent} from './hooks/useAgent.js';
 import {modelChoicesFor} from './model-search.js';
 import {sessionMembers} from './participants.js';
@@ -77,6 +80,15 @@ export function App(): React.JSX.Element {
    * conversation it cannot yet answer.
    */
   const [settings, setSettings] = useState<PublicSettings | null>(null);
+  /**
+   * Where this window is in the setup flow.
+   *
+   * The flow's own last step is what turns `modelReady` true, so the screen
+   * cannot be recomputed from settings alone: saving a key would take the flow
+   * away between the save and the sentence saying it worked. `inSetup` is that
+   * latch, and `left` is the flow having closed, however it closed.
+   */
+  const [setupPhase, setSetupPhase] = useState<FirstRunPhase>('unknown');
   const agent = useAgent();
 
   /*
@@ -335,6 +347,75 @@ export function App(): React.JSX.Element {
   }, [modelReady, settings]);
 
   /*
+   * Which screen the window is on, in one place.
+   *
+   * The flow, the short card and the chat are three answers to one question, and
+   * the decision lives in `first-run.ts` because this package has no DOM test
+   * environment: what is worth testing is the arithmetic, not the markup around
+   * it.
+   */
+  const screen = firstRunScreen({
+    loaded: settings !== null,
+    modelReady,
+    setupSeen: settings?.setupSeen ?? false,
+    phase: setupPhase,
+  });
+  /*
+   * The latch, set once the decision has said `setup`: from then on the flow
+   * stays up until it closes itself, whatever its own writes do to `modelReady`.
+   */
+  useEffect(() => {
+    if (screen === 'setup' && setupPhase === 'unknown') {
+      setSetupPhase('inSetup');
+    }
+  }, [screen, setupPhase]);
+
+  /**
+   * What happens when the flow closes, either way.
+   *
+   * The flag is what makes the flow a first run rather than a screen that
+   * returns whenever the app cannot answer: somebody who deferred gets the short
+   * card next time, which names the problem and opens the one place that fixes
+   * it. Not awaited and its failure not reported, for the reason the recall flag
+   * is not: the worst outcome is the flow being offered once more after a later
+   * launch, and an error about a flag the user never asked to see would be worse.
+   *
+   * The pane is reloaded behind it because bots were made here and a Space may
+   * have been loaded, and neither is something the conversation hook notices by
+   * itself.
+   */
+  const closeSetup = (): void => {
+    setSetupPhase('left');
+    void window.marimo
+      .call('settings.set', {patch: {setupSeen: true}})
+      .then(({settings: saved}) => {
+        setSettings(saved);
+      })
+      .catch(() => undefined);
+    void agent.reload();
+  };
+
+  /**
+   * Offers the flow again, from the short card.
+   *
+   * The latch goes back to `inSetup` rather than to `unknown`, so the flow is on
+   * screen this render instead of waiting for a decision to be recomputed, and
+   * the flag is cleared so a later launch does not put the card back in its
+   * place. A failure of that write is not reported, for the reason the other two
+   * flag writes are not: the worst outcome is the flow being offered once more
+   * after a restart.
+   */
+  const restartSetup = (): void => {
+    setSetupPhase('inSetup');
+    void window.marimo
+      .call('settings.set', {patch: {setupSeen: false}})
+      .then(({settings: saved}) => {
+        setSettings(saved);
+      })
+      .catch(() => undefined);
+  };
+
+  /*
    * The commands the `+` menu offers: the catalogue filtered by what the user
    * has switched off. Drawn from the protocol constant rather than from a list
    * here, so the menu and the Settings switches cannot describe different sets.
@@ -349,8 +430,14 @@ export function App(): React.JSX.Element {
    * the setting flips: pressing "Turn on Recall" starts a 310 MB download, and
    * dropping somebody into the app mid-download would leave them with no sign it
    * is happening. The screen's own buttons close it.
+   *
+   * Deferred, and only deferred, while the setup flow is up. That flow's own
+   * provider step is what raises this offer, and drawing a second full-window
+   * question over the step that just made it would hide the sentence saying the
+   * key worked. The offer is already standing by the time the flow closes, so
+   * this is a pause rather than a lost question.
    */
-  if (recallIntro && settings !== null) {
+  if (recallIntro && settings !== null && screen !== 'setup') {
     return (
       <RecallIntro
         onDone={() => {
@@ -588,9 +675,31 @@ export function App(): React.JSX.Element {
           </div>
         )}
 
-        {!agent.ready ? (
+        {!agent.ready || screen === 'waiting' ? (
+          /*
+           * Nothing is drawn until the window knows which of its three screens
+           * it is on. `waiting` is the moment before the first settings read
+           * lands, which happens on every launch, and the flow is decided from
+           * that payload — so anything here would be a guess, and the guess for
+           * a fresh install is a chat it cannot answer in.
+           */
           <p className="loading">Starting…</p>
-        ) : settings !== null && !settings.modelReady ? (
+        ) : settings !== null && screen === 'setup' ? (
+          /*
+           * The flow, once, for somebody who has not been through it.
+           *
+           * It replaces the conversation rather than sitting over it, because
+           * there is no conversation yet: the chat behind it is the empty one
+           * this window opened on, and the point of the flow is to make the app
+           * able to answer before anybody is invited to type.
+           */
+          <Setup
+            settings={settings}
+            agent={agent}
+            onSettings={setSettings}
+            onClose={closeSetup}
+          />
+        ) : screen === 'cannotAnswer' ? (
           /*
            * Asked before it is needed, rather than after. The refusal a turn
            * gives is honest and in the right place — but it is the *second*
@@ -600,15 +709,20 @@ export function App(): React.JSX.Element {
            * answering is a provider that has no key, a key that cannot be read,
            * or an address nothing is listening on, and the sentence saying which
            * is written by the process that looked.
+           *
+           * This is the screen for somebody who has already met the flow and
+           * still cannot answer — they deferred it, or their key stopped being
+           * readable — which is why it offers Settings rather than the flow.
            */
           <Onboarding
             problem={
-              settings.modelProblem ??
+              settings?.modelProblem ??
               'The app has no way to answer yet. Settings will say what is missing.'
             }
             onOpenSettings={() => {
               setShowSettings(true);
             }}
+            onRestart={restartSetup}
           />
         ) : (
           <Transcript
@@ -627,91 +741,104 @@ export function App(): React.JSX.Element {
           />
         )}
 
-        <Composer
-          busy={busy}
-          disabled={disabled || !agent.ready}
-          model={currentModel}
-          models={choices?.models ?? []}
-          {...(modelHint === undefined ? {} : {modelHint})}
-          {...(unfetchedProvider === undefined
-            ? {}
-            : {
-                modelAction: {
-                  /*
-                   * Named, because the card it opens shows the *app's* provider
-                   * and the one that needs fetching is whichever this
-                   * conversation answers through: a row saying only "in
-                   * Settings" would leave the user to work out which of five
-                   * entries the button they were sent to belongs to.
-                   */
-                  label:
-                    `Fetch ${PROVIDERS[unfetchedProvider].label} models ` +
-                    'in Settings…',
-                  onUse: () => {
-                    setSettingsSection(PROVIDER_SECTION);
-                    setShowSettings(true);
+        {/*
+          No box to type in until something can answer. The composer is the one
+          control that promises a reply, so it appears with the reply rather than
+          before it — an install with no provider, or a key that cannot be read,
+          would otherwise offer a field whose every message ends in the same
+          refusal.
+
+          Which means the two states that cannot answer do not draw it at all,
+          including the setup flow's own steps: the wizard is what turns that
+          around, and a box beside it would be the thing it is there to replace.
+        */}
+        {screen === 'app' && (
+          <Composer
+            busy={busy}
+            disabled={disabled || !agent.ready}
+            model={currentModel}
+            models={choices?.models ?? []}
+            {...(modelHint === undefined ? {} : {modelHint})}
+            {...(unfetchedProvider === undefined
+              ? {}
+              : {
+                  modelAction: {
+                    /*
+                     * Named, because the card it opens shows the *app's* provider
+                     * and the one that needs fetching is whichever this
+                     * conversation answers through: a row saying only "in
+                     * Settings" would leave the user to work out which of five
+                     * entries the button they were sent to belongs to.
+                     */
+                    label:
+                      `Fetch ${PROVIDERS[unfetchedProvider].label} models ` +
+                      'in Settings…',
+                    onUse: () => {
+                      setSettingsSection(PROVIDER_SECTION);
+                      setShowSettings(true);
+                    },
                   },
-                },
-              })}
-          inherited={inherited}
-          onSelectModel={async (model) => {
-            const sessionId = agent.sessionId;
-            if (sessionId !== null) {
-              await agent.setSessionModel(sessionId, model);
-            }
-          }}
-          /*
-           * Asked for by conversation, not by space: the main process judges
-           * every picked file against the space *this* conversation works in —
-           * the same one its turn's file tools are confined to — so a file the
-           * window would happily attach is one the agent can actually read.
-           */
-          onPickFiles={async () => {
-            const profile = agent.profile;
-            const sessionId = agent.sessionId;
-            if (profile === undefined || sessionId === null) {
-              throw new Error(
-                'There is no conversation open to attach a file to.',
-              );
-            }
-            const {files, skipped} = await window.marimo.call('files.pick', {
-              profileId: profile.id,
-              sessionId,
-            });
-            return {files, skipped};
-          }}
-          commands={commands}
-          participants={mentionable}
-          onRunCommand={async (id) => {
-            const profile = agent.profile;
-            const sessionId = agent.sessionId;
-            if (profile === undefined || sessionId === null) {
-              throw new Error('There is no conversation open to act on.');
-            }
-            switch (id) {
-              case 'compact': {
-                const result = await window.marimo.call('sessions.compact', {
-                  profileId: profile.id,
-                  sessionId,
-                });
-                /*
-                 * Re-read before answering, so the note and the card appear
-                 * together: the card *is* the news, and a sentence saying the
-                 * conversation was compacted over a transcript that still shows
-                 * the old messages is a window contradicting itself.
-                 */
-                await agent.refresh();
-                return result.compacted ? null : (result.reason ?? null);
+                })}
+            inherited={inherited}
+            onSelectModel={async (model) => {
+              const sessionId = agent.sessionId;
+              if (sessionId !== null) {
+                await agent.setSessionModel(sessionId, model);
               }
+            }}
+            /*
+             * Asked for by conversation, not by space: the main process judges
+             * every picked file against the space *this* conversation works in —
+             * the same one its turn's file tools are confined to — so a file the
+             * window would happily attach is one the agent can actually read.
+             */
+            onPickFiles={async () => {
+              const profile = agent.profile;
+              const sessionId = agent.sessionId;
+              if (profile === undefined || sessionId === null) {
+                throw new Error(
+                  'There is no conversation open to attach a file to.',
+                );
+              }
+              const {files, skipped} = await window.marimo.call('files.pick', {
+                profileId: profile.id,
+                sessionId,
+              });
+              return {files, skipped};
+            }}
+            commands={commands}
+            participants={mentionable}
+            onRunCommand={async (id) => {
+              const profile = agent.profile;
+              const sessionId = agent.sessionId;
+              if (profile === undefined || sessionId === null) {
+                throw new Error('There is no conversation open to act on.');
+              }
+              switch (id) {
+                case 'compact': {
+                  const result = await window.marimo.call('sessions.compact', {
+                    profileId: profile.id,
+                    sessionId,
+                  });
+                  /*
+                   * Re-read before answering, so the note and the card appear
+                   * together: the card *is* the news, and a sentence saying the
+                   * conversation was compacted over a transcript that still shows
+                   * the old messages is a window contradicting itself.
+                   */
+                  await agent.refresh();
+                  return result.compacted ? null : (result.reason ?? null);
+                }
+              }
+            }}
+            onSend={async (text, agentId) =>
+              await agent.send(text, 'window', agentId)
             }
-          }}
-          onSend={async (text, agentId) =>
-            await agent.send(text, 'window', agentId)
-          }
-          onStop={() => {
-            void agent.stop();
-          }}
-        />
+            onStop={() => {
+              void agent.stop();
+            }}
+          />
+        )}
       </main>
 
       {/*

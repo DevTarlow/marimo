@@ -201,6 +201,18 @@ const parameters = z.object({
 });
 
 /**
+ * What the tool that hands work to another agent is called.
+ *
+ * Exported because somebody outside this package has to name it: the window's
+ * setup flow offers to grant it to the lead, so that Marimo can give a bot
+ * something to do. A second spelling of the string out there would grant a name
+ * no tool answers to, and the failure is silent — a profile's grant naming
+ * nothing is filtered away at the host rather than refused, so the box would
+ * tick and the capability would not arrive.
+ */
+export const ASK_AGENT_TOOL = 'ask_agent';
+
+/**
  * The tool, and the seam it was built from, as one object.
  *
  * The same dependency twice, deliberately: it is what decides whether the tool
@@ -224,7 +236,7 @@ export function createAskAgentTool(
   let asked = 0;
 
   const tool = new FunctionTool({
-    name: 'ask_agent',
+    name: ASK_AGENT_TOOL,
     description:
       'Hand a self-contained piece of work to another agent on this computer ' +
       'and get its answer back. Use it for work that is separable and would ' +
@@ -425,7 +437,7 @@ async function runAgent(
 
     if (stopped === undefined) {
       const waiting = (await deps.pendingGates(sessionId)).filter(
-        (gate) => gate.tool !== 'ask_agent',
+        (gate) => gate.tool !== ASK_AGENT_TOOL,
       );
       if (waiting.length > 0) {
         /*

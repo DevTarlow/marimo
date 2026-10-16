@@ -234,6 +234,169 @@ async function main() {
     }
 
     /*
+     * The first run, driven the way a person drives it.
+     *
+     * Checked here rather than further down because it is the first thing a new
+     * user meets, and because it is the only part of the window no unit test can
+     * reach: the steps, the fact that a fresh install offers no message box, and
+     * the fact that finishing the flow produces one.
+     *
+     * Two things make the path completable without an account. The provider it
+     * ends on is `Local llama.cpp`, which needs no key, and nothing is dialled
+     * until a turn is sent. And the Space step is stepped past: a fresh data
+     * directory has no folder to load, and a native picker cannot be driven from
+     * here anyway.
+     */
+    const press = async (label) => {
+      const find = `[...document.querySelectorAll('button')].find(
+        (entry) => entry.textContent.trim() === ${JSON.stringify(label)} && !entry.disabled,
+      )`;
+      await until(`the "${label}" button`, async () =>
+        (await evaluate(`(${find}) !== undefined`)) === true ? true : undefined,
+      );
+      const clicked = await evaluate(`(() => {
+        const button = ${find};
+        if (button === undefined) {
+          return false;
+        }
+        button.click();
+        return true;
+      })()`);
+      if (clicked !== true) {
+        fail(`the "${label}" button went away before it could be pressed`);
+      }
+    };
+
+    const opened = JSON.parse(
+      await evaluate(`JSON.stringify({
+        flow: !!document.querySelector('.setup'),
+        cta: document.querySelector('.onboarding .button-primary')?.textContent?.trim() ?? '',
+        composer: !!document.querySelector('.composer-box'),
+      })`),
+    );
+    if (opened.flow !== true || opened.cta !== 'Get started') {
+      fail(
+        `a fresh install did not open on the setup flow: ${JSON.stringify(opened)}`,
+      );
+    } else if (opened.composer !== false) {
+      fail('the setup flow offered a message box before the app could answer');
+    } else {
+      ok('a fresh install opens on the setup flow, with nothing to type into');
+    }
+
+    await press('Get started');
+
+    /*
+     * The Space step. "Later" is what a fresh directory offers; a run that
+     * already had a folder loaded is offered "Continue" instead, and either one
+     * is the step being answered rather than the check skipping over it.
+     */
+    const spaceLabels = JSON.parse(
+      await evaluate(
+        `JSON.stringify([...document.querySelectorAll('.setup-body button')].map((entry) => entry.textContent.trim()))`,
+      ),
+    );
+    await press(spaceLabels.includes('Later') ? 'Later' : 'Continue');
+
+    /*
+     * The bot. Typed into the real field, through the real setter, because the
+     * point of the check is the form and not the store: a step that drew a name
+     * box and never read it would pass a bridge-level check.
+     */
+    await until('the bot form', async () =>
+      (await evaluate(
+        `document.querySelector('.setup-form input.settings-input') !== null`,
+      )) === true
+        ? true
+        : undefined,
+    );
+    const named = await evaluate(`(() => {
+      const input = document.querySelector('.setup-form input.settings-input');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'Smoke');
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+      return input.value;
+    })()`);
+    if (named !== 'Smoke') {
+      fail(`the bot's name field did not take a name: ${String(named)}`);
+    }
+    await press('Make this bot');
+
+    /* And the optional second half: one more bot, or none. */
+    await press("That's enough for now");
+
+    /*
+     * The provider. The local one, because it is the only entry that can be
+     * chosen without an account — and choosing it is what makes the app able to
+     * answer, which is what turns the step's own button on.
+     */
+    const choseProvider = await evaluate(`(() => {
+      const card = [...document.querySelectorAll('.capability-card')].find((entry) =>
+        entry.textContent.trim().startsWith('Local llama.cpp'),
+      );
+      if (card === undefined) {
+        return false;
+      }
+      card.click();
+      return true;
+    })()`);
+    if (choseProvider !== true) {
+      fail('the model step offers no local provider to choose');
+    }
+    await press('Start chatting');
+
+    /*
+     * The recall offer, which is the flow's own last beat: the app went from
+     * unable to answer to able while this window watched, and the one feature
+     * that is invisible until it is used is offered exactly once at that moment.
+     * Answered with "Not now", which is a real answer and the one that leaves the
+     * rest of this script a plain, configured app.
+     */
+    await press('Not now');
+
+    const afterSetup = JSON.parse(
+      await evaluate(`(async () => {
+        const {profiles} = await window.marimo.call('profiles.list', {});
+        const {delegationTool} = await window.marimo.call('profiles.catalog', {});
+        return JSON.stringify({
+          flow: !!document.querySelector('.setup'),
+          composer: !!document.querySelector('.composer-box'),
+          bots: profiles.map((entry) => entry.name),
+          leadTools: profiles[0]?.enabledTools ?? [],
+          delegation: delegationTool ?? null,
+          ready: (await window.marimo.call('settings.get', {})).settings.modelReady,
+        });
+      })()`),
+    );
+    if (afterSetup.flow !== false || afterSetup.composer !== true) {
+      fail(
+        `the setup flow did not close onto a chat: ${JSON.stringify(afterSetup)}`,
+      );
+    } else if (!afterSetup.bots.includes('Smoke')) {
+      fail(
+        `the bot made in the flow is not in the roster: ${afterSetup.bots.join(', ')}`,
+      );
+    } else if (
+      afterSetup.delegation === null ||
+      !afterSetup.leadTools.includes(afterSetup.delegation)
+    ) {
+      /*
+       * The checkbox the step draws checked by default, asserted at the far end
+       * of the path it travels: the name of the tool is the agent package's, and
+       * the grant lands in the lead's profile.
+       */
+      fail(
+        `the flow did not let Marimo hand work to a bot: ${JSON.stringify(afterSetup)}`,
+      );
+    } else if (afterSetup.ready !== true) {
+      fail('the flow closed without the app being able to answer');
+    } else {
+      ok(
+        `the flow made a bot and closed onto a chat (${afterSetup.bots.join(', ')})`,
+      );
+    }
+
+    /*
      * The rail, end to end.
      *
      * Folders are the part of the window no unit test can prove: the shape
@@ -725,44 +888,6 @@ async function main() {
       }
 
       /*
-       * A fresh install opens by naming what it is missing rather than by
-       * showing a chat that refuses. Checked here because it is the first thing a
-       * new user sees and the only part of the first run that no unit test
-       * covers.
-       *
-       * What it is missing is a provider, not a download: the app carries no
-       * model and runs no engine, so the screen's job is to say so and to open
-       * the one place that fixes it. The control is asserted rather than just the
-       * copy — a welcome that names the problem with nothing to press is the dead
-       * end this screen exists to avoid.
-       */
-      const asked = await send('Runtime.evaluate', {
-        expression: `(async () => {
-          return JSON.stringify({
-            onboarding: !!document.querySelector('.onboarding'),
-            cta: !!document.querySelector('.onboarding .button-primary'),
-            label: document.querySelector('.onboarding .button-primary')?.textContent ?? '',
-            composer: !!document.querySelector('.composer-box'),
-          });
-        })()`,
-        awaitPromise: true,
-        returnByValue: true,
-      });
-      const first = JSON.parse(asked.result.value);
-      if (first.onboarding !== true || first.cta !== true) {
-        fail(
-          `a fresh install said nothing about what it is missing: ${asked.result.value}`,
-        );
-      } else if (!/settings/iu.test(first.label)) {
-        fail(`the first run's button says "${first.label}"`);
-      } else if (first.composer !== true) {
-        // Not blocking: somebody who wants to look around first still can.
-        fail('the first run took the message box away');
-      } else {
-        ok('a fresh install names the problem, without taking the window over');
-      }
-
-      /*
        * The composer's shape, which no unit test can see: this package has no DOM
        * test environment, and the two facts asserted here are the ones a
        * restructured composer gets wrong silently — the arrow belongs on the line
@@ -821,12 +946,12 @@ async function main() {
           ),
           above: box.bottom <= anchor.top + 1,
           /*
-           * The rule the popover exists to keep: the menu is on screen. On this
-           * screen there is room below the ` +
-            ` — a fresh install shows the
-           * welcome card instead of a transcript, so the composer is not yet at
-           * the bottom of the window — and in a conversation there is none, so
-           * what is asserted is that it flipped exactly when it had to.
+           * The rule the popover exists to keep: the menu is on screen. By the
+           * time this runs the setup flow has closed, so the composer sits at the
+           * bottom of the window with an empty transcript above it — the state
+           * where there is no room below and the menu has to flip. What is
+           * asserted is that it flipped exactly when it had to, rather than
+           * always or never.
            */
           withinViewport: box.top >= 0 && box.bottom <= window.innerHeight,
           needsFlip:
@@ -925,17 +1050,18 @@ async function main() {
       /*
        * The compact command, run the way a person runs it.
        *
-       * On this machine the app carries a model and the weights are not in the
-       * checkout it was built from, so what the command *must* do is say so: a
-       * command that reported success, or said nothing at all, would be worse
-       * than one that fails. That makes the assertion here the honest one for
-       * this install — and it still proves the whole path, because the sentence
-       * comes from the model configuration at the far end of it. A missing IPC
-       * handler would arrive as "unknown method" instead.
+       * What this proves is the round trip: the `+` menu, the command, the IPC
+       * call, the agent, and a sentence back in the composer's hint slot. By the
+       * time it runs the setup flow has been through, so the app has a provider
+       * and this is a conversation nothing has been said in — which makes the
+       * agent's own answer the honest one: there is nothing to compact yet. That
+       * arrives as a *note* rather than a failure, because a command that cannot
+       * run is not a broken app.
        *
-       * The check is that it names the *problem*, not the exact wording: one of
-       * the two messages is right depending on whether this run has weights, and
-       * both are refusals that mention what is missing.
+       * So the assertion is that something came back and that it is not the
+       * sentence a broken path produces. Silence — a command that ran and said
+       * nothing — times out here, and a missing handler arrives as "Unknown IPC
+       * method", which the check below names rather than accepting.
        */
       await evaluate(`document.querySelector('.composer-add')?.click()`);
       await until(
@@ -947,20 +1073,27 @@ async function main() {
         `[...document.querySelectorAll('.popover-item')]
         .find((item) => item.textContent.trim() === 'Compact history')?.click()`,
       );
-      const refusal = await until(
-        'the complaint about the missing model',
+      const reported = await until(
+        'the compact command to report back',
         async () => {
           const text = await evaluate(
-            `document.querySelector('.composer-hint.is-failure')?.textContent ?? null`,
+            `document.querySelector('.composer-hint')?.textContent ?? null`,
           );
-          return typeof text === 'string' ? text : undefined;
+          /*
+           * Two sentences in that slot are not an answer to anything: what it
+           * says while idle, and what it says while the command is running.
+           */
+          return typeof text === 'string' &&
+            !/Enter to send|Working…/u.test(text)
+            ? text
+            : undefined;
         },
       );
-      if (!/not installed|not running|API key/u.test(refusal)) {
-        fail(`compacting without a model said the wrong thing: ${refusal}`);
+      if (/unknown ipc method|no handler/iu.test(reported)) {
+        fail(`the compact command never reached the agent: ${reported}`);
       } else {
         ok(
-          `the compact command reached the agent and reported: ${refusal.trim()}`,
+          `the compact command reached the agent and reported: ${reported.trim()}`,
         );
       }
 
@@ -1002,6 +1135,16 @@ async function main() {
             label: card.querySelector('.capability-label')?.textContent ?? '',
             chosen: card.getAttribute('aria-pressed') === 'true',
           })),
+          /*
+           * Whether the card explains a grant that is none of the three. That
+           * sentence is the whole answer to "why is nothing lit", and a fresh
+           * install is in exactly that state when the setup flow has granted the
+           * lead the tool it hands work to a bot with.
+           */
+          handMade:
+            document
+              .querySelector('.capability-cards')
+              ?.nextElementSibling?.textContent?.includes('put together') ?? false,
           density: document.documentElement.dataset.density ?? '',
         });
       })()`);
@@ -1037,11 +1180,20 @@ async function main() {
         fail(
           `the simple screen offers ${String(simpleScreen.choices.length)} choice(s)`,
         );
-      } else if (litCards.length !== 1) {
+      } else if (litCards.length > 1) {
         fail(
           `${String(litCards.length)} of the ${String(simpleScreen.choices.length)} ability ` +
-            'cards are lit on a fresh install',
+            'cards are lit at once',
         );
+      } else if (litCards.length === 0 && simpleScreen.handMade !== true) {
+        /*
+         * None lit is a state rather than a bug — it is what a grant put
+         * together by hand looks like, and the cards have to say so instead of
+         * leaving the user to guess why their bot matches nothing. A fresh
+         * install lands here because the setup flow granted the lead the one
+         * tool it needs to hand work to the bots the person just made.
+         */
+        fail('no ability card is lit and the card does not say why');
       } else if (simpleScreen.openOnArrival > 0) {
         fail('a fresh install opens with a settings section already expanded');
       } else if (simpleScreen.density !== 'comfortable') {
@@ -1049,7 +1201,8 @@ async function main() {
       } else {
         ok(
           `a fresh install opens simple: ${String(simpleScreen.titles.length)} sections, ` +
-            `${String(simpleScreen.choices.length)} choices, "${litCards[0].label}" lit`,
+            `${String(simpleScreen.choices.length)} choices, ` +
+            `${litCards.length === 0 ? 'a hand-made grant explained' : `"${litCards[0].label}" lit`}`,
         );
       }
 

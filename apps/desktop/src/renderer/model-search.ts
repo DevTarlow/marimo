@@ -22,6 +22,18 @@
 import {fallbackModelsFor} from '@marimo/protocol';
 import type {AvailableModels, ProviderId} from '@marimo/protocol';
 
+/**
+ * Past this many names a pick-list needs a search box.
+ *
+ * A `<select>` is the better control for the handful of models DeepSeek serves:
+ * it is keyboard-familiar, drawn by the OS, and costs no code. OpenRouter answers
+ * its `/models` with several hundred. The number lives here rather than beside
+ * one of the two callers because there are two now — Settings' provider card and
+ * the setup flow's last step — and two numbers would be two answers to when a
+ * list becomes a scroll.
+ */
+export const SEARCHABLE_MODEL_THRESHOLD = 12;
+
 /** What one picker should list, and where the list came from. */
 export interface ModelChoices {
   /**

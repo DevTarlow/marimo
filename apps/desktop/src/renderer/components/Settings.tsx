@@ -68,7 +68,7 @@ import {
 
 import {chosenPreset} from '../capabilities.js';
 import {describe} from '../describe.js';
-import {modelChoicesFor} from '../model-search.js';
+import {modelChoicesFor, SEARCHABLE_MODEL_THRESHOLD} from '../model-search.js';
 import {BotMenu} from './BotMenu.js';
 import {Connectors} from './Connectors.js';
 import {Dream} from './Dream.js';
@@ -77,18 +77,6 @@ import {ModelPicker} from './ModelPicker.js';
 import type {PopoverAnchor} from './Popover.js';
 import {Recall} from './Recall.js';
 import {SettingsSection} from './SettingsSection.js';
-
-/**
- * Above this many models the field becomes a searchable picker.
- *
- * The native `<select>` is the better control for the handful a provider like
- * DeepSeek serves: it is keyboard-familiar, it is drawn by the OS, and it costs
- * no code. OpenRouter answers its `/models` with several hundred, and a list that
- * long is one you scroll rather than choose from — the threshold is data, not a
- * provider id, so any endpoint that turns out to be this generous gets the same
- * treatment.
- */
-const SEARCHABLE_MODEL_THRESHOLD = 12;
 
 /**
  * The three lengths, in the words the user is choosing between.
@@ -2077,8 +2065,9 @@ function CapabilityChoices({
             ? 'This bot is not allowed to do anything at all yet — not even ' +
               'read a file. Choosing one of the three above is how you change ' +
               'that.'
-            : 'This bot has a set of abilities put together in Power user ' +
-              'mode. Choosing one of the three above replaces it with that one.'}
+            : 'This bot has a set of abilities put together by hand, in Power ' +
+              'user mode. Choosing one of the three above replaces the whole ' +
+              'set, so anything switched on outside those three is switched off.'}
         </p>
       )}
     </>

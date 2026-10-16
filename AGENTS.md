@@ -319,30 +319,32 @@ unexpanded context fails the step rather than the job — and the runner's own
 expectation is that it reports the recall model as not installed, which is a state
 it has to handle anyway.
 
-**It runs on a pull request, or when asked, and not on every push to `main`.**
-That is deliberate while the app is being built: the repository is private, so
-each run spends metered minutes, and the suite has just been run locally anyway.
-A push used to start one, and with a few pushes an hour that is a bill for a
-verdict nobody reads. `concurrency` cancels a superseded run rather than paying
-for both, the job has a twenty-minute timeout so a hung step cannot bill for the
-six-hour default, a prose-only pull request is skipped, and the packaging step
-is behind a `package` input on the manual trigger. When `main` is expected
-to be green at all times, put the push trigger back.
+**It runs on a push to `main`, and on a pull request.** It ran on pull requests
+and the Actions tab alone while the repository was private, because each run spent
+metered minutes and a few pushes an hour was a bill for a verdict nobody reads.
+Standard runners are free on a public repository, so that reason is gone — and
+what it was buying was worth having back anyway, because this is pushed straight to
+main: with rarely a pull request to trigger it, the smoke check waited for
+somebody to remember the Actions tab, which is the wrong shape for the one check
+that catches a preload which stopped matching the renderer.
 
-The consequence worth knowing: **nothing checks a push any more.** A change that
-matters — the preload, the IPC schemas, the bundles — is verified by the local
-commands below, and by running the workflow from the Actions tab before a
-release. A failure in CI is still a failure; there is just no longer one per
-commit.
+What kept the workflow cheap was never only money, so all of it is still here.
+`concurrency` cancels a superseded run rather than finishing a verdict on code
+that has already changed, the job has a twenty-minute timeout so a hung step
+cannot sit on a runner, a prose-only change is skipped — through one
+`paths-ignore` list that both triggers share by anchor, since two copies is how
+two triggers come to disagree about what a change is — and the packaging step
+stays behind a `package` input on the manual trigger, because an AppImage built
+to prove one thing is a release's business rather than a component's.
 
-**Nothing in this workflow uploads an artifact, and that is the other half of not
-billing for a push.** The 500 MB a free account gets is shared by Actions
+**Nothing in this workflow uploads an artifact, and that is a separate account
+from the minutes.** The 500 MB a free account gets is shared by Actions
 *artifacts* and GitHub Packages across every repository that account owns, while
 caches have their own allowance and are not part of it — so the pnpm cache above
-cannot fill it, and the thing that does is an `upload-artifact` step. One added
-here needs a `retention-days` of a day or two; a build output that is really a
-release belongs in a release rather than an artifact. Both are free once this
-repository is public, which is the other reason the push trigger can come back.
+cannot fill it, and an `upload-artifact` step is what does. One added here needs a
+`retention-days` of a day or two; a build output that is really a release belongs
+in a release rather than an artifact. Public repositories get that storage free
+too, which is what to check before adding an upload to one that is not.
 
 Two consequences worth internalising. **A green local run is not a green CI
 run** — the steps above are the difference, so when packaging, the preload or the

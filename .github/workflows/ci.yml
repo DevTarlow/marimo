@@ -23,7 +23,9 @@ on:
     # README or a note, which is most of a documentation day's pushes.
     paths-ignore:
       - '**.md'
+      - 'LICENCE'
       - 'LICENSE'
+      - 'NOTICE'
       - '.gitignore'
   workflow_dispatch:
     inputs:

@@ -335,6 +335,15 @@ commands below, and by running the workflow from the Actions tab before a
 release. A failure in CI is still a failure; there is just no longer one per
 commit.
 
+**Nothing in this workflow uploads an artifact, and that is the other half of not
+billing for a push.** The 500 MB a free account gets is shared by Actions
+*artifacts* and GitHub Packages across every repository that account owns, while
+caches have their own allowance and are not part of it — so the pnpm cache above
+cannot fill it, and the thing that does is an `upload-artifact` step. One added
+here needs a `retention-days` of a day or two; a build output that is really a
+release belongs in a release rather than an artifact. Both are free once this
+repository is public, which is the other reason the push trigger can come back.
+
 Two consequences worth internalising. **A green local run is not a green CI
 run** — the steps above are the difference, so when packaging, the preload or the
 IPC schemas have moved, run the workflow on purpose rather than trusting the local

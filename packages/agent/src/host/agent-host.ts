@@ -1771,7 +1771,7 @@ export class AgentHost {
     const runner = this.buildRunner({
       config: this.config,
       author,
-      description: 'Marimo, a local desktop assistant.',
+      description: 'Marimo Bot, a local desktop assistant.',
     });
     this.runners.set(key, runner);
     return runner;

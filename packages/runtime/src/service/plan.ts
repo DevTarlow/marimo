@@ -108,7 +108,7 @@ export type ServiceProbe =
 export const SERVICE_UNIT = 'marimo-agent-jobs';
 
 /** The user-visible name, for the places that show a description. */
-export const SERVICE_LABEL = 'Marimo scheduled jobs';
+export const SERVICE_LABEL = 'Marimo Bot scheduled jobs';
 
 /**
  * The environment that makes the app binary behave as plain Node.

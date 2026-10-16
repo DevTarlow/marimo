@@ -261,7 +261,7 @@ describe('toOpenAiMessages', () => {
   it('keeps thought parts out of a system instruction', () => {
     const instruction: Content = {
       role: 'user',
-      parts: [{text: 'You are Marimo.', thought: true}, {text: 'Be brief.'}],
+      parts: [{text: 'You are Marimo Bot.', thought: true}, {text: 'Be brief.'}],
     };
     const messages = toOpenAiMessages([instruction]);
     expect(messages[0]?.content).toBe('Be brief.');

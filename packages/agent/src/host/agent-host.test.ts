@@ -203,7 +203,7 @@ function typesOf(events: AgentUiEvent[]): string[] {
  * about is that whatever identity a profile holds reaches the request, and an
  * assertion against the shipped text would fail every time somebody edits it.
  */
-const TEST_IDENTITY = 'You are Marimo, a test agent.';
+const TEST_IDENTITY = 'You are Marimo Bot, a test agent.';
 
 describe('AgentHost', () => {
   let workDir: string;
@@ -367,7 +367,7 @@ describe('AgentHost', () => {
         queries.push(query);
         return [
           {
-            title: 'Marimo',
+            title: 'Marimo Bot',
             url: 'https://example.com/marimo',
             snippet: 'A reactive notebook',
           },
@@ -1496,7 +1496,7 @@ describe('AgentHost', () => {
         queries.push(query);
         return [
           {
-            title: 'Marimo',
+            title: 'Marimo Bot',
             url: 'https://example.com/marimo',
             snippet: 'A reactive notebook',
           },

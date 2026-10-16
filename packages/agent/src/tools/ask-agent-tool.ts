@@ -204,7 +204,7 @@ const parameters = z.object({
  * What the tool that hands work to another agent is called.
  *
  * Exported because somebody outside this package has to name it: the window's
- * setup flow offers to grant it to the lead, so that Marimo can give a bot
+ * setup flow offers to grant it to the lead, so that Marimo Bot can give a bot
  * something to do. A second spelling of the string out there would grant a name
  * no tool answers to, and the failure is silent — a profile's grant naming
  * nothing is filtered away at the host rather than refused, so the box would

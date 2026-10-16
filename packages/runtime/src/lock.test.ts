@@ -119,7 +119,7 @@ describe('withFileLock', () => {
 
     await expect(
       withFileLock(lock, async () => undefined, {timeoutMs: 100, sleep}),
-    ).rejects.toThrow(/another copy of Marimo/iu);
+    ).rejects.toThrow(/another copy of Marimo Bot/iu);
 
     // And it waited, rather than giving up on the first refusal.
     expect(waits.length).toBeGreaterThan(0);

@@ -13,7 +13,7 @@ import {selectMemory, type RecalledBullet} from './select.js';
 
 /** A file with an always section, a fact section and a title. */
 const WHOLE_FILE = [
-  '# Marimo memory',
+  '# Marimo Bot memory',
   '',
   '## Preferences and tone',
   '- Prefers pnpm',
@@ -94,7 +94,7 @@ describe('selectMemory with retrieval', () => {
   it('carries the title the user wrote above the first heading', () => {
     expect(
       selectMemory({memory: WHOLE_FILE, usedRetrieval: true}).text,
-    ).toContain('# Marimo memory');
+    ).toContain('# Marimo Bot memory');
   });
 
   it('injects a section nobody named whole, because the user wrote it', () => {
@@ -372,10 +372,10 @@ describe('selectMemory edge cases', () => {
 
   it('keeps a title the file has but no bullets under', () => {
     const selection = selectMemory({
-      memory: '# Marimo memory\n',
+      memory: '# Marimo Bot memory\n',
       usedRetrieval: true,
     });
-    expect(selection.text).toBe('# Marimo memory');
+    expect(selection.text).toBe('# Marimo Bot memory');
     expect(selection.total).toBe(0);
   });
 

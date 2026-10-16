@@ -35,7 +35,7 @@ export function Onboarding({
   return (
     <div className="onboarding">
       <img className="onboarding-mark" src="./marimo-logo.png" alt="" />
-      <h2>Welcome to Marimo</h2>
+      <h2>Welcome to Marimo Bot</h2>
 
       <p className="onboarding-lead">
         The bot has nothing to think with until it is pointed at a model.

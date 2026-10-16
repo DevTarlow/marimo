@@ -20,7 +20,7 @@ cacheDir: .npmcache
 # container-based code-execution tool, which this app does not use, and
 # `cpu-features`/`ssh2` are optional native accelerators for ssh2's tunnelling.
 # Saying `false` rather than leaving them out keeps the install deterministic
-# and means nobody needs a C toolchain to build Marimo Agent.
+# and means nobody needs a C toolchain to build Marimo Bot.
 allowBuilds:
   '@google/genai': true
   cpu-features: false

@@ -31,7 +31,7 @@ import {WorkspaceStore} from '../workspaces.js';
 import {AgentRuntime} from './runtime.js';
 
 /** The two agents, by the one thing a request carries that tells them apart. */
-const LEAD_IDENTITY = 'You are Marimo, and you hand writing work to Writer.';
+const LEAD_IDENTITY = 'You are Marimo Bot, and you hand writing work to Writer.';
 const WRITER_IDENTITY = 'You are Writer. You draft blog posts and file them.';
 
 /** What the user says, in their own words. */
@@ -225,7 +225,7 @@ function postFor(readResult: string): string {
   return [
     convention,
     '',
-    '# Hello, Marimo',
+    '# Hello, Marimo Bot',
     '',
     'The app runs no model of its own.',
     '',

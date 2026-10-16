@@ -17,19 +17,19 @@ import {describe, expect, it} from 'vitest';
 import {DEFAULT_AGENT_IDENTITY, botIdentityFor} from './index.js';
 
 describe('the identity seeds', () => {
-  it('names Marimo as the one the person talks to', () => {
-    expect(DEFAULT_AGENT_IDENTITY).toContain('You are Marimo');
+  it('names Marimo Bot as the one the person talks to', () => {
+    expect(DEFAULT_AGENT_IDENTITY).toContain('You are Marimo Bot');
   });
 
   /*
    * The defect this pair exists for: a bot seeded with the lead's text
-   * introduces itself as Marimo, which is the confusion the bots feature is
+   * introduces itself as Marimo Bot, which is the confusion the bots feature is
    * built so the person never sees.
    */
-  it('has a bot name itself rather than introduce it as Marimo', () => {
+  it('has a bot name itself rather than introduce it as Marimo Bot', () => {
     const text = botIdentityFor('Writer');
     expect(text).toContain('Writer');
-    expect(text).not.toContain('You are Marimo');
+    expect(text).not.toContain('You are Marimo Bot');
   });
 
   /*

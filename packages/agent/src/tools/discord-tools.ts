@@ -217,7 +217,7 @@ export function createListDiscordChannelsTool(context: DiscordToolContext) {
  * and the name of the watched channel count as the same destination.
  *
  * The name has to count. The mention prompt tells the model which channel it was
- * mentioned in ("#general in Marimo HQ"), so being explicit about where the
+ * mentioned in ("#general in Marimo Bot HQ"), so being explicit about where the
  * answer goes is the natural thing for it to do — and treating that as a
  * different channel posted an approval card for a reply the user had already
  * asked for. Comparing names is the *less* safe direction only for two channels

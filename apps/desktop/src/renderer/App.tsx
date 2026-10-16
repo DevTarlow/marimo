@@ -554,7 +554,7 @@ export function App(): React.JSX.Element {
               */}
               {members.length > 0
                 ? members.map((member) => member.name).join(', ')
-                : 'Marimo'}
+                : 'Marimo Bot'}
             </h1>
             {info !== null && (
               <p className="head-sub">

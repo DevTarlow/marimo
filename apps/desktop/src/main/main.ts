@@ -32,7 +32,7 @@ import {IPC_EVENT_CHANNEL, defaultWindowState} from '@marimo/protocol';
 import type {AgentUiEvent, ThemeMode, WindowState} from '@marimo/protocol';
 import {defaultStoredSettings, resetInstall} from '@marimo/runtime';
 
-import {PRODUCT_NAME} from '../shared/product.js';
+import {adoptFormerUserDataDir, PRODUCT_NAME} from '../shared/product.js';
 
 import {registerIpcHandler} from './ipc.js';
 import {Companion} from './companion.js';
@@ -63,9 +63,16 @@ const devServerUrl = process.env['MARIMO_DEV_SERVER_URL'];
  * Before anything else, and before the app is ready: Electron keeps the
  * single-instance lock inside the user-data directory, so deciding which
  * directory that is has to happen before the lock is requested. It is decided
- * rather than derived from the app's name, because the app is Marimo and the
- * folder is still `Marimo Agent` — see `applyUserDataPath`.
+ * rather than derived from the app's name, because the app is Marimo Bot and the
+ * folder has not always been called that — see `applyUserDataPath`.
+ *
+ * The migration comes first and has to: `applyUserDataPath` creates the directory
+ * it is handed, so a move attempted after it would find the new folder already
+ * there and have to guess whether that meant a fresh install or a half-finished
+ * one. An install that never migrated keeps every conversation; the alternative
+ * is a window that opens on an empty folder and looks like a fresh install.
  */
+adoptFormerUserDataDir();
 applyUserDataPath();
 
 /**
@@ -381,8 +388,8 @@ async function bootstrap(): Promise<void> {
    * 1. **The OS timer and the login item, first.** Both live outside the
    *    user-data folder, so deleting that folder would leave a scheduled runner
    *    waking every minute against an install that is no longer there, and
-   *    Marimo starting itself at the next login. Best effort — neither is worth
-   *    failing the whole reset over, and both are reported to the log.
+   *    Marimo Bot starting itself at the next login. Best effort — neither is
+   *    worth failing the whole reset over, and both are reported to the log.
    * 2. **The agent stops.** That is what releases the app lock, ends the MCP
    *    child processes and shuts the recall engine down; deleting files under a
    *    live engine leaves a child holding a directory that is gone.

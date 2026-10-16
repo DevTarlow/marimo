@@ -30,8 +30,8 @@ import {createTools} from './index.js';
 const WATCHED = {id: '100', name: 'general'};
 
 const CHANNELS: DiscordChannel[] = [
-  {id: '100', name: 'general', guild: 'Marimo HQ'},
-  {id: '200', name: 'random', guild: 'Marimo HQ'},
+  {id: '100', name: 'general', guild: 'Marimo Bot HQ'},
+  {id: '200', name: 'random', guild: 'Marimo Bot HQ'},
   {id: '300', name: 'alerts', guild: 'Ops'},
 ];
 
@@ -45,7 +45,7 @@ const MESSAGES: DiscordMessage[] = [
   },
   {
     id: 'm2',
-    author: 'Marimo',
+    author: 'Marimo Bot',
     content: 'morning!',
     createdAt: '2026-05-01T09:01:00.000Z',
     bot: true,
@@ -153,7 +153,7 @@ describe('Discord tools', () => {
     });
 
     /**
-     * The mention prompt names the channel ("#general in Marimo HQ"), so a model
+     * The mention prompt names the channel ("#general in Marimo Bot HQ"), so a model
      * answering a mention may well repeat it. Treating that as somewhere else
      * asked the user to approve a reply to their own message, which is the bug
      * this pins.
@@ -204,7 +204,7 @@ describe('Discord tools', () => {
       expect(result).toContain('id m1 · Ada');
       expect(result).toContain('morning');
       // The agent's own posts are marked, so it can tell them from a person's.
-      expect(result).toContain('Marimo (bot)');
+      expect(result).toContain('Marimo Bot (bot)');
     });
 
     it('says so when the channel is empty', async () => {
@@ -226,9 +226,9 @@ describe('Discord tools', () => {
       const tool = createListDiscordChannelsTool({discord: harness().service});
       const result = await run(tool, {});
 
-      expect(result).toContain('100 · #general — Marimo HQ (watched)');
+      expect(result).toContain('100 · #general — Marimo Bot HQ (watched)');
       expect(result).toContain('300 · #alerts — Ops');
-      expect(result).not.toContain('#random — Marimo HQ (watched)');
+      expect(result).not.toContain('#random — Marimo Bot HQ (watched)');
     });
 
     it('says so when the bot is in no server it can post to', async () => {

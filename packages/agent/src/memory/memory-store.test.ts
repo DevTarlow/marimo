@@ -61,26 +61,26 @@ describe('memory paths', () => {
    * name as the workspace one, so a `.bak` beside either means the same thing.
    */
   it('keeps the person half under user data, one folder per profile', () => {
-    expect(resolvePersonMemoryFile('/home/u/.config/Marimo Agent/memory')).toBe(
+    expect(resolvePersonMemoryFile('/home/u/.config/Marimo Bot/memory')).toBe(
       join(
-        '/home/u/.config/Marimo Agent/memory',
+        '/home/u/.config/Marimo Bot/memory',
         DEFAULT_PROFILE_ID,
         'memory.md',
       ),
     );
     expect(
-      resolvePersonMemoryFile('/home/u/.config/Marimo Agent/memory', 'research'),
+      resolvePersonMemoryFile('/home/u/.config/Marimo Bot/memory', 'research'),
     ).toBe(
-      join('/home/u/.config/Marimo Agent/memory', 'research', 'memory.md'),
+      join('/home/u/.config/Marimo Bot/memory', 'research', 'memory.md'),
     );
   });
 
   it('refuses a profile id that would escape the person folder', () => {
     expect(
-      resolvePersonMemoryFile('/home/u/.config/Marimo Agent/memory', '../..'),
+      resolvePersonMemoryFile('/home/u/.config/Marimo Bot/memory', '../..'),
     ).toBe(
       join(
-        '/home/u/.config/Marimo Agent/memory',
+        '/home/u/.config/Marimo Bot/memory',
         DEFAULT_PROFILE_ID,
         'memory.md',
       ),
@@ -96,13 +96,13 @@ describe('applyUpdate', () => {
   });
 
   it('appends a bullet to an existing section', () => {
-    const current = '# Marimo memory\n\n## Preferences\n- Prefers pnpm\n';
+    const current = '# Marimo Bot memory\n\n## Preferences\n- Prefers pnpm\n';
     const next = applyUpdate(current, {
       section: 'Preferences',
       content: 'Uses a dark theme',
     });
     expect(next).toBe(
-      '# Marimo memory\n\n## Preferences\n- Prefers pnpm\n- Uses a dark theme\n',
+      '# Marimo Bot memory\n\n## Preferences\n- Prefers pnpm\n- Uses a dark theme\n',
     );
   });
 
@@ -114,13 +114,13 @@ describe('applyUpdate', () => {
   });
 
   it('creates a section that does not exist yet, keeping the others', () => {
-    const current = '# Marimo\n\n## Preferences\n- Prefers pnpm\n';
+    const current = '# Marimo Bot\n\n## Preferences\n- Prefers pnpm\n';
     const next = applyUpdate(current, {
       section: 'Environment',
       content: 'Node 22\n- pnpm 11',
     });
     expect(next).toBe(
-      '# Marimo\n\n## Preferences\n- Prefers pnpm\n\n## Environment\n- Node 22\n- pnpm 11\n',
+      '# Marimo Bot\n\n## Preferences\n- Prefers pnpm\n\n## Environment\n- Node 22\n- pnpm 11\n',
     );
   });
 

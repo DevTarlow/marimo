@@ -51,7 +51,7 @@ export interface ProfileStoreOptions {
    * Identity a bot the user makes starts with, from the name it was given.
    *
    * Deliberately not `defaultIdentity`: that text describes the lead, and a bot
-   * seeded with it would introduce itself as Marimo and be told to hand work to
+   * seeded with it would introduce itself as Marimo Bot and be told to hand work to
    * bots it has no tool to do. Naming itself is the one thing a bot's seed has
    * to do, which is why this takes the name rather than being a constant.
    */
@@ -403,7 +403,7 @@ export class ProfileStore {
   private freshFile(seed?: ProfileSeed): ProfileFile {
     const profile: AgentProfile = {
       id: randomUUID(),
-      name: 'Marimo',
+      name: 'Marimo Bot',
       /*
        * The lead, and the only profile `defaultIdentity` is for: it is first in
        * the document, which is what `AgentRuntime.catalog` reads to decide whose

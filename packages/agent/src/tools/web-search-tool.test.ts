@@ -38,7 +38,7 @@ describe('web_search', () => {
   it('formats results with their URLs', async () => {
     const {provider} = providerReturning([
       {
-        title: 'Marimo docs',
+        title: 'Marimo Bot docs',
         url: 'https://example.com/a',
         snippet: 'About marimo',
       },
@@ -48,7 +48,7 @@ describe('web_search', () => {
       query: 'marimo',
     });
     expect(output).toContain('2 web results for "marimo"');
-    expect(output).toContain('1. Marimo docs');
+    expect(output).toContain('1. Marimo Bot docs');
     expect(output).toContain('https://example.com/a');
     expect(output).toContain('About marimo');
     expect(output).toContain('2. Second');

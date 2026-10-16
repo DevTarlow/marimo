@@ -48,7 +48,7 @@ import {
   sweepDreamTrees,
 } from '@marimo/runtime';
 
-import {userDataDirFor} from '../shared/product.js';
+import {adoptFormerUserDataDir, userDataDirFor} from '../shared/product.js';
 
 const USAGE = `Replay recorded discovery trees offline, with no model and no tools.
 
@@ -229,6 +229,10 @@ if (
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
   try {
+    // A replay run from a checkout reads what the window wrote, so it has to be
+    // looking at the same folder — which means adopting the move if it is the
+    // first thing to run after the upgrade.
+    adoptFormerUserDataDir();
     process.exitCode = await replayDream(process.argv.slice(2));
   } catch (error) {
     process.stderr.write(

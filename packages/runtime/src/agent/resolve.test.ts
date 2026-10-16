@@ -51,8 +51,8 @@ const noKey = async (): Promise<SecretRead> => ({state: 'absent'});
 function profile(overrides: Partial<AgentProfile> = {}): AgentProfile {
   return {
     id: 'profile-1',
-    name: 'Marimo',
-    identity: 'You are Marimo.',
+    name: 'Marimo Bot',
+    identity: 'You are Marimo Bot.',
     enabledTools: ['read_file', 'current_time'],
     enabledSkills: [],
     ...overrides,
@@ -154,7 +154,7 @@ describe('resolveAgentConfig', () => {
       model: 'glm-5.3-flash',
       profileId: 'profile-1',
       workspaceRoot: '/home/someone/dev',
-      systemPrompt: 'You are Marimo.',
+      systemPrompt: 'You are Marimo Bot.',
     });
     // The credential the store produced, carried whole: a turn without one is the
     // refusal below rather than an empty request.
@@ -180,7 +180,7 @@ describe('resolveAgentConfig', () => {
     if (!result.ok) {
       return;
     }
-    expect(result.config.systemPrompt).toBe('You are Marimo.');
+    expect(result.config.systemPrompt).toBe('You are Marimo Bot.');
     expect(result.config.preferences).toBe('Call me Tarlow. Skip the emoji.');
   });
 
@@ -238,7 +238,7 @@ describe('resolveAgentConfig', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.problem).toContain('Marimo');
+      expect(result.problem).toContain('Marimo Bot');
       expect(result.problem).toMatch(/space/iu);
     }
   });

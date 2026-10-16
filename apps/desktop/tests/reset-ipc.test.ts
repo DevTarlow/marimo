@@ -35,7 +35,7 @@ const captured = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
-  app: {getName: () => 'Marimo', getVersion: () => '0.0.0'},
+  app: {getName: () => 'Marimo Bot', getVersion: () => '0.0.0'},
   ipcMain: {
     handle: (channel: string, handler: Dispatch) => {
       captured.channel = channel;

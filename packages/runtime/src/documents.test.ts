@@ -415,19 +415,19 @@ describe('DocumentService', () => {
       savedAt: new Date(2026, 1, 3, 12, 0, 0),
       messages: [
         {author: 'You', text: 'show me the parser output'},
-        {author: 'Marimo', text: 'Here it is.'},
+        {author: 'Marimo Bot', text: 'Here it is.'},
         {author: 'Researcher', text: 'I checked the tokens.'},
-        {author: 'Marimo', text: '   '},
+        {author: 'Marimo Bot', text: '   '},
       ],
     });
 
     expect(markdown).toContain('# Parser output');
     expect(markdown).toContain('Saved on 2026-02-03.');
     expect(markdown).toContain('## You\n\nshow me the parser output');
-    expect(markdown).toContain('## Marimo\n\nHere it is.');
+    expect(markdown).toContain('## Marimo Bot\n\nHere it is.');
     expect(markdown).toContain('## Researcher\n\nI checked the tokens.');
     // A turn that only called a tool is not a heading with nothing under it.
-    expect(markdown.match(/^## Marimo$/gmu)).toHaveLength(1);
+    expect(markdown.match(/^## Marimo Bot$/gmu)).toHaveLength(1);
   });
 
   it('saves a conversation into the space, and refuses a name already taken', async () => {
@@ -505,7 +505,7 @@ describe('AgentRuntime documents', () => {
         profiles: [
           {
             id: 'marimo',
-            name: 'Marimo',
+            name: 'Marimo Bot',
             identity: '',
             enabledTools: [],
             enabledSkills: [],
@@ -605,7 +605,7 @@ describe('AgentRuntime documents', () => {
     expect(markdown).toContain('# Parser output');
     expect(markdown).toMatch(/Saved on \d{4}-\d{2}-\d{2}\./u);
     expect(markdown).toContain('## You\n\nshow me the parser output');
-    expect(markdown).toContain('## Marimo\n\nHere it is.');
+    expect(markdown).toContain('## Marimo Bot\n\nHere it is.');
     expect(markdown).toContain('## Researcher\n\nI checked the tokens.');
   });
 

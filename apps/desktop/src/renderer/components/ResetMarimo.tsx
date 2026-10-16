@@ -25,7 +25,7 @@
  *
  * **It ends the app rather than starting it again.** Everything it deleted would
  * be read back out of the memories of the running process otherwise, so the
- * button says what it does — erase and quit — and the card says to open Marimo
+ * button says what it does — erase and quit — and the card says to open Marimo Bot
  * again, which is how somebody meets the first-run screen a second time. A reset
  * that quietly left a fresh install in the tray was tried and is worse: it looks
  * exactly like a reset that did not happen.
@@ -83,14 +83,14 @@ export function ResetMarimo({
 
   return (
     <SettingsSection
-      title="Reset Marimo"
+      title="Reset Marimo Bot"
       opened={opened}
       onToggle={onToggle}
       danger
     >
       <p className="settings-danger">
-        This takes Marimo back to the state it was in the first time you opened
-        it. Everything Marimo keeps for itself on this computer is erased,
+        This takes Marimo Bot back to the state it was in the first time you opened
+        it. Everything Marimo Bot keeps for itself on this computer is erased,
         nothing is backed up, and there is no undo.
       </p>
       {folder !== undefined && (
@@ -126,19 +126,19 @@ export function ResetMarimo({
           choice.
         </li>
         <li>
-          The switches that start Marimo at login and run jobs while it is
+          The switches that start Marimo Bot at login and run jobs while it is
           closed.
         </li>
       </ul>
 
       <h4 className="settings-group">What stays</h4>
       <p className="settings-muted">
-        Your files and folders, exactly where they are. Marimo never deletes
+        Your files and folders, exactly where they are. Marimo Bot never deletes
         anything inside a space: not your documents, and not the notes a bot
         kept there. If a bot is mid-answer right now, that answer is lost.
       </p>
       <p className="settings-muted">
-        Marimo closes when it is done, and does not come back on its own. Open
+        Marimo Bot closes when it is done, and does not come back on its own. Open
         it again and it will ask you to set it up as it did the first time.
       </p>
 
@@ -179,7 +179,7 @@ export function ResetMarimo({
           }}
         >
           {resetting
-            ? 'Erasing everything… Marimo is closing'
+            ? 'Erasing everything… Marimo Bot is closing'
             : 'Erase everything and quit'}
         </button>
       </div>

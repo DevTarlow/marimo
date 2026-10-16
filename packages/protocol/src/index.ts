@@ -1101,7 +1101,7 @@ export const workspacesFileSchema = z.object({
 export type WorkspacesFile = z.infer<typeof workspacesFileSchema>;
 
 /**
- * Who Marimo is, until the user says otherwise.
+ * Who Marimo Bot is, until the user says otherwise.
  *
  * One constant rather than a literal in each place that needs it, because those
  * places have to agree and a disagreement is invisible: this is the identity the
@@ -1117,7 +1117,7 @@ export type WorkspacesFile = z.infer<typeof workspacesFileSchema>;
  * **The second paragraph is the part that changed.** This is no longer one agent
  * on a machine: the person makes bots, gives them names, tools and permissions,
  * and puts them in the same conversations. An identity that says nothing about
- * them leaves Marimo behaving as if it were alone — doing work a specialist was
+ * them leaves Marimo Bot behaving as if it were alone — doing work a specialist was
  * made for, or handing everything off as a ritual. What it says here is *when*
  * to use them and that the person should hear about it.
  *
@@ -1143,7 +1143,7 @@ export type WorkspacesFile = z.infer<typeof workspacesFileSchema>;
  * conversation.
  */
 export const DEFAULT_AGENT_IDENTITY = [
-  'You are Marimo. You live on this machine, you belong to one person — the user —',
+  'You are Marimo Bot. You live on this machine, you belong to one person — the user —',
   'and you are not a service they are renting. The two of you have a history, and',
   'it keeps growing.',
   '',
@@ -1192,7 +1192,7 @@ export const DEFAULT_AGENT_IDENTITY = [
  * "You are one of the bots" would leave it guessing which one.
  *
  * It is deliberately not `DEFAULT_AGENT_IDENTITY`. That text describes the agent
- * the person talks to, and a bot seeded with it would introduce itself as Marimo
+ * the person talks to, and a bot seeded with it would introduce itself as Marimo Bot
  * — the exact confusion this system is built to avoid — and would be told to hand
  * work to bots, which it has no tool to do. What it says instead is what is true
  * of every bot: it was made by this person, it exists to be given work, its words
@@ -1207,11 +1207,11 @@ export function botIdentityFor(name: string): string {
   const called = name.trim() || 'this bot';
   return [
     `You are ${called}. The person made you. You are one of the bots in their`,
-    'Marimo setup — Marimo is the one they talk to by default, and it hands you',
-    'work — and you are not a lesser Marimo: your name, your instructions and your',
+    'Marimo Bot setup — Marimo Bot is the one they talk to by default, and it hands you',
+    'work — and you are not a lesser Marimo Bot: your name, your instructions and your',
     'tools are yours.',
     '',
-    'Either Marimo gives you one task, or the person speaks to you directly in a',
+    'Either Marimo Bot gives you one task, or the person speaks to you directly in a',
     'conversation that holds several bots. Both times the person is reading, so',
     'write for them: what you did, what you could not do, and what you would need',
     'to finish. A permission you do not have is worth naming rather than working',
@@ -2704,12 +2704,12 @@ export interface IpcErrorResult {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Marimo's own surface                                                       */
+/* Marimo Bot's own surface                                                       */
 /* -------------------------------------------------------------------------- */
 /*
  * The block above is the contract Marimo Desktop grew, kept because the agent
  * package still refers to its vocabulary (`AgentProfile`, `Job`).
- * This block is Marimo's own surface, and it starts deliberately small:
+ * This block is Marimo Bot's own surface, and it starts deliberately small:
  * a call is added here when the feature behind it lands, so the contract is a
  * description of what the app does rather than a wish list. The entries above
  * that this app will not implement are pruned as their replacements arrive.

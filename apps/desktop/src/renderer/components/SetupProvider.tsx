@@ -169,7 +169,7 @@ export function SetupProvider({
     <div className="setup-body">
       <h2>Where should the answers come from?</h2>
       <p className="onboarding-lead">
-        Marimo carries no model of its own. Point it at one of these and it can
+        Marimo Bot carries no model of its own. Point it at one of these and it can
         answer. Every service keeps its own address, model and key, so trying
         one and switching back costs you nothing.
       </p>
@@ -422,7 +422,7 @@ export function SetupProvider({
       */}
       <p className={ready ? 'settings-muted' : 'settings-problem'}>
         {ready
-          ? `Marimo will answer with ${descriptor.label} and ${config.model}.`
+          ? `Marimo Bot will answer with ${descriptor.label} and ${config.model}.`
           : (settings.modelProblem ??
             'The app has no way to answer yet. Pick a service above.')}
       </p>

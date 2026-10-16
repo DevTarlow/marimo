@@ -155,7 +155,7 @@ describe('SettingsStore', () => {
       discord: {
         channelId: '100',
         channelName: 'general',
-        guildName: 'Marimo HQ',
+        guildName: 'Marimo Bot HQ',
       },
     });
     const after = await settings.patch({discord: {enabled: true}});
@@ -165,7 +165,7 @@ describe('SettingsStore', () => {
       enabled: true,
       channelId: '100',
       channelName: 'general',
-      guildName: 'Marimo HQ',
+      guildName: 'Marimo Bot HQ',
     });
   });
 

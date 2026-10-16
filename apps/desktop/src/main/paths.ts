@@ -21,11 +21,14 @@ export {USER_DATA_ENV};
 /**
  * Pins this run to the directory both processes use, before the app is ready.
  *
- * Electron would derive a directory from `productName`, and since the app is
- * called Marimo that derivation is now `…/Marimo` — while every installed copy
- * has its conversations and keys in `…/Marimo Agent`. Setting it explicitly is
- * what keeps a rename from being a data migration; `userDataDisagreement` is the
- * check that the runner still agrees about the answer.
+ * Electron would derive a directory from `productName`, and `productName` is the
+ * one fact here that keeps moving: the app has been called Marimo Agent and then
+ * Marimo, and is now Marimo Bot, while the folder held every conversation and key
+ * through all of it under the name it was given first. Setting the path
+ * explicitly is what keeps a rename from being a data migration, and
+ * `adoptFormerUserDataDir` is the migration for the one time the folder did
+ * follow the screen. `userDataDisagreement` is the check that the runner still
+ * agrees about the answer.
  *
  * It has to happen before the app is ready and before the single-instance lock
  * is requested, because Electron keeps that lock *inside* the user-data

@@ -1,4 +1,4 @@
-# Marimo: technical notes
+# Marimo Bot: technical notes
 
 How the app is built, why it is built that way, and how to work on it. If you
 want to know what the app does and how to use it, read
@@ -495,7 +495,7 @@ flag is not a claim about readiness; `modelReady` is that claim, and it is the m
 process's.
 
 The one grant the flow writes on the user's behalf is `ask_agent` on the lead,
-offered as a checkbox in plain words: Marimo is told by its own identity to hand
+offered as a checkbox in plain words: Marimo Bot is told by its own identity to hand
 work to the bots the person makes, and without that tool it cannot. The tool's name
 travels to the window through `ProfileCatalog.delegationTool` rather than being
 spelled out in the renderer, for the reason the capability presets do — a grant
@@ -506,9 +506,11 @@ so a second copy of the string would tick a box and change nothing.
 
 Electron derives its user-data directory from the app's `productName`, and the
 runner has no `app` to ask — so neither process leaves it to a derivation. The
-app is called Marimo and the folder it has always used is `Marimo Agent`, because
-every installed copy keeps its conversations, jobs and keys there and a rename
-that moved the folder would look exactly like a fresh install that had lost them.
+folder held every installed copy's conversations, jobs and keys under the name it
+was given first, `Marimo Agent`, through an app that has been called Marimo Agent,
+Marimo and now Marimo Bot. Following the name to `Marimo Bot` is therefore a
+migration, `adoptFormerUserDataDir`, and not a rename: a rename that moved the
+folder would look exactly like a fresh install that had lost everything.
 `userDataDirFor` in `apps/desktop/src/shared/product.ts` is the single rule both
 processes ask: the `MARIMO_USER_DATA_DIR` override, else the platform's
 application-data directory plus `USER_DATA_NAME`. The window then pins Electron to
@@ -516,8 +518,8 @@ that answer with `applyUserDataPath` rather than letting it derive one. If the t
 ever disagree, nothing errors: the window writes one `jobs.json`, the service
 reads another, finds nothing due, and exits 0 — a background service that looks
 healthy and never does anything. `tests/product-name.test.ts` holds the two names
-apart, `tests/paths.test.ts` covers the pin, and the app checks the two paths
-against each other at launch.
+apart and covers the move, `tests/paths.test.ts` covers the pin, and the app
+checks the two paths against each other at launch.
 
 ### Documents are versioned, and a newer one is never overwritten
 
@@ -666,14 +668,14 @@ back to. So `ProfileStore` *seeds* a new profile, and Settings' Reset is that sa
 seed put back.
 
 **There are two seeds because there are two kinds of profile, and they are not
-interchangeable.** `DEFAULT_AGENT_IDENTITY` is Marimo, the agent the person talks
+interchangeable.** `DEFAULT_AGENT_IDENTITY` is Marimo Bot, the agent the person talks
 to; `botIdentityFor(name)` is a bot they made. The difference matters because a
-prompt is a claim about what the profile can do. A bot seeded with Marimo's text
-would introduce itself as Marimo — the one confusion bots exist to avoid — and
+prompt is a claim about what the profile can do. A bot seeded with Marimo Bot's text
+would introduce itself as Marimo Bot — the one confusion bots exist to avoid — and
 would be told to hand work to other bots, which is an instruction it has no
 `ask_agent` to follow. What that produces is silence in the tool log and a
 sentence in the transcript: a model narrating a delegation it never made. So the
-bot's seed names the bot, says this person made it and Marimo hands it work, and
+bot's seed names the bot, says this person made it and Marimo Bot hands it work, and
 asks it to write for the person — what it did, what it could not, what it would
 need — and to name a permission it lacks rather than work around it. Both texts
 are written out in full rather than composed from shared fragments, because an
@@ -683,11 +685,11 @@ editor.
 **`preferences` follows the identity, and the catalogue carries the seeds to the
 window.** The user's own words about manner are inserted directly after the
 identity and before the app's own blocks, so they win wherever the two disagree;
-that is the same promise Marimo's closing paragraph makes, and it holds for a bot
+that is the same promise Marimo Bot's closing paragraph makes, and it holds for a bot
 because it is the same composition. `ProfileCatalog.identitySeeds` holds both
 texts keyed by profile id, so Reset restores the seed for the profile in front of
 it and the renderer holds neither: a window with its own copy could reset a bot to
-Marimo, or to a version the app never shipped, and look like the button working.
+Marimo Bot, or to a version the app never shipped, and look like the button working.
 
 ### A Space's documents are the markdown files in it
 
@@ -783,8 +785,9 @@ apps/desktop
 ## Data
 
 Everything lives under the app's user-data directory — on Linux,
-`~/.config/Marimo Agent`, a folder that keeps its old name so a rename cannot
-cost anybody their conversations. `MARIMO_USER_DATA_DIR` relocates all of it,
+`~/.config/Marimo Bot`, which spent the app's whole life as `Marimo Agent` and was
+moved to follow the name once, by `adoptFormerUserDataDir`.
+`MARIMO_USER_DATA_DIR` relocates all of it,
 which is how development, the tests and the smoke check keep their state out of
 yours.
 
@@ -849,13 +852,13 @@ It names its version explicitly, and stamps one from the next write on. A file
 written by a build that had the provider catalogue still loads: the fields this
 build no longer knows are ignored, and every preference beside them survives.
 
-**Reset Marimo erases this folder, and the folder is the unit.** The card at the
+**Reset Marimo Bot erases this folder, and the folder is the unit.** The card at the
 bottom of Settings — behind a typed phrase, because it cannot be undone — stops
 the agent, takes the OS timer and the start-at-login switch down, empties the
 user-data directory and quits. It does not start the app again: everything it
 deleted would otherwise be written back out of the memories of the running
 process, and a fresh install left sitting in the tray reads as a reset that never
-happened. The person opens Marimo again and meets the first-run screen.
+happened. The person opens Marimo Bot again and meets the first-run screen.
 `resetInstall` enumerates that directory's contents rather than naming a list of
 documents, and that is the design: a list would have to be kept true as stores are
 added, and the way a stale one fails is one file surviving a factory reset, in

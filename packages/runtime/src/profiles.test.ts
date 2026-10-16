@@ -49,7 +49,7 @@ describe('ProfileStore', () => {
     const snapshot = await store().load();
     expect(snapshot.profiles).toHaveLength(1);
     const profile = snapshot.profiles[0];
-    expect(profile?.name).toBe('Marimo');
+    expect(profile?.name).toBe('Marimo Bot');
     expect(profile?.identity).toBe('You are an agent.');
     expect(profile?.enabledTools).toEqual(TOOLS);
     expect(profile?.enabledSkills).toEqual(SKILLS);
@@ -67,7 +67,7 @@ describe('ProfileStore', () => {
     await first.create('Research');
     const reopened = await store().load();
     expect(reopened.profiles.map((profile) => profile.name)).toEqual([
-      'Marimo',
+      'Marimo Bot',
       'Research',
     ]);
     expect(reopened.activeProfileId).toBe(
@@ -180,7 +180,7 @@ describe('ProfileStore', () => {
    * The two seeds, and the reason there are two. The first profile is the lead —
    * the agent the person talks to — and only it gets the app's identity. A bot
    * gets text built from its own name, because a bot seeded with the lead's
-   * text introduces itself as Marimo and is told to hand work to bots, which it
+   * text introduces itself as Marimo Bot and is told to hand work to bots, which it
    * has no tool to do.
    */
   it('seeds a bot with its own name and the lead with the app identity', async () => {
@@ -197,7 +197,7 @@ describe('ProfileStore', () => {
 
     const writer = await profiles.create('Writer');
     expect(writer.identity).toContain('Writer');
-    expect(writer.identity).not.toContain('You are Marimo');
+    expect(writer.identity).not.toContain('You are Marimo Bot');
   });
 
   /*
@@ -486,7 +486,7 @@ describe('an agents file from a newer build', () => {
  * the trade, and the store preserves the file rather than replacing it.
  *
  * Worth being precise about, because an earlier version of this test asserted the
- * profile came back named "Marimo" — which a *freshly created* profile is also
+ * profile came back named "Marimo Bot" — which a *freshly created* profile is also
  * called, so it passed while the file was being thrown away.
  */
 describe('an agents file with no version', () => {

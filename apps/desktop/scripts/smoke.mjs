@@ -423,7 +423,7 @@ async function main() {
        * the grant lands in the lead's profile.
        */
       fail(
-        `the flow did not let Marimo hand work to a bot: ${JSON.stringify(afterSetup)}`,
+        `the flow did not let Marimo Bot hand work to a bot: ${JSON.stringify(afterSetup)}`,
       );
     } else if (afterSetup.ready !== true) {
       fail('the flow closed without the app being able to answer');
@@ -1788,12 +1788,12 @@ async function main() {
        * share a constant — arms it. A button that was born armed, or one that took
        * a prefix of the words, is a factory reset nobody asked for.
        */
-      await openSection('Reset Marimo');
+      await openSection('Reset Marimo Bot');
       const resetCard = await until('the reset card to answer', async () => {
         const state = await evaluate(`(() => {
         const sections = [...document.querySelectorAll('details.settings-section')];
         const section = sections.find(
-          (entry) => entry.querySelector('h3')?.textContent === 'Reset Marimo',
+          (entry) => entry.querySelector('h3')?.textContent === 'Reset Marimo Bot',
         );
         if (section === undefined) return undefined;
         const button = section.querySelector('button.button-danger');
@@ -1811,7 +1811,7 @@ async function main() {
       const typeResetPhrase = async (value) =>
         await evaluate(`(() => {
         const section = [...document.querySelectorAll('.settings-section')]
-          .find((entry) => entry.querySelector('h3')?.textContent === 'Reset Marimo');
+          .find((entry) => entry.querySelector('h3')?.textContent === 'Reset Marimo Bot');
         const input = section.querySelector('input.settings-input');
         const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
         setter.call(input, ${JSON.stringify(value)});
@@ -1824,7 +1824,7 @@ async function main() {
         await until('the reset button to answer', async () => {
           const value = await evaluate(`(() => {
           const section = [...document.querySelectorAll('.settings-section')]
-            .find((entry) => entry.querySelector('h3')?.textContent === 'Reset Marimo');
+            .find((entry) => entry.querySelector('h3')?.textContent === 'Reset Marimo Bot');
           const button = section?.querySelector('button.button-danger');
           return button === null || button === undefined ? undefined : !button.disabled;
         })()`);

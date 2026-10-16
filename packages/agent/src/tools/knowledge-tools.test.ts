@@ -53,8 +53,8 @@ describe('search_knowledge_base', () => {
   });
 
   it('matches case-sensitively when asked', async () => {
-    await writeFile(join(workDir, 'src.txt'), 'Marimo\n', 'utf8');
-    expect(await run(tool(), {query: 'Marimo', caseSensitive: true})).toContain(
+    await writeFile(join(workDir, 'src.txt'), 'Marimo Bot\n', 'utf8');
+    expect(await run(tool(), {query: 'Marimo Bot', caseSensitive: true})).toContain(
       '1 match',
     );
     expect(await run(tool(), {query: 'marimo', caseSensitive: true})).toContain(

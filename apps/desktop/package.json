@@ -4,7 +4,7 @@
   "private": false,
   "type": "module",
   "description": "A desktop AI assistant that runs on your own computer and carries no model of its own. Make bots for the work you keep repeating; they work in your folders, keep their own memory, and hand work to each other.",
-  "productName": "Marimo",
+  "productName": "Marimo Bot",
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "tsc -b && tsx scripts/dev.ts",
@@ -44,7 +44,7 @@
   "author": "DevTarlow",
   "build": {
     "appId": "com.marimo.agent",
-    "productName": "Marimo",
+    "productName": "Marimo Bot",
     "copyright": "Copyright (c) 2026 DevTarlow",
     "directories": {
       "output": "release",
@@ -91,6 +91,6 @@
   "//": "asar is off deliberately. The job runner is this same binary started with ELECTRON_RUN_AS_NODE=1, and in that mode Electron does not patch `fs` to read inside an asar archive \u2014 reading one fails with \"Invalid package\". So a packaged app with asar on has a runner that cannot start, which is the whole of \"jobs run while the app is closed\" broken in every release and working perfectly in development.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/DevTarlow/marimo.git"
+    "url": "git+https://github.com/DevTarlow/marimo-bot.git"
   }
 }

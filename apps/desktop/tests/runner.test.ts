@@ -46,8 +46,8 @@ describe('resolveRunnerPaths', () => {
   });
 
   /*
-   * The folder's name rather than the product's — the app is Marimo and the
-   * directory is still `Marimo Agent`, so a test that followed the screen would
+   * The folder's name rather than the product's — the app is Marimo Bot and the
+   * directory is still `Marimo Bot`, so a test that followed the screen would
    * be the one that let the runner and the window drift apart.
    */
   it('derives the platform directory when there is no override', () => {

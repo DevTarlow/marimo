@@ -62,7 +62,7 @@ export class FileLockTimeoutError extends Error {
   constructor(readonly path: string, readonly waitedMs: number) {
     super(
       `Could not take the lock at ${path} within ${waitedMs}ms. Another ` +
-        'copy of Marimo is using it.',
+        'copy of Marimo Bot is using it.',
     );
     this.name = 'FileLockTimeoutError';
   }

@@ -28,7 +28,7 @@ describe('normalizeExtraction', () => {
       {
         results: [
           {
-            title: '  Marimo   docs ',
+            title: '  Marimo Bot   docs ',
             url: 'https://example.com/a',
             snippet: 'A\nreactive  notebook',
           },
@@ -40,7 +40,7 @@ describe('normalizeExtraction', () => {
     expect(blocked).toBe(false);
     expect(results).toEqual([
       {
-        title: 'Marimo docs',
+        title: 'Marimo Bot docs',
         url: 'https://example.com/a',
         snippet: 'A reactive notebook',
       },

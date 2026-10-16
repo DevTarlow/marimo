@@ -24,8 +24,8 @@
  *   creating a second copy of anything. That is what makes an interrupted flow
  *   safe to reopen, and it is why nothing here needs a saved position.
  * - **The lead is put back.** `profiles.create` switches the active profile, so
- *   every bot made here is followed by a `select` back to Marimo. The person is
- *   talking to Marimo, and a window that reopened on a bot they made in a wizard
+ *   every bot made here is followed by a `select` back to Marimo Bot. The person is
+ *   talking to Marimo Bot, and a window that reopened on a bot they made in a wizard
  *   would be a different app.
  * - **Skipping is a real answer.** Every step before the provider can be
  *   stepped over, and skipping all of them leaves a working app that simply has
@@ -195,12 +195,12 @@ export function Setup({
   };
 
   /**
-   * Makes one bot, then puts Marimo back in charge.
+   * Makes one bot, then puts Marimo Bot back in charge.
    *
    * The `finally` is the point: `profiles.create` switches the active profile to
    * the new bot, so a refusal anywhere after it would otherwise leave the window
    * on a bot that was never finished being set up. Whoever failed, the person is
-   * talking to Marimo.
+   * talking to Marimo Bot.
    */
   const makeBot = async (draft: BotDraft): Promise<string | null> => {
     if (lead === undefined) {
@@ -328,11 +328,11 @@ export function Setup({
         {screen === 'welcome' && (
           <div className="setup-body">
             <img className="onboarding-mark" src="./marimo-logo.png" alt="" />
-            <h2>Welcome to Marimo</h2>
+            <h2>Welcome to Marimo Bot</h2>
             <p className="onboarding-lead">
-              Marimo is the bot you talk to, and it runs the ones you make. Each
+              Marimo Bot is the bot you talk to, and it runs the ones you make. Each
               bot has a name, its own instructions and its own memory, and
-              Marimo hands it work.
+              Marimo Bot hands it work.
             </p>
             <p className="onboarding-note">
               Neither can answer yet. This app carries no model of its own, so
@@ -441,7 +441,7 @@ export function Setup({
             <h2>{bots.length > 0 ? 'Another bot' : 'Your first bot'}</h2>
             <p className="onboarding-lead">
               A bot is for one kind of work. Give it a name and say what it may
-              do; Marimo hands it jobs that suit it, and you can add it to any
+              do; Marimo Bot hands it jobs that suit it, and you can add it to any
               chat.
             </p>
             {bots.length > 0 && (
@@ -461,7 +461,7 @@ export function Setup({
               {/*
                 Two different exits, because this step is reached two ways. With
                 no bots yet it is the first one, and stepping over it is a real
-                answer — the app is perfectly usable with Marimo alone, and
+                answer — the app is perfectly usable with Marimo Bot alone, and
                 Settings is where a bot is made later. With bots already on the
                 roster the person came here from the list, so there is one way
                 out and it is back to that list.
@@ -517,7 +517,7 @@ export function Setup({
             <p className="onboarding-note">
               Things like what to call you, how long an answer should be, or
               that you would rather hear when it is unsure. Every bot keeps its
-              own, Marimo included, and Settings is where you change any of them
+              own, Marimo Bot included, and Settings is where you change any of them
               later.
             </p>
             <VoiceForm busy={busy} onSubmit={saveVoice} />
@@ -612,7 +612,7 @@ export function Setup({
  * Three fields and no more, because everything else about a bot is written by
  * using it: its instructions are the app's seed until somebody edits them in
  * Settings, and which Space it works in follows the rail unless it is pinned
- * there. What cannot wait is its name, what it may do, and whether Marimo is
+ * there. What cannot wait is its name, what it may do, and whether Marimo Bot is
  * allowed to hand it anything.
  */
 function BotForm({
@@ -717,11 +717,11 @@ function BotForm({
             }}
           />
           <span>
-            Let Marimo hand work to your bots
+            Let Marimo Bot hand work to your bots
             <em className="settings-why">
               {alreadyDelegates
-                ? 'Marimo can already do this.'
-                : 'Without it, Marimo can talk about your bots but cannot ask them to do anything.'}
+                ? 'Marimo Bot can already do this.'
+                : 'Without it, Marimo Bot can talk about your bots but cannot ask them to do anything.'}
             </em>
           </span>
         </label>

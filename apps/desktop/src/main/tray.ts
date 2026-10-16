@@ -174,7 +174,7 @@ export function noticeFor(event: {
      */
     case 'approval.request':
       return {
-        title: 'Marimo needs your approval',
+        title: 'Marimo Bot needs your approval',
         body: `A tool is waiting to run. Open ${PRODUCT_NAME} to allow or refuse it.`,
         ...(event.sessionId === undefined ? {} : {sessionId: event.sessionId}),
       };

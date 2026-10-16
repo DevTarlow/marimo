@@ -522,7 +522,7 @@ export function Transcript({
       {empty && (
         <div className="empty">
           <img className="empty-mark" src="./marimo-logo.png" alt="" />
-          <h2>Say something to Marimo</h2>
+          <h2>Say something to Marimo Bot</h2>
           <p>
             It can read and write files in the space you chose, and use whatever
             else you have switched on — it asks before running a command or

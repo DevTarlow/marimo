@@ -10,10 +10,10 @@ const MEMORY_TOOLS = ['read_memory', 'update_memory', 'prune_memory'];
 describe('composeInstruction', () => {
   it('keeps the user prompt and appends the protocol', () => {
     const text = composeInstruction({
-      base: 'You are Marimo.',
+      base: 'You are Marimo Bot.',
       memory: '',
     });
-    expect(text.startsWith('You are Marimo.')).toBe(true);
+    expect(text.startsWith('You are Marimo Bot.')).toBe(true);
     expect(text).toContain('# Operating protocol');
     expect(text).toContain('1. Decompose.');
     expect(text).toContain('2. Execute sequentially.');
@@ -69,11 +69,11 @@ describe('composeInstruction', () => {
   describe("the user's preferences", () => {
     it('ride between the identity and the app protocol', () => {
       const text = composeInstruction({
-        base: 'You are Marimo.',
+        base: 'You are Marimo Bot.',
         preferences: 'Call me Tarlow, and skip the emoji.',
         memory: '',
       });
-      const identity = text.indexOf('You are Marimo.');
+      const identity = text.indexOf('You are Marimo Bot.');
       const preferences = text.indexOf("# The user's preferences");
       const protocol = text.indexOf('# Operating protocol');
       expect(identity).toBeGreaterThanOrEqual(0);

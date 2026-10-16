@@ -94,7 +94,7 @@
   --space-6: 32px;
 
   /*
-   * System fonts first. Marimo Agent ships no webfont: a bundled face is a
+   * System fonts first. Marimo Bot ships no webfont: a bundled face is a
    * download on first run and a licence to track, and every platform the app
    * targets already has a good UI sans installed.
    */

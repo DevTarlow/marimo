@@ -1,7 +1,7 @@
 /**
  * The directory the window pins itself to, and the check that the runner agrees.
  *
- * This exists because the app is Marimo and its folder is `Marimo Agent`. Left
+ * This exists because the app is Marimo Bot and its folder is `Marimo Bot`. Left
  * to Electron's own derivation the window would create a second, empty
  * directory beside the one holding everybody's conversations — and nothing about
  * that errors. One process writes `jobs.json`, the other reads a different file,
@@ -57,7 +57,7 @@ describe('pinning the user-data directory', () => {
      */
     const root = mkdtempSync(join(process.cwd(), '.marimo-paths-'));
     roots.push(root);
-    const dir = join(root, 'Marimo Agent');
+    const dir = join(root, 'Marimo Bot');
 
     applyUserDataPath(dir);
 

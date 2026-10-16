@@ -243,7 +243,7 @@ export class AgentRuntime {
        * user named, and `botIdentityFor` seeds it with that name.
        *
        * A bot handed the lead's text is the defect these two exist to prevent:
-       * it introduces itself as Marimo — the one thing the bots feature is built
+       * it introduces itself as Marimo Bot — the one thing the bots feature is built
        * so that a user never sees — and it is told to hand work to bots, which
        * it has no `ask_agent` to do.
        *

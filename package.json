@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Marimo \u2014 a desktop AI assistant that runs on your own computer, with bots you make and the folders they work in.",
+  "description": "Marimo Bot \u2014 a desktop AI assistant that runs on your own computer, with bots you make and the folders they work in.",
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": ">=20.19"
@@ -25,6 +25,6 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/DevTarlow/marimo.git"
+    "url": "git+https://github.com/DevTarlow/marimo-bot.git"
   }
 }

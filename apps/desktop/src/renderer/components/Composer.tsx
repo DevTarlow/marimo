@@ -442,8 +442,8 @@ export function Composer({
               disabled
                 ? 'Add a bot to start chatting.'
                 : mentionable
-                  ? 'Ask Marimo anything… type @ to address a bot'
-                  : 'Ask Marimo anything…'
+                  ? 'Ask Marimo Bot anything… type @ to address a bot'
+                  : 'Ask Marimo Bot anything…'
             }
             disabled={disabled}
             aria-label="Message"

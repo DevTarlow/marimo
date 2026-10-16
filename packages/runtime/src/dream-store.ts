@@ -241,7 +241,7 @@ export class DreamStore {
         trees: [],
         problem:
           `This conversation's discovery log was written by a newer version of ` +
-          `Marimo (version ${read.found}, this build reads ${read.supported}). ` +
+          `Marimo Bot (version ${read.found}, this build reads ${read.supported}). ` +
           'It has been left alone rather than read as though it had not changed.',
       };
     }

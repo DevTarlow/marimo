@@ -1,4 +1,4 @@
-# AGENTS.md — Marimo
+# AGENTS.md — Marimo Bot
 
 Working notes for anyone — human or agent — changing this repository. The
 project's design decisions live in `TECHNICAL.md`, and the guide for people using
@@ -12,9 +12,9 @@ an agent harness whose capabilities are opt-in, and a headless runner that keeps
 scheduled jobs going while the app is closed. It carries no chat model of its
 own — it answers through a provider somebody picks in Settings, so a fresh
 install says nothing until one is chosen — and the folder it works in is what the
-user calls a **Space**. Marimo is the agent the person talks to; they also make
+user calls a **Space**. Marimo Bot is the agent the person talks to; they also make
 **bots**, each with its own name, instructions, tools and permissions. A chat can
-hold more than one of them, and Marimo can hand work to one.
+hold more than one of them, and Marimo Bot can hand work to one.
 
 ## Layout
 
@@ -22,7 +22,7 @@ hold more than one of them, and Marimo can hand work to one.
 packages/protocol   The typed contract: zod schemas for every IPC call, the
                     AgentUiEvent union, the provider catalogue, the model pair,
                     cron, the profile and job documents, and the two identity
-                    seeds — Marimo's and a bot's. No Electron, no Node, no React.
+                    seeds — Marimo Bot's and a bot's. No Electron, no Node, no React.
 packages/agent      Everything ADK: the OpenAI-compatible client, tool set,
                     skills that compose the system instruction, the file-backed
                     memory and session stores, AgentHost, and the
@@ -86,12 +86,21 @@ Each of these is silent when it breaks. That is the whole reason they are listed
 12. **A newer document is never overwritten.** See "Documents" below.
 13. **The app and the runner resolve the same user-data directory.** When they do
     not, nothing errors: the window writes one `jobs.json`, the service reads
-    another, finds nothing due, and exits 0. **The name on screen is not the name
-    of the folder**: the app is Marimo and the directory is still `Marimo Agent`,
-    so the window does not leave it to Electron's derivation from `productName` —
-    `applyUserDataPath` pins it, both processes ask `userDataDirFor`, and
-    `userDataDisagreement` reports it when they part company. Changing
-    `USER_DATA_NAME` is a data migration rather than a rename. **The model used to
+    another, finds nothing due, and exits 0. **The name on screen and the name of
+    the folder are two facts, and they have been allowed to differ**: the folder
+    was `Marimo Agent` for the whole life of the app called Marimo, so moving it
+    to `Marimo Bot` was a migration rather than a rename —
+    `adoptFormerUserDataDir` in `shared/product.ts`, called by both entry points
+    before either reads the directory, and the one place the old name survives.
+    The window does not leave the question to Electron's derivation from
+    `productName` either: `applyUserDataPath` pins it, both processes ask
+    `userDataDirFor`, and `userDataDisagreement` reports it when they part
+    company. **A service is the second half of that move**, because
+    `runnerEnvironment` bakes the directory into an installed systemd unit and a
+    rename cannot reach one that is already on disk: a timer written before this
+    names a folder that is no longer there, so `userDataDirFor` reads an override
+    naming the former folder as the folder that moved rather than as one that is
+    missing. **The model used to
     be a second case of this and no longer is**: it was bundled, so the window
     found it through Electron's `process.resourcesPath` while the runner derived
     the path from its own executable; then it was downloaded, with the pins
@@ -189,22 +198,22 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     invariant 7.
 22. **A prompt must not advertise a capability the profile does not have.** The
     tool list and the identity agree, or the model narrates a capability it was
-    never given. `ProfileStore.create()` seeded every new profile with Marimo's
-    text, so a bot the user named Writer introduced itself as Marimo and was told
+    never given. `ProfileStore.create()` seeded every new profile with Marimo Bot's
+    text, so a bot the user named Writer introduced itself as Marimo Bot and was told
     to hand work to other bots — with no `ask_agent` to hand anything to. What
-    the person then sees is a bot greeting them as Marimo, or announcing a
+    the person then sees is a bot greeting them as Marimo Bot, or announcing a
     delegation it never made, which reads exactly like one that did. This is
     invariant 9 one layer up, and the layer below was already right — the
     filtered tool list was correct and the prose lied about it. So there are two
     seeds. `DEFAULT_AGENT_IDENTITY` is the agent the person talks to;
     `botIdentityFor(name)` is a bot, which names itself, says this person made it
-    and Marimo hands it work, and asks it to write for the person — what it did,
+    and Marimo Bot hands it work, and asks it to write for the person — what it did,
     what it could not, what it would need — rather than work around a permission
     it does not have. `ProfileCatalog.identitySeeds` carries them keyed by
     profile id, so Reset puts back the seed for *that* profile and the window
-    holds neither text: a renderer with its own copy resets a bot to Marimo, or
+    holds neither text: a renderer with its own copy resets a bot to Marimo Bot, or
     to a version the app never shipped. The trap in the other direction is the
-    same rule about the lead's prompt: it must not tell Marimo to do everything
+    same rule about the lead's prompt: it must not tell Marimo Bot to do everything
     alone either, because the person paid for the bots by making them — its text
     says when to hand work over, and that the person should hear about it.
 
@@ -385,7 +394,7 @@ commit is not a push: it is local, reversible, and the thing that makes the next
 task's diff readable.
 
 **Never push on your own initiative.** Pushing is done when asked, usually after
-a review of the commit. `origin` is `github.com/DevTarlow/marimo` and `main`
+a review of the commit. `origin` is `github.com/DevTarlow/marimo-bot` and `main`
 tracks it, so the push is `git push` with no arguments and no second remote
 invented for the job. The Gitea instance this project used to live on is kept as
 a remote named `gitea` and nothing is pushed there any more — it is there to

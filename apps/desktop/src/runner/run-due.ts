@@ -1,7 +1,7 @@
 /**
  * The headless job runner.
  *
- * This is the other half of "Marimo is always on". With the option
+ * This is the other half of "Marimo Bot is always on". With the option
  * enabled, the OS wakes this process on a one-minute timer; it works out which
  * jobs are due, runs them, and exits. It is the *same* binary as the app —
  * started with `ELECTRON_RUN_AS_NODE=1`, so Electron behaves as plain Node —
@@ -51,7 +51,12 @@ import {
 import type {AppPaths} from '@marimo/runtime';
 import type {McpResolvedSecrets} from '@marimo/agent';
 
-import {MCP_CLIENT, PRODUCT_NAME, userDataDirFor} from '../shared/product.js';
+import {
+  adoptFormerUserDataDir,
+  MCP_CLIENT,
+  PRODUCT_NAME,
+  userDataDirFor,
+} from '../shared/product.js';
 
 export interface RunDueReport {
   userData: string;
@@ -445,5 +450,13 @@ function isEntryPoint(): boolean {
 }
 
 if (isEntryPoint()) {
+  /*
+   * The folder moves here rather than inside `resolveRunnerPaths`, because a test
+   * calls that with an environment of its own and this is the one place that
+   * knows it is the real process on the real machine. It is the runner as well as
+   * the window because the timer can be the first thing to run after an upgrade:
+   * nobody has to open the window for a scheduled job to come due.
+   */
+  adoptFormerUserDataDir();
   process.exitCode = await main();
 }

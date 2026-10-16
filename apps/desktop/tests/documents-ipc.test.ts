@@ -34,7 +34,7 @@ const captured = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
-  app: {getName: () => 'Marimo', getVersion: () => '0.0.0'},
+  app: {getName: () => 'Marimo Bot', getVersion: () => '0.0.0'},
   ipcMain: {
     handle: (channel: string, handler: Dispatch) => {
       captured.channel = channel;
@@ -127,7 +127,7 @@ describe('the docs.* calls', () => {
         profiles: [
           {
             id: 'marimo',
-            name: 'Marimo',
+            name: 'Marimo Bot',
             identity: '',
             enabledTools: [],
             enabledSkills: [],
@@ -246,7 +246,7 @@ describe('the docs.* calls', () => {
     const markdown = await readFile(join(dir, 'from-chat.md'), 'utf8');
     expect(markdown).toContain('# Parser output');
     expect(markdown).toContain('## You\n\nshow me the parser output');
-    expect(markdown).toContain('## Marimo\n\nHere it is.');
+    expect(markdown).toContain('## Marimo Bot\n\nHere it is.');
     expect(markdown).toContain('## Researcher\n\nI checked the tokens.');
   });
 

@@ -17,7 +17,7 @@
  * 1. **An older document is upgraded**, step by step, and the caller writes back
  *    the result under the current version.
  * 2. **A newer document is refused, never downgraded.** A file written by a later
- *    build means someone ran a newer Marimo and came back, or restored a
+ *    build means someone ran a newer Marimo Bot and came back, or restored a
  *    backup. Refusing to write is recoverable — their file is still there. An
  *    empty document written over it is not.
  */
@@ -74,7 +74,7 @@ export class DocumentTooNewError extends Error {
     readonly supported: number,
   ) {
     super(
-      `${label} was written by a newer version of Marimo (format ${found}; ` +
+      `${label} was written by a newer version of Marimo Bot (format ${found}; ` +
         `this build understands ${supported}). It has been left untouched. ` +
         'Update the app to open it.',
     );
@@ -226,7 +226,7 @@ export async function assertWritable(
  *
  * The third answer, between "use it" and "refuse to write".
  *
- * A file from a newer build is refused: it is a valid document, a later Marimo
+ * A file from a newer build is refused: it is a valid document, a later Marimo Bot
  * Agent can read it, and overwriting it would destroy something still useful.
  * A *corrupt* file has neither of those properties — nothing can read it,
  * including the build that wrote it — and refusing it forever is worse than

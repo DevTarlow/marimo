@@ -179,7 +179,7 @@ describe('assertWritable', () => {
   it('names the app in the message, because a user reads it', async () => {
     await write({version: 4});
     await expect(assertWritable(file, {label: LABEL})).rejects.toThrow(
-      /newer version of Marimo/u,
+      /newer version of Marimo Bot/u,
     );
   });
 });

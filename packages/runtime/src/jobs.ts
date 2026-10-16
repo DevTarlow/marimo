@@ -458,7 +458,7 @@ export class JobStore {
        * user's jobs disappear: the file from a newer build reads as empty, the
        * edit is applied to nothing, and the result is stored over the original.
        *
-       * A newer file is refused outright, because a later Marimo can still
+       * A newer file is refused outright, because a later Marimo Bot can still
        * read it. A corrupt one is moved aside first, because nothing can read it
        * — including this build — and refusing forever would mean the app could
        * never save anything again with no hint about which file to delete.
@@ -520,7 +520,7 @@ export class JobStore {
    *
    * The read goes through `readVersionedDocument`, which is what refuses a file
    * from a newer build rather than reporting it as empty. Without that, a user
-   * who ran a newer Marimo and came back would silently lose their jobs
+   * who ran a newer Marimo Bot and came back would silently lose their jobs
    * the first time anything wrote the document.
    */
   async loadChecked(): Promise<{jobs: Jobs; problem?: string}> {
@@ -536,7 +536,7 @@ export class JobStore {
       return {
         jobs: emptyJobs(),
         problem:
-          'The jobs file was written by a newer version of Marimo ' +
+          'The jobs file was written by a newer version of Marimo Bot ' +
           `(format ${read.found}; this build understands ${read.supported}). ` +
           'It has been left untouched — update the app to run these jobs.',
       };

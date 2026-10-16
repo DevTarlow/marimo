@@ -28,7 +28,7 @@ function spec(overrides: Partial<ServiceSpec> = {}): ServiceSpec {
     platform: 'linux',
     execPath: '/opt/marimo/marimo-agent',
     scriptPath: '/opt/marimo/resources/run-due.js',
-    userDataDir: '/home/sam/.config/Marimo Agent',
+    userDataDir: '/home/sam/.config/Marimo Bot',
     home: '/home/sam',
     configHome: '/home/sam/.config',
     everyMinutes: 1,
@@ -83,7 +83,7 @@ describe('a systemd user timer', () => {
 
   it('passes the data directory through the environment', () => {
     expect(service).toContain(
-      'Environment="MARIMO_USER_DATA_DIR=/home/sam/.config/Marimo Agent"',
+      'Environment="MARIMO_USER_DATA_DIR=/home/sam/.config/Marimo Bot"',
     );
   });
 
@@ -195,15 +195,15 @@ describe('a launchd agent', () => {
 
   it('escapes a path that contains XML', () => {
     const awkward = planService(
-      spec({platform: 'darwin', userDataDir: '/Users/a&b/<Marimo>'}),
+      spec({platform: 'darwin', userDataDir: '/Users/a&b/<Marimo Bot>'}),
     );
     const contents = fileAt(
       awkward,
       '/home/sam/Library/LaunchAgents/com.marimo.agent.marimo-agent-jobs.plist',
     );
-    expect(contents).toContain('/Users/a&amp;b/&lt;Marimo&gt;');
+    expect(contents).toContain('/Users/a&amp;b/&lt;Marimo Bot&gt;');
     // And no raw angle bracket from the value, which would break the parse.
-    expect(contents).not.toContain('<Marimo>');
+    expect(contents).not.toContain('<Marimo Bot>');
   });
 });
 

@@ -32,8 +32,8 @@ import {
 
 describe('modelDir', () => {
   it('lives under the user-data directory both processes already agree on', () => {
-    expect(modelDir({userData: '/home/sam/.config/Marimo', env: {}})).toBe(
-      join('/home/sam/.config/Marimo', MODEL_DIR_NAME),
+    expect(modelDir({userData: '/home/sam/.config/Marimo Bot', env: {}})).toBe(
+      join('/home/sam/.config/Marimo Bot', MODEL_DIR_NAME),
     );
   });
 
@@ -45,7 +45,7 @@ describe('modelDir', () => {
   it('lets the environment point somewhere else', () => {
     expect(
       modelDir({
-        userData: '/home/sam/.config/Marimo',
+        userData: '/home/sam/.config/Marimo Bot',
         env: {[MODEL_DIR_ENV]: '/opt/weights'},
       }),
     ).toBe('/opt/weights');

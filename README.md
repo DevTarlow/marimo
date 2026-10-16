@@ -1,7 +1,7 @@
-# Marimo
+# Marimo Bot
 
 > [!WARNING]
-> Marimo is under construction. It is developed in the open and changes often,
+> Marimo Bot is under construction. It is developed in the open and changes often,
 > and some of those changes are breaking: what one build saved, the next may
 > rewrite or refuse. Download and run it at your own risk, and keep your own
 > copies of anything you care about.
@@ -10,10 +10,10 @@ A desktop AI assistant that lives on your own computer.
 
 Point it at a folder and it reads and writes the files in there, remembers what
 matters between conversations, and can keep working on a schedule while the
-window is closed. You make bots for the work you repeat, and Marimo hands the
+window is closed. You make bots for the work you repeat, and Marimo Bot hands the
 work to them.
 
-Marimo shows up twice: a chat window, and a small moss ball that floats above
+Marimo Bot shows up twice: a chat window, and a small moss ball that floats above
 your other windows and answers in a speech bubble. They share one conversation,
 so asking at the moss and reading it in the window later works.
 
@@ -32,7 +32,7 @@ server you run yourself. It says nothing until you choose.
 - Make as many bots as you like in Settings. Each one gets a name, an identity
   you write, its own tools, the Space it works in and, if you want, a model of
   its own. Several can share a chat; type `@` to put a question to one of them.
-  Ask Marimo for a blog post and it can hand the writing to Writer, whose answer
+  Ask Marimo Bot for a blog post and it can hand the writing to Writer, whose answer
   comes back into the same conversation under its own name, with any approval it
   needs asked under the turn you are reading.
 - Removing a bot asks first and says what goes: the bot, its conversations, the
@@ -69,11 +69,11 @@ There is no public download yet. The Linux version builds to a self-contained
 AppImage; the Windows and macOS installers are not built. If someone gave you the
 app, or you built it yourself, opening it starts a short setup.
 
-- A Space: the folder Marimo may read and write. It can see nothing outside it,
+- A Space: the folder Marimo Bot may read and write. It can see nothing outside it,
   and every chat is filed under the Space it started in.
 - A bot: a name, and how much it may do, in plain words. The choices are "Just
-  chat", "Help around my computer" and "Do things for me". Tick **let Marimo hand
-  work to your bots** if you want Marimo to be able to give it a job.
+  chat", "Help around my computer" and "Do things for me". Tick **let Marimo Bot hand
+  work to your bots** if you want Marimo Bot to be able to give it a job.
 - How to talk to me, which is your side of it: what to call you, how long an
   answer should be, whether to admit when it is unsure. It is read after
   everything the app says about itself, so it wins wherever the two disagree,
@@ -92,7 +92,7 @@ scheduled task runs with no window and no keychain to unlock, so on a hosted
 service that box is what makes it possible, and it means the key sits on disk
 readable. It is off unless you tick it.
 
-Closing the window does not quit Marimo. It stays in the tray so the moss ball
+Closing the window does not quit Marimo Bot. It stays in the tray so the moss ball
 and your scheduled tasks keep working, and you quit it from the tray menu.
 
 Settings comes in two sizes: simple for the everyday settings, and power user,
@@ -107,10 +107,10 @@ and its terms. Two other things go over the network, and only when you use them:
 a web search sends the query to DuckDuckGo, and a connector you set up talks to
 the server you configured.
 
-Everything Marimo keeps is in one folder, `~/.config/Marimo Agent` on Linux: your
+Everything Marimo Bot keeps is in one folder, `~/.config/Marimo Bot` on Linux: your
 conversations, the folders you loaded, your settings and your keys. A Space's
 documents are not in it; those are your files, read and written where they are.
-**Reset Marimo**, at the bottom of Settings, erases that folder, switches off
+**Reset Marimo Bot**, at the bottom of Settings, erases that folder, switches off
 start-at-login and the background job timer, and quits so that opening it again
 is a first run. There is no undo.
 

@@ -253,7 +253,7 @@ export function Pet(): React.JSX.Element {
         that gave it.
       */}
       <div className="pet-moss" title="Drag to move">
-        <img src="./marimo-logo.png" alt="Marimo" draggable={false} />
+        <img src="./marimo-logo.png" alt="Marimo Bot" draggable={false} />
         {/*
           The same dot the window's Settings entry carries, on the surface a
           casual user actually leaves open: the moss is the thing on screen all
@@ -327,13 +327,13 @@ export function Pet(): React.JSX.Element {
               ? 'Pick a provider first'
               : busy
                 ? 'Working…'
-                : 'Ask Marimo…'
+                : 'Ask Marimo Bot…'
           }
           aria-label="Message"
           title={
             canAnswer
               ? undefined
-              : 'Marimo has no provider yet. Settings, in the main window, is where one is chosen.'
+              : 'Marimo Bot has no provider yet. Settings, in the main window, is where one is chosen.'
           }
           disabled={!canAnswer}
           onChange={(event) => {

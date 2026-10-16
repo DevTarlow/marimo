@@ -944,4 +944,4 @@ transitive dependency of the runner, which is a list that goes stale silently.
 
 ## Licence
 
-MIT. See [LICENCE](./LICENCE).
+Apache-2.0. See [LICENCE](./LICENCE) and [NOTICE](./NOTICE).

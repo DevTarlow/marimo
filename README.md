@@ -158,4 +158,4 @@ are easy to break, are in [AGENTS.md](./AGENTS.md).
 
 ## Licence
 
-MIT. See [LICENCE](./LICENCE).
+Apache-2.0. See [LICENCE](./LICENCE) and [NOTICE](./NOTICE).

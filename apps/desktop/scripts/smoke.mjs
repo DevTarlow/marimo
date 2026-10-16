@@ -35,12 +35,12 @@
  * where `chrome-sandbox` cannot be setuid-root. It is opt-in because it is a
  * real reduction in isolation and must not be what a normal run quietly gets.
  */
-import {mkdir, mkdtemp, rm, stat, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-import {startApp, stopApp} from './app-process.mjs';
+import {appIsRunning, startApp, stopApp} from './app-process.mjs';
 
 const appRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const electron = join(appRoot, 'node_modules', '.bin', 'electron');
@@ -1645,9 +1645,11 @@ async function main() {
       }
 
       /*
-       * The reset card, and deliberately everything about it short of the press.
+       * The reset card, everything about it short of the press — the press
+       * itself is the last thing this check does, once there is nothing left to
+       * measure afterwards.
        *
-       * Pressing it would empty this throwaway directory and restart the app in
+       * Pressing it here would empty this throwaway directory and quit the app in
        * the middle of the walk, so what is checked is what makes the press safe:
        * the card is there and is the last one, it is drawn in the one colour that
        * means destruction on this screen, its button is dead on arrival, and only
@@ -1704,7 +1706,7 @@ async function main() {
         fail('the reset card is not drawn as the dangerous one');
       } else if (resetCard.disabled !== true) {
         fail('the reset button is armed before anybody has typed anything');
-      } else if (!/Erase everything and restart/u.test(resetCard.label)) {
+      } else if (!/Erase everything and quit/u.test(resetCard.label)) {
         fail(`the reset button says: ${resetCard.label}`);
       } else {
         await typeResetPhrase('reset');
@@ -1909,6 +1911,43 @@ async function main() {
       } catch (error) {
         console.warn(`! could not take a screenshot: ${error.message}`);
       }
+    }
+
+    /*
+     * And last, the reset itself — pressed, this time, because everything else
+     * has been checked and this is the one action whose outcome is the app
+     * ending.
+     *
+     * It has to be the last thing for that reason, and it is here rather than in
+     * the walk above because it takes the window with it. What it proves is the
+     * pair nothing else can: the folder is emptied **and nothing is left
+     * running**. The first version of this feature relaunched the app when it
+     * was done, which left a fresh install sitting in the tray and read as a
+     * reset that had not happened; a check asserting only that the folder was
+     * empty passed the whole time. So the marker is one half and the process is
+     * the other, and asking `appIsRunning` rather than `stopApp` is what makes
+     * the second half an observation instead of a gesture.
+     */
+    await writeFile(
+      join(userData, 'smoke-reset-marker.txt'),
+      'seeded before the reset',
+      'utf8',
+    );
+    await evaluate(
+      `void window.marimo.call('app.reset', {}).catch(() => undefined)`,
+    ).catch(() => undefined);
+    await until('the reset to empty the user-data directory', async () =>
+      (await readdir(userData)).includes('smoke-reset-marker.txt')
+        ? undefined
+        : true,
+    );
+    const quit = await until('the app to quit', async () =>
+      appIsRunning() ? undefined : true,
+    );
+    if (quit !== true) {
+      fail('the reset emptied the folder and left the app running');
+    } else {
+      ok('the reset emptied the user-data directory and quit the app');
     }
   } catch (error) {
     fail(error.message);

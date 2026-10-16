@@ -45,6 +45,18 @@ export function startApp({command, args, cwd, env}) {
 }
 
 /**
+ * Whether the app this process started is still there.
+ *
+ * A script that has to prove the app *stopped on its own* cannot ask by calling
+ * `stopApp`: that kills what is still running and then reports success, so a
+ * leftover would look exactly like a clean exit — which is the shape of a reset
+ * bug that shipped once already. This is the question without the gesture.
+ */
+export function appIsRunning() {
+  return running === undefined ? false : stillRunning(running);
+}
+
+/**
  * Stops the app and everything it started, and waits for it to be gone.
  *
  * SIGTERM first, because that is the path a person quitting the app takes and it

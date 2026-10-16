@@ -2841,7 +2841,8 @@ export const agentCallSchemas = {
   'app.info': z.object({}),
   /*
    * Takes this install back to the state it was in before anything was
-   * configured, and starts the app again.
+   * configured, and quits: the app is opened again afterwards like any other
+   * launch, which is what makes the next screen a first run.
    *
    * No payload, and deliberately: what makes this safe is the window's warning
    * and the phrase somebody has to type, and a field here that the handler read

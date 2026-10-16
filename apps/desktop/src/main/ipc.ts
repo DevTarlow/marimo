@@ -84,13 +84,13 @@ export interface IpcDependencies {
    */
   service?: ServiceContext;
   /**
-   * Erases this install and starts the app again.
+   * Erases this install and ends the app.
    *
    * Injected for the reason the service context above is: it stops the agent,
    * switches the OS timer and the login item off, empties the user-data folder
-   * and relaunches the process — which is the shape of a program ending, and
-   * not the shape of answering a call. Absent in a build with no such flow, and
-   * the handler says so rather than appearing to work.
+   * and quits the process — which is the shape of a program ending, and not the
+   * shape of answering a call. Absent in a build with no such flow, and the
+   * handler says so rather than appearing to work.
    */
   onReset?: () => Promise<void>;
 }
@@ -316,6 +316,10 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
      * keep the agent from starting is exactly the install somebody reaches for
      * this from, so a reset that needed a working agent would be a repair that
      * only works when nothing is broken.
+     *
+     * `resetting` is the honest answer rather than a claim: the work has begun
+     * and this process is about to end, so nobody can be told how it went. What
+     * could not be removed is in the log, which is the only place left.
      */
     'app.reset': async () => {
       if (dependencies.onReset === undefined) {

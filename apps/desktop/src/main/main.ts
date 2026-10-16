@@ -104,8 +104,7 @@ const SETTLE_MS = 200;
  * A reset answers the call and then ends the app, and without a pause the reply
  * and the exit are the same frame — so the screen somebody is looking at never
  * says anything, and the app appears to have crashed rather than to have done
- * what it was asked. Short, because every millisecond here is a millisecond in
- * which a write already in flight can put a file back.
+ * what it was asked.
  */
 const RESET_EXIT_MS = 400;
 
@@ -373,7 +372,8 @@ async function bootstrap(): Promise<void> {
   let settle: NodeJS.Timeout | undefined;
 
   /**
-   * Erases this install, then starts the app again as a fresh one.
+   * Erases this install and ends the app, so that opening it again is a first
+   * run.
    *
    * The order is the whole of it, and each step prevents a failure that is
    * invisible when it happens:
@@ -391,11 +391,13 @@ async function bootstrap(): Promise<void> {
    *    about to delete, and a recent drag may still be sitting on the debounce.
    * 4. **The folder is emptied** — see `resetInstall`, which is the part with a
    *    test.
-   * 5. **The process ends.** This is not tidiness: every store in this app reads
-   *    its document once and keeps the answer, so a window that stayed open
-   *    would write the old settings back on the next click and the reset would
-   *    undo itself. `app.relaunch()` starts the new instance after this one has
-   *    exited, which is why the single-instance lock is not raced.
+   * 5. **The process ends, and does not come back.** `app.exit` rather than
+   *    merely closing the window: every store in this app reads its document
+   *    once and keeps the answer, so a window that stayed open would write the
+   *    old settings back on the next click and the reset would undo itself.
+   *    `app.relaunch()` was here first and was wrong — it left a fresh install
+   *    running as a tray icon, which reads as a reset that did not happen, and
+   *    it hid the one state the app should be in afterwards: nothing.
    */
   const resetMarimo = async (): Promise<void> => {
     quitting = true;
@@ -426,21 +428,30 @@ async function bootstrap(): Promise<void> {
     }
     mainWindow?.removeAllListeners('close');
 
-    const report = await resetInstall(paths);
-    if (report.failures.length > 0) {
+    await resetInstall(paths);
+
+    /*
+     * The pause is the window painting the sentence saying what is happening —
+     * and it is also the one window in which a settings write already in flight
+     * can land. So the last thing before the exit is one more sweep, rather than
+     * a sleep and a hope: a `settings.json` that comes back is read by the next
+     * launch as a current file, so the first-run screen never appears and the
+     * reset has undone itself in silence.
+     */
+    await new Promise((resolve) => setTimeout(resolve, RESET_EXIT_MS));
+    const settled = await resetInstall(paths);
+
+    if (settled.failures.length > 0) {
       /*
        * The only place this can go. The window is on its way out and the next
        * launch is a fresh install with nowhere to show a message about the last
        * one; a file the OS would not release is the ordinary case, and it is the
        * app's own profile rather than the user's data.
        */
-      console.error('[marimo] reset left files behind:', report.failures);
+      console.error('[marimo] reset left files behind:', settled.failures);
     }
 
-    app.relaunch();
-    setTimeout(() => {
-      app.exit(0);
-    }, RESET_EXIT_MS);
+    app.exit(0);
   };
 
   const disagreement = userDataDisagreement();

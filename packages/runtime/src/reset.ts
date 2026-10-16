@@ -18,12 +18,14 @@
  * reset that removed the directory it was called with would be one bug away from
  * removing an ancestor instead.
  *
- * **The second pass is not belt and braces.** A settings write already in flight
- * can land between the first sweep and the restart, and a `settings.json` that
- * comes back is not a leftover: the next launch reads it as a current file, the
- * first-run screen never appears, and the reset has silently undone itself. A
- * background job runner mid-write is the other way that happens. One bounded
- * retry, not a loop — a writer that keeps winning is reported rather than fought.
+ * **The second pass is not belt and braces.** A writer — a settings write
+ * already in flight, a background job runner mid-message — can put a file back
+ * while the first sweep is running, and a `settings.json` that comes back is not
+ * a leftover: the next launch reads it as a current file, the first-run screen
+ * never appears, and the reset has silently undone itself. One bounded retry,
+ * not a loop — a writer that keeps winning is reported rather than fought, and
+ * whatever lands after this returns is the caller's business (the desktop app
+ * sweeps once more, immediately before it exits).
  */
 import {readdir, rm} from 'node:fs/promises';
 import {join} from 'node:path';

@@ -23,9 +23,16 @@
  * connector list are on both — and it is last because it is the thing fewest
  * people want.
  *
- * What happens after the press is not drawn here: the process answers, ends
- * itself and starts again as a fresh install, so the sentence this card shows is
- * the last thing on the screen.
+ * **It ends the app rather than starting it again.** Everything it deleted would
+ * be read back out of the memories of the running process otherwise, so the
+ * button says what it does — erase and quit — and the card says to open Marimo
+ * again, which is how somebody meets the first-run screen a second time. A reset
+ * that quietly left a fresh install in the tray was tried and is worse: it looks
+ * exactly like a reset that did not happen.
+ *
+ * What happens after the press is not drawn here: the process answers, empties
+ * the folder and ends itself, so the sentence this card shows is the last thing
+ * on the screen.
  */
 import {useState} from 'react';
 
@@ -131,9 +138,8 @@ export function ResetMarimo({
         kept there. If a bot is mid-answer right now, that answer is lost.
       </p>
       <p className="settings-muted">
-        Marimo closes and opens again on its own, and you will be asked to set
-        it up as you were the first time. If it does not come back, open it
-        again.
+        Marimo closes when it is done, and does not come back on its own. Open
+        it again and it will ask you to set it up as it did the first time.
       </p>
 
       <label className="settings-field">
@@ -174,7 +180,7 @@ export function ResetMarimo({
         >
           {resetting
             ? 'Erasing everything… Marimo is closing'
-            : 'Erase everything and restart'}
+            : 'Erase everything and quit'}
         </button>
       </div>
 

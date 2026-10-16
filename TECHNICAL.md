@@ -852,19 +852,23 @@ build no longer knows are ignored, and every preference beside them survives.
 **Reset Marimo erases this folder, and the folder is the unit.** The card at the
 bottom of Settings — behind a typed phrase, because it cannot be undone — stops
 the agent, takes the OS timer and the start-at-login switch down, empties the
-user-data directory and restarts the process as a fresh install. `resetInstall`
-enumerates that directory's contents rather than naming a list of documents, and
-that is the design: a list would have to be kept true as stores are added, and the
-way a stale one fails is one file surviving a factory reset, in silence. Two
-things are therefore safe by construction instead of by care — the folders the
-user loaded, and the weights `MARIMO_MODEL_DIR` points elsewhere — because neither
-is under that directory; `defaultWorkspace` is the home directory, which is why
-the function only ever enumerates the one path it was given. There is a second
-sweep before the restart, because a settings write already in flight can land
-between them: a `settings.json` that comes back is read by the next launch as a
-current file, so the first-run screen never appears and the reset has undone
-itself invisibly. The process has to end for the same reason — every store reads
-its document once and keeps the answer.
+user-data directory and quits. It does not start the app again: everything it
+deleted would otherwise be written back out of the memories of the running
+process, and a fresh install left sitting in the tray reads as a reset that never
+happened. The person opens Marimo again and meets the first-run screen.
+`resetInstall` enumerates that directory's contents rather than naming a list of
+documents, and that is the design: a list would have to be kept true as stores are
+added, and the way a stale one fails is one file surviving a factory reset, in
+silence. Two things are therefore safe by construction instead of by care — the
+folders the user loaded, and the weights `MARIMO_MODEL_DIR` points elsewhere —
+because neither is under that directory; `defaultWorkspace` is the home
+directory, which is why the function only ever enumerates the one path it was
+given. It sweeps twice, because a writer can put a file back mid-sweep: a
+`settings.json` that comes back is read by the next launch as a current file, so
+the first-run screen never appears and the reset has undone itself invisibly. The
+app sweeps once more after the pause that lets the window paint, immediately
+before the exit, which is the same rule from the other end — the process has to
+end, because every store reads its document once and keeps the answer.
 
 ## Status and next steps
 

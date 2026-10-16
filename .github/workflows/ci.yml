@@ -7,26 +7,32 @@
 # in this repository rather than a hypothetical.
 name: CI
 
-# Deliberately not on every push to main.
+# On every push to main, and on every pull request.
 #
-# This repository is private, so every run spends metered Actions minutes, and
-# during development the suite below has already been run locally — it costs a
-# few seconds there and a few minutes here. A pull request runs it, because that
-# is the moment somebody else's change needs checking, and the Actions tab runs
-# it on demand. Pushing to main does not.
+# It was pull requests and the Actions tab only, because this repository was
+# private and every run spent metered minutes — a few pushes an hour was a bill
+# for a verdict nobody reads. Standard runners are free on a public repository, so
+# that reason is gone, and what it was buying is worth having back: this is pushed
+# straight to main, so there is rarely a pull request to trigger it, and the smoke
+# check would otherwise wait for somebody to remember the Actions tab.
 #
-# Turn the push trigger back on when main is expected to be green at all times
-# and the app is released; until then it is a bill for a verdict nobody reads.
+# The rest of what made it cheap is still here, because it was never only about
+# money: `concurrency` cancels a superseded run rather than finishing a verdict on
+# code that has already changed, the job has a twenty-minute timeout so a hung
+# step cannot sit on a runner, and a prose-only change is skipped.
 on:
-  pull_request:
-    # A change to prose is not a change to the app. This skips the run for a
-    # README or a note, which is most of a documentation day's pushes.
-    paths-ignore:
+  push:
+    branches: [main]
+    # One list, anchored rather than copied, so a second trigger cannot drift out
+    # of step with the first. A change to prose is not a change to the app.
+    paths-ignore: &prose-only
       - '**.md'
       - 'LICENCE'
       - 'LICENSE'
       - 'NOTICE'
       - '.gitignore'
+  pull_request:
+    paths-ignore: *prose-only
   workflow_dispatch:
     inputs:
       package:

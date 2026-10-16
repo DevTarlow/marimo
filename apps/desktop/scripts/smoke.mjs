@@ -1491,6 +1491,146 @@ async function main() {
       }
 
       /*
+       * The resize corner on that box, dragged with real pointer events.
+       *
+       * It was broken in a way nothing else could see. `.settings-input` sets
+       * `flex: 1`, the field around it is a column, and a zero flex basis beats
+       * the `height` property on that axis — so the corner faithfully wrote an
+       * inline height, the layout ignored it, and the box never moved. Asserting
+       * the computed `resize` or `flex-basis` would have passed throughout; only
+       * a drag can tell the difference between a control that is enabled and one
+       * that works.
+       *
+       * The corner is only used once the layout has settled and the point really
+       * is over the box, which is what `grabbable` waits for. Opening the section
+       * writes the fold to the settings file and re-reads it, so for a moment
+       * after the click the panel is still moving: a corner measured then lands
+       * somewhere else by the time the pointer arrives, which reads as a resizer
+       * that does not work.
+       */
+      let identityBox;
+      let lastLook;
+      /*
+       * Opened first, and that is not decoration. A closed `<details>` in this
+       * Chromium keeps its children's geometry, so the corner of a box inside one
+       * can be computed, measured and still not be painted or reachable — the
+       * first version of this check dragged a box that was not on screen and read
+       * as a resizer that does not work. The prompts check above reads the same
+       * box without opening the section, which is how this stayed hidden.
+       */
+      await openSection('What it is');
+      try {
+        identityBox = await until('the identity box to be draggable', async () => {
+          const state = await evaluate(`(() => {
+          const box = document.querySelector('textarea.settings-identity');
+          if (box === null) return undefined;
+          box.scrollIntoView({block: 'start'});
+          const rect = box.getBoundingClientRect();
+          /*
+           * A few pixels in from the corner, tried outward. The corner itself is
+           * rounded, so the last pixel or two of the box is not painted and a hit
+           * test there lands on the section behind it.
+           */
+          const hits = [3, 6, 9, 12].map((inset) => {
+            const x = rect.right - inset;
+            const y = rect.bottom - inset;
+            const element = document.elementFromPoint(x, y);
+            return {
+              inset,
+              x,
+              y,
+              onBox: element === box,
+              found: element === null
+                ? 'none'
+                : element.tagName + '.' + element.className,
+            };
+          });
+          const grabbable = hits.find((hit) => hit.onBox === true);
+          return JSON.stringify({
+            height: rect.height,
+            room: window.innerHeight - rect.bottom,
+            hits,
+            ...(grabbable === undefined
+              ? {}
+              : {x: grabbable.x, y: grabbable.y}),
+            ready:
+              grabbable !== undefined &&
+              window.innerHeight - rect.bottom > 150,
+          });
+        })()`);
+          if (state === undefined) {
+            return undefined;
+          }
+          const parsed = JSON.parse(state);
+          lastLook = parsed;
+          return parsed.ready === true ? parsed : undefined;
+        });
+      } catch {
+        identityBox = undefined;
+      }
+
+      if (identityBox === undefined) {
+        fail(
+          'the identity box could not be put in reach of the pointer: ' +
+            `${JSON.stringify(lastLook)}`,
+        );
+      } else {
+        await send('Input.dispatchMouseEvent', {
+          type: 'mousePressed',
+          x: identityBox.x,
+          y: identityBox.y,
+          button: 'left',
+          buttons: 1,
+          clickCount: 1,
+        });
+        /*
+         * Two moves rather than one jump, and `buttons: 1` on both: a resizer is
+         * a drag, and a single teleport with the button state unset can be read
+         * as a hover that happens to end where the pointer was put.
+         */
+        for (const distance of [40, 120]) {
+          await send('Input.dispatchMouseEvent', {
+            type: 'mouseMoved',
+            x: identityBox.x,
+            y: identityBox.y + distance,
+            button: 'left',
+            buttons: 1,
+          });
+        }
+        await send('Input.dispatchMouseEvent', {
+          type: 'mouseReleased',
+          x: identityBox.x,
+          y: identityBox.y + 120,
+          button: 'left',
+          buttons: 0,
+          clickCount: 1,
+        });
+
+        const grew = await until('the identity box to resize', async () => {
+          const {result} = await send('Runtime.evaluate', {
+            expression:
+              'document.querySelector("textarea.settings-identity")' +
+              '.getBoundingClientRect().height',
+            returnByValue: true,
+          });
+          const height = result?.value;
+          return typeof height === 'number' && height > identityBox.height + 40
+            ? true
+            : undefined;
+        }).catch(() => false);
+
+        if (grew !== true) {
+          fail(
+            `the identity box did not resize when its corner was dragged ` +
+              `(still ${String(identityBox.height)}px tall; hit tests ` +
+              `${JSON.stringify(identityBox.hits)})`,
+          );
+        } else {
+          ok('the identity box resizes when its corner is dragged');
+        }
+      }
+
+      /*
        * A command switched off in Settings is *absent* from the composer's menu
        * rather than merely discouraged there — the rule the whole capability model
        * rests on, and the one that cannot be checked from either side alone: the

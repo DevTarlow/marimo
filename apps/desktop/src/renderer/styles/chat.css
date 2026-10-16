@@ -1588,6 +1588,19 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * A textarea in a field, which is the one place the shared `flex: 1` is wrong.
+ *
+ * `.settings-field` is a column, so its main axis is the height — and
+ * `flex: 1` sets `flex-basis: 0%`, which beats the `height` property on that
+ * axis. The resize corner writes an inline height, so the handle worked and the
+ * box never moved: dragged 120px, stayed exactly where it was. Giving the basis
+ * back to the element is what makes the corner do what the pointer asked.
+ */
+.settings-field > textarea {
+  flex: 1 1 auto;
+}
+
 .settings-identity {
   min-height: 120px;
   resize: vertical;

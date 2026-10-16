@@ -116,6 +116,13 @@ bots**. Marimo is the bot you talk to, and without that it can talk about a bot 
 made but cannot ask it to do anything. You can make more bots on the next step, or
 skip straight on — Settings has **+ New bot** whenever you want one.
 
+The step after that is **How to talk to me**, which is your own side of it: what to
+call you, how long an answer should be, whether to admit when it is unsure. The bot
+reads it after everything the app tells it about itself, so it wins wherever the two
+disagree about how you want to be spoken to. Every bot keeps its own, Marimo
+included, and leaving it empty is a real answer — the bot is already told to be
+itself. Settings is where you change any of them later.
+
 Last, pick the service that answers, because this app does not carry a model of its
 own. There are five to choose from, and one of them keeps everything on your own
 machine or network: a [llama.cpp](https://github.com/ggml-org/llama.cpp) server you

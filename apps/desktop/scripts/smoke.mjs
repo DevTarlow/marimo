@@ -322,6 +322,31 @@ async function main() {
     }
     await press('Make this bot');
 
+    /*
+     * And the step that follows it: the user's own words about how they want to
+     * be spoken to. Typed into the textarea and saved, because the failure this
+     * catches is silent — a field that draws and never writes leaves a bot with
+     * no preferences and nothing on screen to say so.
+     */
+    await until('the how-to-talk step', async () =>
+      (await evaluate(
+        `document.querySelector('.setup-form textarea.settings-preferences') !== null`,
+      )) === true
+        ? true
+        : undefined,
+    );
+    const wrote = await evaluate(`(() => {
+      const box = document.querySelector('.setup-form textarea.settings-preferences');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(box, 'The smoke test wrote this: be brief.');
+      box.dispatchEvent(new Event('input', {bubbles: true}));
+      return box.value;
+    })()`);
+    if (wrote !== 'The smoke test wrote this: be brief.') {
+      fail(`the preferences box did not take text: ${String(wrote)}`);
+    }
+    await press('Save and continue');
+
     /* And the optional second half: one more bot, or none. */
     await press("That's enough for now");
 
@@ -362,6 +387,7 @@ async function main() {
           flow: !!document.querySelector('.setup'),
           composer: !!document.querySelector('.composer-box'),
           bots: profiles.map((entry) => entry.name),
+          botWords: profiles.find((entry) => entry.name === 'Smoke')?.preferences ?? null,
           leadTools: profiles[0]?.enabledTools ?? [],
           delegation: delegationTool ?? null,
           ready: (await window.marimo.call('settings.get', {})).settings.modelReady,
@@ -375,6 +401,17 @@ async function main() {
     } else if (!afterSetup.bots.includes('Smoke')) {
       fail(
         `the bot made in the flow is not in the roster: ${afterSetup.bots.join(', ')}`,
+      );
+    } else if (
+      afterSetup.botWords !== 'The smoke test wrote this: be brief.'
+    ) {
+      /*
+       * The words the person wrote about being spoken to, at the far end of the
+       * path: the step, the IPC call, the profile store, and back out of a
+       * payload the window reads.
+       */
+      fail(
+        `the flow did not keep the words about how to talk: ${JSON.stringify(afterSetup.botWords)}`,
       );
     } else if (
       afterSetup.delegation === null ||
@@ -392,7 +429,8 @@ async function main() {
       fail('the flow closed without the app being able to answer');
     } else {
       ok(
-        `the flow made a bot and closed onto a chat (${afterSetup.bots.join(', ')})`,
+        `the flow made a bot, kept how to talk to it, and closed onto a chat ` +
+          `(${afterSetup.bots.join(', ')})`,
       );
     }
 

@@ -79,7 +79,7 @@ pnpm build:web   # the renderer bundle — `build` alone leaves it stale
 | Done        | Secrets: one file per provider key and per connector secret, encrypted in the OS keychain, stored readable only when the user asks for that one to be readable by the background runner, and a machine with no keychain told so rather than written to in the clear |
 | Done        | Scheduled jobs while the app is open, and a headless runner plus an OS service that keeps them going while it is closed                                                                                                                 |
 | Done        | The desktop companion: a frameless, transparent, click-through moss ball that answers in bubbles above itself, with its own chat bar underneath and its own settings for how long it answers, how much it shows, and whether it floats  |
-| Done        | A first run in four steps: load a Space, make a bot (and as many more as you want, or none), and choose the service that answers — with no message box anywhere until the app can actually answer, and one flag so the flow is a first run rather than a screen that comes back |
+| Done        | A first run in five steps: load a Space, make a bot (and as many more as you want, or none), say how you want to be talked to, and choose the service that answers — with no message box anywhere until the app can actually answer, and one flag so the flow is a first run rather than a screen that comes back |
 | Done        | A memory review: after a conversation goes quiet the agent proposes what is worth remembering and asks before writing it — reading a long session in stretches rather than only once it ends, and remembering the facts you turned down |
 | Done        | Memory in two halves: who the user is, which follows them between projects, and what this folder is, which does not — with a correction able to replace an old fact rather than sit beside it, and every bullet dated |
 | Done        | A way to say an answer was wrong. It is recorded, never written straight into memory, and the next review reads it |
@@ -455,7 +455,7 @@ field means somebody already using the app, and gets the app in full. A schema
 default cannot tell those two apart, which is why the store owns that decision
 and the field carries a `.catch` for the hand-edited typo.
 
-**The first run itself is a four-step flow, and one flag decides whether it is
+**The first run itself is a five-step flow, and one flag decides whether it is
 offered.** A fresh install has three things missing at once — a Space to work in,
 a bot to give work to, and the service that answers — and the flow is those in the
 order they are useful. It writes as it goes, exactly as Settings does, so quitting
@@ -464,6 +464,17 @@ creating a second copy of it. The last step is the only one that cannot be
 skipped: until a provider is chosen and readable the window offers no message box
 at all, because a field whose every message ends in the same refusal is worse than
 no field.
+
+**The step after a bot is made owns `preferences`**, the field Settings calls "How
+to talk to me". It is the one thing about a bot that is the person's own text
+rather than the app's, it is sent after the identity so it wins where the two
+disagree, and a field nobody opens a settings screen to find is a field that stays
+empty — so it is asked for at the moment somebody is thinking about the bot at all.
+The bot exists by then: the step edits a profile on the roster rather than a draft
+in a form, which is why going back from it returns to the list of bots and never to
+the form that would make a second one. Adding another bot from that list goes
+through the same two steps, so the words are offered for every bot rather than for
+the first one only.
 
 Which screen a launch gets is `firstRunScreen` in
 `apps/desktop/src/renderer/first-run.ts` — four answers (`waiting`, `setup`,

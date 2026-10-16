@@ -1,5 +1,5 @@
 /**
- * The first run, as four steps and a bot.
+ * The first run, as five steps and a bot.
  *
  * What a fresh install is missing is not one thing. It has no Space, so a bot
  * would have nothing to work in; it has no bot but the one it talks to, so a
@@ -8,11 +8,17 @@
  * three facts in the order they are useful, and it is the reason the window
  * offers no message box yet — a box that cannot be answered is worse than no box.
  *
- * Four rules shape it:
+ * Five rules shape it:
  *
  * - **It writes as it goes.** Every step's controls write the moment they are
  *   used, exactly as Settings does, so quitting in the middle loses nothing and
  *   the app is in a described state rather than a half-applied form.
+ * - **A bot exists before it is asked about.** The bot step creates the profile
+ *   and the step after it edits what now exists, which is why backing out of
+ *   that second step returns to the list of bots rather than to the form: a form
+ *   there would make a second bot. The person's own words about being spoken to
+ *   get that step because a field nobody opens a settings screen to find is a
+ *   field that stays empty.
  * - **It reads what already exists.** A Space already loaded, bots already made,
  *   a delegate grant already given: the step says so and moves on rather than
  *   creating a second copy of anything. That is what makes an interrupted flow
@@ -45,12 +51,19 @@ import {SetupProvider} from './SetupProvider.js';
 /**
  * The steps, in the order they are shown.
  *
- * Four labels rather than a number out of four: "Model" says what is being
- * decided, and "step 3 of 4" says only how much is left.
+ * Labels rather than a number out of five: "Model" says what is being decided,
+ * and "step 3 of 5" says only how much is left.
+ *
+ * `voice` comes straight after a bot is made, and it is the step that owns the
+ * profile field Settings calls "How to talk to me". It is the one thing about a
+ * bot that is the *user's* text rather than the app's, so it is worth asking for
+ * at the moment they are thinking about that bot rather than leaving it buried
+ * in a settings screen they may never open.
  */
 const STEPS = [
   {id: 'space', label: 'Space'},
   {id: 'bot', label: 'Your first bot'},
+  {id: 'voice', label: 'How to talk to me'},
   {id: 'more', label: 'More bots'},
   {id: 'provider', label: 'Model'},
 ] as const;
@@ -58,7 +71,7 @@ const STEPS = [
 type StepId = (typeof STEPS)[number]['id'];
 type SetupScreen = 'welcome' | StepId;
 
-/** What the bot form collects, and what the two steps that use it hand over. */
+/** What the bot form collects, and what the step that uses it hands over. */
 interface BotDraft {
   name: string;
   tools: string[];
@@ -81,7 +94,13 @@ export function Setup({
 }): React.JSX.Element {
   const [screen, setScreen] = useState<SetupScreen>('welcome');
   const [catalog, setCatalog] = useState<ProfileCatalog | null>(null);
-  const [adding, setAdding] = useState(false);
+  /**
+   * The bot the flow is in the middle of, between making it and giving it a
+   * voice. Held as an id rather than as a draft because the profile exists from
+   * the moment it is created: the step after this one edits a bot that is
+   * already on the roster, so a reload in between loses nothing.
+   */
+  const [madeId, setMadeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -117,12 +136,20 @@ export function Setup({
    */
   const lead: AgentProfile | undefined = settings.profiles[0];
   const bots = settings.profiles.slice(1);
+  /*
+   * The bot the voice step is about. Read back out of the roster rather than
+   * kept as a copy: `profiles.update` answers with the whole file, so the name
+   * in that step's heading is the name the store holds.
+   */
+  const justMade =
+    madeId === null
+      ? undefined
+      : settings.profiles.find((entry) => entry.id === madeId);
   const delegateTool = catalog?.delegationTool;
   const presets = catalog?.presets ?? [];
 
   const go = (next: SetupScreen): void => {
     setProblem(null);
-    setAdding(false);
     setScreen(next);
   };
 
@@ -175,14 +202,14 @@ export function Setup({
    * on a bot that was never finished being set up. Whoever failed, the person is
    * talking to Marimo.
    */
-  const makeBot = async (draft: BotDraft): Promise<boolean> => {
+  const makeBot = async (draft: BotDraft): Promise<string | null> => {
     if (lead === undefined) {
       setProblem('This install has no bot to put back. Reopen the app.');
-      return false;
+      return null;
     }
     setBusy(true);
     setProblem(null);
-    let made = false;
+    let made: string | null = null;
     try {
       const created = await window.marimo.call('profiles.create', {
         name: draft.name,
@@ -206,7 +233,7 @@ export function Setup({
           patch: {enabledTools: [...lead.enabledTools, delegateTool]},
         });
       }
-      made = true;
+      made = created.activeProfileId;
     } catch (failure) {
       setProblem(describe(failure));
     } finally {
@@ -227,13 +254,53 @@ export function Setup({
     return made;
   };
 
+  /**
+   * Making a bot leads to asking how it should talk, always.
+   *
+   * That is the one question about a bot the app cannot answer for the person,
+   * and it is about the bot they have just named — so the step after this one is
+   * about the profile that now exists rather than a draft still in a form.
+   */
   const submitBot = async (draft: BotDraft): Promise<void> => {
-    if (await makeBot(draft)) {
-      if (screen === 'bot') {
-        go('more');
-      } else {
-        setAdding(false);
-      }
+    const made = await makeBot(draft);
+    if (made !== null) {
+      setMadeId(made);
+      go('voice');
+    }
+  };
+
+  /**
+   * Writes the user's own words onto the bot just made.
+   *
+   * An empty box writes nothing rather than clearing: the bot was created
+   * seconds ago, so there is nothing there to clear, and "no words of their own"
+   * is the state `preferences` is absent for. The prompt builder reads both the
+   * same way, which is why leaving it empty is a real answer rather than a
+   * half-finished one.
+   */
+  const saveVoice = async (text: string): Promise<void> => {
+    const preferences = text.trim();
+    if (madeId === null || preferences.length === 0) {
+      go('more');
+      return;
+    }
+    setBusy(true);
+    setProblem(null);
+    try {
+      const updated = await window.marimo.call('profiles.update', {
+        profileId: madeId,
+        patch: {preferences},
+      });
+      onSettings({
+        ...settings,
+        profiles: updated.profiles,
+        activeProfileId: updated.activeProfileId,
+      });
+      go('more');
+    } catch (failure) {
+      setProblem(describe(failure));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -391,25 +458,79 @@ export function Setup({
               onSubmit={submitBot}
             />
             <div className="onboarding-actions">
+              {/*
+                Two different exits, because this step is reached two ways. With
+                no bots yet it is the first one, and stepping over it is a real
+                answer — the app is perfectly usable with Marimo alone, and
+                Settings is where a bot is made later. With bots already on the
+                roster the person came here from the list, so there is one way
+                out and it is back to that list.
+              */}
+              {bots.length === 0 ? (
+                <>
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    disabled={busy}
+                    onClick={() => {
+                      go('provider');
+                    }}
+                  >
+                    Skip the bot for now
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    disabled={busy}
+                    onClick={() => {
+                      go('space');
+                    }}
+                  >
+                    Back
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  disabled={busy}
+                  onClick={() => {
+                    go('more');
+                  }}
+                >
+                  Never mind
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {screen === 'voice' && (
+          <div className="setup-body">
+            <h2>How should {justMade?.name ?? 'this bot'} talk to you?</h2>
+            <p className="onboarding-lead">
+              How you want to be spoken to, in your own words. It applies to
+              every conversation you have with {justMade?.name ?? 'this bot'},
+              and it is read after everything the app tells it about itself, so
+              it wins wherever the two disagree.
+            </p>
+            <p className="onboarding-note">
+              Things like what to call you, how long an answer should be, or
+              that you would rather hear when it is unsure. Every bot keeps its
+              own, Marimo included, and Settings is where you change any of them
+              later.
+            </p>
+            <VoiceForm busy={busy} onSubmit={saveVoice} />
+            <div className="onboarding-actions">
               <button
                 type="button"
                 className="button button-quiet"
                 disabled={busy}
                 onClick={() => {
-                  go('provider');
+                  go('more');
                 }}
               >
-                Skip the bot for now
-              </button>
-              <button
-                type="button"
-                className="button button-quiet"
-                disabled={busy}
-                onClick={() => {
-                  go('space');
-                }}
-              >
-                Back
+                Skip this
               </button>
             </div>
           </div>
@@ -427,61 +548,42 @@ export function Setup({
                 So far: {bots.map((bot) => bot.name).join(', ')}.
               </p>
             )}
-            {adding ? (
-              <BotForm
-                presets={presets}
-                busy={busy}
-                delegateTool={delegateTool}
-                lead={lead}
-                submitLabel="Make this bot"
-                onSubmit={submitBot}
-              />
-            ) : null}
             <div className="onboarding-actions">
-              {adding ? (
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={busy}
+                onClick={() => {
+                  go('bot');
+                }}
+              >
+                Add another bot
+              </button>
+              <button
+                type="button"
+                className="button button-quiet"
+                disabled={busy}
+                onClick={() => {
+                  go('provider');
+                }}
+              >
+                That's enough for now
+              </button>
+              {/*
+                Back to the bot that was just made rather than to the form: the
+                profile exists, and a form would make a second one.
+              */}
+              {justMade !== undefined && (
                 <button
                   type="button"
                   className="button button-quiet"
                   disabled={busy}
                   onClick={() => {
-                    setAdding(false);
+                    go('voice');
                   }}
                 >
-                  Never mind
+                  Back
                 </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="button button-primary"
-                    disabled={busy}
-                    onClick={() => {
-                      setAdding(true);
-                    }}
-                  >
-                    Add another bot
-                  </button>
-                  <button
-                    type="button"
-                    className="button button-quiet"
-                    disabled={busy}
-                    onClick={() => {
-                      go('provider');
-                    }}
-                  >
-                    That's enough for now
-                  </button>
-                  <button
-                    type="button"
-                    className="button button-quiet"
-                    disabled={busy}
-                    onClick={() => {
-                      go('bot');
-                    }}
-                  >
-                    Back
-                  </button>
-                </>
               )}
             </div>
           </div>
@@ -632,6 +734,66 @@ function BotForm({
           disabled={busy || name.trim().length === 0}
         >
           {submitLabel}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * The one field about a bot that belongs to the person rather than to the app.
+ *
+ * The same value Settings calls "How to talk to me", asked for here because this
+ * is the moment somebody is thinking about the bot at all: it is their own text,
+ * it is sent after everything the app says about who the bot is, and a field
+ * nobody opens a settings screen to find is a field that stays empty. The
+ * placeholder is Settings' own, so the two are one answer to what belongs in it.
+ *
+ * Written on submit rather than on blur: the step is a decision, and the button
+ * is what says the decision was made.
+ */
+function VoiceForm({
+  busy,
+  onSubmit,
+}: {
+  busy: boolean;
+  /** Saves the words, or advances if there are none. */
+  onSubmit: (text: string) => Promise<void>;
+}): React.JSX.Element {
+  const [text, setText] = useState('');
+
+  return (
+    <form
+      className="setup-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!busy) {
+          void onSubmit(text);
+        }
+      }}
+    >
+      <label className="settings-field">
+        <span>How to talk to me</span>
+        <em className="settings-why">
+          Your words rather than the app's. Leaving it empty is fine.
+        </em>
+        <textarea
+          className="settings-input settings-preferences"
+          rows={4}
+          aria-label="How to talk to me"
+          placeholder="Call me Tarlow. Tell me when you are unsure rather than guessing."
+          autoFocus
+          value={text}
+          disabled={busy}
+          onChange={(event) => {
+            setText(event.target.value);
+          }}
+        />
+      </label>
+
+      <div className="onboarding-actions">
+        <button type="submit" className="button button-primary" disabled={busy}>
+          Save and continue
         </button>
       </div>
     </form>

@@ -68,7 +68,6 @@ export interface OpenAiCompatLlmOptions {
    * at it either way.
    */
   apiKey?: string;
-  temperature?: number;
   maxOutputTokens?: number;
   timeoutMs?: number;
   /**
@@ -137,7 +136,6 @@ export class OpenAiCompatLlm extends BaseLlm {
   private readonly label: string;
   private readonly apiKey: string;
   private readonly readSessionId: (() => string | undefined) | undefined;
-  private readonly temperature?: number;
   private readonly maxOutputTokens?: number;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
@@ -151,7 +149,6 @@ export class OpenAiCompatLlm extends BaseLlm {
     this.label = providerLabel(options.provider);
     this.apiKey = options.apiKey ?? '';
     this.readSessionId = options.readSessionId;
-    this.temperature = options.temperature;
     this.maxOutputTokens = options.maxOutputTokens;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
@@ -215,10 +212,13 @@ export class OpenAiCompatLlm extends BaseLlm {
       stream,
     };
 
-    const temperature = llmRequest.config?.temperature ?? this.temperature;
-    if (typeof temperature === 'number') {
-      body.temperature = temperature;
-    }
+    /*
+     * No `temperature`, and the absence is the decision rather than an
+     * oversight: it used to travel with every request from one app-wide setting,
+     * which meant a single number overrode whatever each endpoint had tuned for
+     * the model it is actually serving. The endpoints' own defaults are the
+     * better answer, and there is nothing here to keep in step with them.
+     */
     const maxTokens =
       llmRequest.config?.maxOutputTokens ?? this.maxOutputTokens;
     if (typeof maxTokens === 'number') {

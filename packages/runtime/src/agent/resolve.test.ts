@@ -354,11 +354,10 @@ describe('resolveAgentConfig', () => {
     }
   });
 
-  it('carries the sampling settings through', async () => {
+  it('carries the output cap through', async () => {
     const result = await resolve({
       settings: {
         ...defaultStoredSettings(),
-        temperature: 1.25,
         maxOutputTokens: 4096,
       },
       profile: profile(),
@@ -366,7 +365,6 @@ describe('resolveAgentConfig', () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.temperature).toBe(1.25);
       expect(result.config.maxOutputTokens).toBe(4096);
     }
   });

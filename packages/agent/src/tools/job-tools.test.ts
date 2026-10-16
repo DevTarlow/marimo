@@ -119,7 +119,6 @@ describe('scheduling tools', () => {
       model: 'deepseek-chat',
       provider: 'deepseek',
       apiKey: '',
-      temperature: 0,
       systemPrompt: 'test',
       profileId: 'profile-1',
       workspaceRoot: workDir,

@@ -1359,7 +1359,6 @@ async function main() {
             buttons: [...section.querySelectorAll('button')].map(
               (button) => button.textContent ?? '',
             ),
-            temperature: section.querySelector('input[type="range"]')?.value ?? null,
           });
         })()`);
         return state === undefined ? undefined : JSON.parse(state);
@@ -1380,16 +1379,8 @@ async function main() {
         fail('the Provider picker offers no server of your own');
       } else if (!providerCard.buttons.some((label) => /fetch/i.test(label))) {
         fail('the Provider card has no way to ask what a service serves');
-      } else if (providerCard.temperature !== '0.7') {
-        fail(
-          `the temperature slider opens at ${String(providerCard.temperature)}, ` +
-            'not the 0.7 the settings file defaults to',
-        );
       } else {
-        ok(
-          'the Provider card offers the catalogue, no key value, Fetch Models ' +
-            'and the temperature',
-        );
+        ok('the Provider card offers the catalogue, no key value, and Fetch Models');
       }
 
       /*

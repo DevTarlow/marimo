@@ -86,7 +86,6 @@ export function defaultStoredSettings(): StoredSettings {
      */
     experienceMode: 'power',
     appearance: defaultAppearance(),
-    temperature: 0.7,
     allowPrivateNetworkFetch: false,
     mcpServers: [],
     // Discord is off until the user pastes a bot token, so a fresh install makes

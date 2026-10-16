@@ -232,7 +232,6 @@ function settingsShape(): Record<string, unknown> {
   return {
     experienceMode: 'power',
     appearance: defaultAppearance(),
-    temperature: 0.7,
     providers: defaultProviders(),
     allowPrivateNetworkFetch: false,
     mcpServers: [],

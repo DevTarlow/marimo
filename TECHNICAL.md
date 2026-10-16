@@ -438,7 +438,7 @@ grant against the lists. There is one source of truth for what an agent may do,
 and it is still the profile.
 
 The line between the two screens is **the numbers versus the text**. The numbers —
-an output cap, a memory limit, a temperature — are on both, because somebody who
+an output cap, a memory limit — are on both, because somebody who
 wants shorter answers should not have to find an advanced mode first, and the same
 goes for the provider card, since an app that carries no model has to be fixable
 from the screen a first run lands on. Power is where things are *written*: the

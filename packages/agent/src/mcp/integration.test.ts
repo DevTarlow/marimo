@@ -34,7 +34,6 @@ function config(overrides: Partial<AgentConfig> = {}): AgentConfig {
     model: 'deepseek-chat',
     provider: 'deepseek',
     apiKey: '',
-    temperature: 0,
     systemPrompt: 'test',
     workspaceRoot: process.cwd(),
     allowPrivateNetworkFetch: false,

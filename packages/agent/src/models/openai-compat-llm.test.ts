@@ -146,6 +146,21 @@ describe('OpenAiCompatLlm request shape', () => {
     expect(calls[0]!.body).not.toHaveProperty('stream_options');
   });
 
+  /*
+   * The absence is the decision, not an oversight.
+   *
+   * One app-wide `temperature` used to travel with every request, which meant a
+   * single number overrode whatever each endpoint had tuned for the model it is
+   * actually serving. This is what stops the field coming back by accident,
+   * because nothing else would notice: a body carrying it works.
+   */
+  it('leaves the sampling temperature to the endpoint', async () => {
+    const {llm, calls} = client({provider: 'deepseek'});
+    await drain(llm);
+
+    expect(calls[0]!.body).not.toHaveProperty('temperature');
+  });
+
   it('sends the key as a bearer token when there is one', async () => {
     const {llm, calls} = client({provider: 'deepseek', apiKey: 'sk-secret'});
     await drain(llm);

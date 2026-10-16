@@ -246,7 +246,6 @@ export function describeTools(options: {
       provider: options.provider,
       // A stand-in for the same reason: building a tool reads no credential.
       apiKey: '',
-      temperature: 0,
       systemPrompt: '',
       workspaceRoot: options.workspaceRoot,
       allowPrivateNetworkFetch: false,

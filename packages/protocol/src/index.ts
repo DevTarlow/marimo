@@ -438,7 +438,7 @@ export function defaultWindowState(): WindowState {
  *
  * `simple` is for somebody who wants a companion: a name, one answer about what
  * it may do, and the model. `power` is everything the app can do, down to the
- * temperature and the individual tool switches.
+ * individual tool switches.
  *
  * Not a level and not a capability — nothing about the agent changes with this
  * value. It decides which controls are drawn and how roomy they are, which is
@@ -818,14 +818,6 @@ export const settingsSchema = z.object({
   setupSeen: z.boolean().catch(false),
   /** Background, accent and text size: how the app looks, not what it does. */
   appearance: appearanceSchema,
-  /**
-   * How literal or how inventive the model's wording is.
-   *
-   * Here rather than on a profile because there is one engine and one sampling
-   * setting for the whole app, and it is worth more on a small local model than
-   * on any hosted one — which is why it has a control of its own in Settings.
-   */
-  temperature: z.number().min(0).max(2),
   /**
    * Which service answers, and what each one was last set to.
    *

@@ -476,7 +476,6 @@ export class AgentRuntime {
     const after = await this.settingsStore.patch(patch);
 
     const rebuild =
-      before.temperature !== after.temperature ||
       before.maxOutputTokens !== after.maxOutputTokens ||
       before.allowPrivateNetworkFetch !== after.allowPrivateNetworkFetch;
 
@@ -1834,7 +1833,6 @@ export class AgentRuntime {
          */
         provider: 'deepseek',
         apiKey: '',
-        temperature: 0,
         systemPrompt: '',
         profileId,
         workspaceRoot: this.options.paths.defaultWorkspace,

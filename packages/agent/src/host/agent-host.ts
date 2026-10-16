@@ -563,7 +563,6 @@ export class AgentHost {
        * credential that just failed.
        */
       config.apiKey !== this.config.apiKey ||
-      config.temperature !== this.config.temperature ||
       config.maxOutputTokens !== this.config.maxOutputTokens ||
       config.systemPrompt !== this.config.systemPrompt ||
       config.profileId !== this.config.profileId ||
@@ -1335,7 +1334,6 @@ export class AgentHost {
       baseUrl: config.baseUrl,
       provider: config.provider,
       apiKey: config.apiKey,
-      temperature: config.temperature,
       /*
        * Read at send time rather than captured, for the reason the option
        * documents: this client is cached per model and outlives the turn that

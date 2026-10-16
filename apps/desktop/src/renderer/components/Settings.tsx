@@ -8,11 +8,11 @@
  * It is drawn in two sizes, and which one is the user's answer rather than the
  * app's guess. **Simple** is what somebody who wants a companion sees: a name,
  * one choice about what it may do, which service answers and which of its
- * models. **Power** is everything, down to the temperature and the individual
- * tool switches. The line between them is *tuning versus repair* — a number to
- * adjust lives in power, a switch that fixes something the user is looking at
- * stays where they are. Hiding the escape hatch from the person hitting the
- * problem is how a setting comes to look like a bug.
+ * models. **Power** is everything, down to the individual tool switches. The
+ * line between them is *tuning versus repair* — a number to adjust lives in
+ * power, a switch that fixes something the user is looking at stays where they
+ * are. Hiding the escape hatch from the person hitting the problem is how a
+ * setting comes to look like a bug.
  *
  * The repair that matters most is therefore in both. The app carries no model
  * and runs no engine, so a fresh install cannot answer until it is pointed at a
@@ -1516,14 +1516,6 @@ function ProviderSection({
   const [apiKey, setApiKey] = useState('');
   /** What is in the base URL box, or null while it shows what is stored. */
   const [baseUrlDraft, setBaseUrlDraft] = useState<string | null>(null);
-  /**
-   * The temperature while the slider is being dragged.
-   *
-   * Held apart from the stored value for the same reason the base URL box is:
-   * the write happens when the gesture ends, and a slider whose handle snapped
-   * back to the stored number between steps would be unusable.
-   */
-  const [temperatureDraft, setTemperatureDraft] = useState<number | null>(null);
   /** What went wrong, shown in this section rather than only in the banner. */
   const [problem, setProblem] = useState<string | null>(null);
   /** What a good fetch found, so the button's effect is visible. */
@@ -1575,16 +1567,6 @@ function ProviderSection({
     void write(async () => {
       await window.marimo.call('settings.set', {patch});
     });
-  };
-
-  /** Saves the dragged temperature, and only when it moved. */
-  const commitTemperature = (): void => {
-    const next = temperatureDraft;
-    setTemperatureDraft(null);
-    if (next === null || next === settings.temperature) {
-      return;
-    }
-    save({temperature: next});
   };
 
   /** Writes the key and forgets it here: the window is never told one back. */
@@ -1869,51 +1851,6 @@ function ProviderSection({
         )}
         {problem !== null && <p className="settings-problem">{problem}</p>}
       </div>
-
-      {/*
-        The one knob the settings file has always held and no screen ever drew.
-
-        It belongs here rather than with the appearance settings: it is a property
-        of the model — how literal or how inventive its wording is — and it is
-        worth more on a small local model than on any of the hosted ones, which is
-        why it is worth a control.
-
-        A range rather than a number box, like the memory limit, and saved when
-        the pointer comes up: a slider fires per pixel, and a settings write per
-        pixel is a burst of disk writes for one decision.
-      */}
-      <label className="settings-field">
-        <span>
-          Temperature{' '}
-          <strong className="settings-value">
-            {(temperatureDraft ?? settings.temperature).toFixed(1)}
-          </strong>
-        </span>
-        <em className="settings-why">
-          How much it varies its wording. Low is literal and repeatable, high is
-          more inventive and more likely to wander. 0.7 is the default; below
-          0.3 a small model starts repeating itself.
-        </em>
-        <input
-          className="settings-input"
-          type="range"
-          min={0}
-          max={2}
-          step={0.1}
-          value={temperatureDraft ?? settings.temperature}
-          disabled={busy}
-          aria-label="Temperature"
-          onChange={(event) => {
-            setTemperatureDraft(Number(event.target.value));
-          }}
-          onPointerUp={() => {
-            commitTemperature();
-          }}
-          onKeyUp={() => {
-            commitTemperature();
-          }}
-        />
-      </label>
     </SettingsSection>
   );
 }

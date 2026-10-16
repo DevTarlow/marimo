@@ -119,23 +119,23 @@ describe('SettingsStore', () => {
   });
 
   it('reads a file written before Discord existed', async () => {
-    await write({temperature: 0.3, sidebarWidth: 320});
+    await write({notesWidth: 260, sidebarWidth: 320});
     const settings = await store().load();
 
     // The old settings survive, and the block arrives at its defaults.
-    expect(settings.temperature).toBe(0.3);
+    expect(settings.notesWidth).toBe(260);
     expect(settings.sidebarWidth).toBe(320);
     expect(settings.discord.enabled).toBe(false);
   });
 
   it('falls back on a block that does not validate, keeping the rest', async () => {
     await write({
-      temperature: 0.3,
+      notesWidth: 260,
       discord: {enabled: true, channelId: 42},
     });
     const settings = await store().load();
 
-    expect(settings.temperature).toBe(0.3);
+    expect(settings.notesWidth).toBe(260);
     expect(settings.discord.channelId).toBe('');
   });
 
@@ -172,9 +172,9 @@ describe('SettingsStore', () => {
   it('leaves Discord alone when a flat setting changes', async () => {
     const settings = store();
     await settings.patch({discord: {channelId: '100', enabled: true}});
-    const after = await settings.patch({temperature: 0.2});
+    const after = await settings.patch({notesWidth: 260});
 
-    expect(after.temperature).toBe(0.2);
+    expect(after.notesWidth).toBe(260);
     expect(after.discord.enabled).toBe(true);
     expect(after.discord.channelId).toBe('100');
   });
@@ -243,7 +243,7 @@ describe('SettingsStore, on a file from the provider era', () => {
         thinking: true,
       },
       allowPlaintextApiKey: true,
-      temperature: 0.2,
+      notesWidth: 260,
       sidebarWidth: 320,
       disabledCommands: ['compact'],
     };
@@ -290,7 +290,7 @@ describe('SettingsStore, on a file from the provider era', () => {
     expect(settings).not.toHaveProperty('localModel');
     expect(settings).not.toHaveProperty('allowPlaintextApiKey');
 
-    expect(settings.temperature).toBe(0.2);
+    expect(settings.notesWidth).toBe(260);
     expect(settings.sidebarWidth).toBe(320);
     expect(settings.disabledCommands).toEqual(['compact']);
   });
@@ -299,7 +299,7 @@ describe('SettingsStore, on a file from the provider era', () => {
     await write(providerEraFile());
     const settings = store();
     await settings.load();
-    await settings.patch({temperature: 0.4});
+    await settings.patch({notesWidth: 260});
 
     const written = JSON.parse(
       await readFile(join(dir, 'settings.json'), 'utf8'),
@@ -309,7 +309,7 @@ describe('SettingsStore, on a file from the provider era', () => {
       configs: Record<string, unknown>;
     };
 
-    expect(written['temperature']).toBe(0.4);
+    expect(written['notesWidth']).toBe(260);
     expect(providers.active).toBe('deepseek');
     expect(providers.configs['deepseek']).toMatchObject({
       model: 'deepseek-v4-pro',
@@ -331,7 +331,7 @@ describe('SettingsStore, on a file from the provider era', () => {
     await write({
       model: 'deepseek-v4-pro',
       baseUrl: 'https://api.deepseek.com/v2',
-      temperature: 0.2,
+      notesWidth: 260,
     });
     const settings = await store().load();
 
@@ -348,7 +348,7 @@ describe('SettingsStore, on a file from the provider era', () => {
     );
     expect(settings).not.toHaveProperty('model');
     expect(settings).not.toHaveProperty('baseUrl');
-    expect(settings.temperature).toBe(0.2);
+    expect(settings.notesWidth).toBe(260);
   });
 });
 
@@ -613,7 +613,7 @@ describe('SettingsStore memorySoftLimitBytes', () => {
   it('keeps a value the user chose', async () => {
     const settings = store();
     await settings.patch({memorySoftLimitBytes: 16 * 1024});
-    await settings.patch({temperature: 0.2});
+    await settings.patch({notesWidth: 260});
     expect((await settings.load()).memorySoftLimitBytes).toBe(16 * 1024);
   });
 
@@ -675,10 +675,10 @@ describe('SettingsStore expandedSections', () => {
   it('keeps the opened sections through another settings write', async () => {
     const settings = store();
     await settings.patch({expandedSections: ['Limits', 'Discord']});
-    const after = await settings.patch({temperature: 0.2});
+    const after = await settings.patch({notesWidth: 260});
 
     expect(after.expandedSections).toEqual(['Limits', 'Discord']);
-    expect(after.temperature).toBe(0.2);
+    expect(after.notesWidth).toBe(260);
   });
 
   it('gives a file written before the field existed an empty list', async () => {
@@ -758,9 +758,9 @@ describe('SettingsStore disabledCommands', () => {
     expect(off.disabledCommands).toEqual(['compact']);
 
     // A later write of something else must not bring it back.
-    const after = await settings.patch({temperature: 0.2});
+    const after = await settings.patch({notesWidth: 260});
     expect(after.disabledCommands).toEqual(['compact']);
-    expect(after.temperature).toBe(0.2);
+    expect(after.notesWidth).toBe(260);
   });
 
   it('gives a file written before the field existed nothing switched off', async () => {
@@ -832,7 +832,7 @@ describe('SettingsStore setupSeen', () => {
   it('remembers that it ran, through a restart and a later write', async () => {
     const settings = store();
     await settings.patch({setupSeen: true});
-    await settings.patch({temperature: 0.2});
+    await settings.patch({notesWidth: 260});
 
     // A window opened later reads the file rather than the default.
     expect((await store().load()).setupSeen).toBe(true);
@@ -928,7 +928,7 @@ describe('SettingsStore experienceMode', () => {
       (await settings.patch({experienceMode: 'power'})).experienceMode,
     ).toBe('power');
     // An unrelated write must not bring the default back.
-    await settings.patch({temperature: 0.2});
+    await settings.patch({notesWidth: 260});
     // And a window opened later reads the file, not the default.
     expect((await store().load()).experienceMode).toBe('power');
   });
@@ -991,7 +991,7 @@ describe('SettingsStore appearance', () => {
   it('keeps a choice through an unrelated write', async () => {
     const settings = store();
     await settings.patch({appearance: {theme: 'light'}});
-    const after = await settings.patch({temperature: 0.2});
+    const after = await settings.patch({notesWidth: 260});
 
     expect(after.appearance.theme).toBe('light');
   });
@@ -1049,10 +1049,10 @@ describe('SettingsStore window', () => {
   it('keeps the remembered bounds through another settings write', async () => {
     const settings = store();
     await settings.patch({window: {width: 1024, height: 640, x: 10, y: 20}});
-    const after = await settings.patch({temperature: 0.2});
+    const after = await settings.patch({notesWidth: 260});
 
     expect(after.window).toEqual({width: 1024, height: 640, x: 10, y: 20});
-    expect(after.temperature).toBe(0.2);
+    expect(after.notesWidth).toBe(260);
   });
 
   it('gives a file written before the block existed the default window', async () => {
@@ -1123,21 +1123,21 @@ describe('settings from another build', () => {
     // The shape a real install has on disk right now.
     await writeFile(
       file,
-      JSON.stringify({temperature: 0.9, sidebarWidth: 321}),
+      JSON.stringify({notesWidth: 260, sidebarWidth: 321}),
       'utf8',
     );
 
     const settings = await store().load();
 
-    expect(settings.temperature).toBe(0.9);
+    expect(settings.notesWidth).toBe(260);
     expect(settings.sidebarWidth).toBe(321);
   });
 
   it('stamps a version when it writes, so this is only needed once', async () => {
-    await writeFile(file, JSON.stringify({temperature: 0.9}), 'utf8');
+    await writeFile(file, JSON.stringify({notesWidth: 260}), 'utf8');
     const settings = store();
     await settings.load();
-    await settings.patch({temperature: 0.5});
+    await settings.patch({notesWidth: 300});
 
     const written = JSON.parse(await readFile(file, 'utf8')) as {
       version: number;
@@ -1146,7 +1146,7 @@ describe('settings from another build', () => {
   });
 
   it('refuses a file from a newer build, and leaves it alone', async () => {
-    const future = JSON.stringify({version: 99, temperature: 0.9});
+    const future = JSON.stringify({version: 99, notesWidth: 260});
     await writeFile(file, future, 'utf8');
 
     await expect(store().load()).rejects.toThrow(/newer version/u);
@@ -1154,10 +1154,10 @@ describe('settings from another build', () => {
   });
 
   it('refuses to write over a file from a newer build', async () => {
-    const future = JSON.stringify({version: 99, temperature: 0.9});
+    const future = JSON.stringify({version: 99, notesWidth: 260});
     await writeFile(file, future, 'utf8');
 
-    await expect(store().patch({temperature: 0.1})).rejects.toThrow(
+    await expect(store().patch({notesWidth: 210})).rejects.toThrow(
       /newer version/u,
     );
     expect(await readFile(file, 'utf8')).toBe(future);
@@ -1206,12 +1206,12 @@ describe('SettingsStore companion', () => {
   });
 
   it('gives a file written before the block existed the defaults', async () => {
-    await write({temperature: 0.4, sidebarWidth: 300});
+    await write({notesWidth: 260, sidebarWidth: 300});
     const settings = await store().load();
 
     expect(settings.companion.answerLength).toBe('brief');
     // And the rest of the file is untouched.
-    expect(settings.temperature).toBe(0.4);
+    expect(settings.notesWidth).toBe(260);
   });
 
   it('fills in a short block rather than discarding it', async () => {
@@ -1235,7 +1235,7 @@ describe('SettingsStore companion', () => {
   it('keeps a choice through an unrelated write', async () => {
     const settings = store();
     await settings.patch({companion: {answerLength: 'balanced'}});
-    const after = await settings.patch({temperature: 0.2});
+    const after = await settings.patch({notesWidth: 260});
 
     expect(after.companion.answerLength).toBe('balanced');
   });
@@ -1300,7 +1300,7 @@ describe('the recall block', () => {
       file,
       JSON.stringify({
         version: 1,
-        temperature: 0.4,
+        notesWidth: 260,
         memorySoftLimitBytes: 8192,
       }),
       'utf8',
@@ -1311,7 +1311,7 @@ describe('the recall block', () => {
     expect(settings.recall.enabled).toBe(false);
     // And the setting beside it survives, which is the whole point of filling the
     // block in rather than resetting the document.
-    expect(settings.temperature).toBe(0.4);
+    expect(settings.notesWidth).toBe(260);
   });
 
   /*
@@ -1326,7 +1326,7 @@ describe('the recall block', () => {
       file,
       JSON.stringify({
         version: 1,
-        temperature: 0.3,
+        notesWidth: 260,
         sidebarWidth: 300,
         recall: {enabled: 'yes', memory: true, workspace: true},
       }),
@@ -1336,7 +1336,7 @@ describe('the recall block', () => {
     const settings = await new SettingsStore(file).load();
 
     expect(settings.recall.enabled).toBe(false);
-    expect(settings.temperature).toBe(0.3);
+    expect(settings.notesWidth).toBe(260);
     expect(settings.sidebarWidth).toBe(300);
   });
 

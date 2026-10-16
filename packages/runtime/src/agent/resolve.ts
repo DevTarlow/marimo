@@ -189,7 +189,6 @@ export async function resolveAgentConfig(
       model:
         config.model.length > 0 ? config.model : provider.fallbackModels[0]!,
       provider: providerId,
-      temperature: settings.temperature,
       ...(settings.maxOutputTokens !== undefined
         ? {maxOutputTokens: settings.maxOutputTokens}
         : {}),

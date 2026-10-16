@@ -38,7 +38,6 @@ export interface AgentConfig {
    * empty, because an empty bearer token is refused where no header is ignored.
    */
   apiKey: string;
-  temperature: number;
   maxOutputTokens?: number;
   /** The profile's identity: who this agent is. */
   systemPrompt: string;

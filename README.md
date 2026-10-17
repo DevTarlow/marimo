@@ -17,6 +17,12 @@ It runs on your computer, not in a browser. There is no account with us. You bri
 
 The chat window and the moss ball share one conversation, so a question you ask from the corner of the screen is waiting in the window when you open it, and the folder you were working in comes back with it.
 
+<p align="center">
+  <img src="./docs/screenshots/app-light.png" alt="The Marimo Bot window in light mode, with Marimo and Writer in the sidebar and a Space open." />
+</p>
+
+<p align="center">The main window in light mode.</p>
+
 ## The short version
 
 - Work in a folder, not a chat that forgets where it is.

@@ -5,30 +5,24 @@
  * rather than a description of a state nobody can leave. Until this existed the
  * grants were a hardcoded default with no way to change them.
  *
- * It is drawn in two sizes, and which one is the user's answer rather than the
- * app's guess. **Simple** is what somebody who wants a companion sees: a name,
- * one choice about what it may do, which service answers and which of its
- * models. **Power** is everything, down to the individual tool switches. The
- * line between them is *tuning versus repair* — a number to adjust lives in
- * power, a switch that fixes something the user is looking at stays where they
- * are. Hiding the escape hatch from the person hitting the problem is how a
- * setting comes to look like a bug.
+ * There is one screen now. It used to come in two sizes, with a switch between
+ * them; that switch made "the everyday settings" a mode somebody had to leave to
+ * change their bot's identity, and it made the app look like two products. Every
+ * capability is still a switch, and every switch is here.
  *
- * The repair that matters most is therefore in both. The app carries no model
- * and runs no engine, so a fresh install cannot answer until it is pointed at a
+ * The repair that matters most is first in spirit. The app carries no model and
+ * runs no engine, so a fresh install cannot answer until it is pointed at a
  * provider — and the card that does it, the Provider card, is where the welcome
- * screen sends somebody on their first run. Connectors are in both sizes for the
- * same reason from the other end: the card is where a server is added and
- * trusted, and a capability nobody can see on the default screen is one nobody
- * turns on. Only the *grant* differs between them, because handing one connector
- * to one agent is a switch among the tools.
+ * screen sends somebody on their first run. Connectors are on the same screen for
+ * the same reason from the other end: the card is where a server is added and
+ * trusted, and a capability nobody can see is one nobody turns on.
  *
  * The tool list is drawn in two groups, and the grouping is the point. Twenty
  * checkboxes with no distinction between reading a file and running a shell
  * command is a list nobody can make a decision from — so the ones that merely
  * look are separated from the ones that can change something, and the second
- * group says what is at stake. That list is the power screen's; the simple screen
- * offers the same grants as three cards, which write the same profile field.
+ * group says what is at stake. The setup flow still offers the same grants as
+ * three cards, because that is the moment the choice is made.
  *
  * **A bot is what the screen calls an agent.** The word on screen changed; the
  * code did not, because `agent` is a package name, an IPC namespace and a field
@@ -47,11 +41,9 @@ import {useEffect, useRef, useState} from 'react';
 import type {
   AgentModel,
   AgentProfile,
-  CapabilityPreset,
   CatalogConnector,
   CatalogTool,
   CompanionAnswerLength,
-  ExperienceMode,
   McpStatus,
   ProfileCatalog,
   PublicSettings,
@@ -59,16 +51,18 @@ import type {
 } from '@marimo/protocol';
 
 import {
+  BOT_AVATAR_PRESETS,
   COMMAND_IDS,
   COMMANDS,
   COMPANION_ANSWER_LENGTHS,
+  defaultBotAvatarFor,
   PROVIDER_IDS,
   PROVIDERS,
 } from '@marimo/protocol';
 
-import {chosenPreset} from '../capabilities.js';
 import {describe} from '../describe.js';
 import {modelChoicesFor, SEARCHABLE_MODEL_THRESHOLD} from '../model-search.js';
+import {BotAvatar} from './BotAvatar.js';
 import {BotMenu} from './BotMenu.js';
 import {Connectors} from './Connectors.js';
 import {Dream} from './Dream.js';
@@ -92,18 +86,6 @@ const ANSWER_LENGTH_LABELS: Record<CompanionAnswerLength, string> = {
   brief: 'Brief — a few lines, the answer and nothing else',
   balanced: 'Balanced — as long as the question deserves',
   detailed: 'Detailed — the full answer here, not deferred to the window',
-};
-
-/**
- * The two sizes, in the words the person choosing between them is given.
- *
- * Written here rather than derived from the enum, for the reason the answer
- * lengths above are: the value is what the file is keyed by, and this is what
- * somebody flipping the switch is told they are getting.
- */
-const EXPERIENCE_LABELS: Record<ExperienceMode, string> = {
-  simple: 'Simple',
-  power: 'Power user',
 };
 
 interface Loaded {
@@ -136,7 +118,6 @@ export const PROVIDER_SECTION = 'Provider';
 
 export function Settings({
   onClose,
-  onExperienceModeChange,
   lastReview,
   openSection,
   userDataFolder,
@@ -160,15 +141,6 @@ export function Settings({
    * until that read has landed, and the card draws without it.
    */
   userDataFolder?: string;
-  /**
-   * Told which size the dialog is now drawn at.
-   *
-   * The density of the whole window follows this value, and the window is not
-   * this component — so without saying so, flipping the switch would re-space
-   * everything only when the dialog was closed. A setting whose entire effect is
-   * visible on the screen you are looking at cannot wait for that.
-   */
-  onExperienceModeChange?: (mode: ExperienceMode) => void;
 }): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -279,23 +251,11 @@ export function Settings({
   }, []);
 
   /** Runs a change, and says so when it fails rather than pretending. */
-  const change = async (
-    work: () => Promise<unknown>,
-    /**
-     * Runs after the write landed and before the redraw.
-     *
-     * For the one change whose effect is *outside* this dialog — the size switch,
-     * which re-spaces the window behind it. Deliberately not called on a refusal:
-     * a failed write that had already resized everything would be the screen
-     * agreeing with a file that says otherwise.
-     */
-    after?: () => void,
-  ): Promise<void> => {
+  const change = async (work: () => Promise<unknown>): Promise<void> => {
     setSaving(true);
     setProblem(null);
     try {
       await work();
-      after?.();
       await load();
     } catch (failure) {
       setProblem(describe(failure));
@@ -400,22 +360,6 @@ export function Settings({
     });
   };
 
-  const setExperienceMode = (mode: ExperienceMode): void => {
-    if (mode === loaded?.settings.experienceMode) {
-      return;
-    }
-    void change(
-      async () => {
-        await window.marimo.call('settings.set', {
-          patch: {experienceMode: mode},
-        });
-      },
-      () => {
-        onExperienceModeChange?.(mode);
-      },
-    );
-  };
-
   if (loaded === null) {
     return (
       <div className="settings">
@@ -438,12 +382,6 @@ export function Settings({
   const granted = new Set(loaded.profile?.enabledTools ?? []);
   const opened = new Set(openSections ?? []);
   /*
-   * Which size this screen is drawn at, read from the file rather than held
-   * here: it is the user's answer about the app, and the window behind this
-   * dialog is drawing itself from the same value.
-   */
-  const power = loaded.settings.experienceMode === 'power';
-  /*
    * The bot an open menu belongs to, looked up rather than held in the state: a
    * menu left open while another window removed that bot would otherwise offer
    * actions for a profile this list no longer has.
@@ -460,6 +398,20 @@ export function Settings({
    */
   const resetIdentity =
     loaded.catalog.identitySeeds[loaded.profile?.id ?? ''];
+  /*
+   * What "the default icon" means for this bot is its place in the roster, not
+   * Marimo's mark: the first bot is the lead, and every one after it starts on
+   * the next preset. Reading the same rule here keeps the clear button from
+   * offering a no-op.
+   */
+  const defaultAvatarId = defaultBotAvatarFor(
+    Math.max(
+      0,
+      loaded.settings.profiles.findIndex(
+        (entry) => entry.id === loaded.profile?.id,
+      ),
+    ),
+  ).id;
   /*
    * Reset would be a no-op only when the box already shows that text *and* that
    * is what is stored. A box showing the default it has not saved yet is a
@@ -531,32 +483,6 @@ export function Settings({
           </div>
         )}
 
-        {/*
-          The switch that decides which of the cards below exist. First, and
-          outside the folding list, because a control hidden inside a panel it
-          also governs is one nobody finds.
-        */}
-        <div className="settings-mode">
-          <label className="settings-check">
-            <input
-              type="checkbox"
-              checked={power}
-              disabled={saving}
-              onChange={(event) => {
-                setExperienceMode(event.target.checked ? 'power' : 'simple');
-              }}
-            />
-            <span>
-              {EXPERIENCE_LABELS.power} mode
-              <em className="settings-why">
-                {power
-                  ? 'The identity, every tool on its own, which connectors this bot may reach, the command list and the recording. Turn it off for the everyday settings.'
-                  : 'The everyday settings: the bots, what one may do, the service that answers, memory and search. Turn this on to write an identity and to see every ability as its own switch.'}
-              </em>
-            </span>
-          </label>
-        </div>
-
         <SettingsSection title="Your bots" opened={opened} onToggle={fold}>
           <p className="settings-muted">
             Each bot has its own identity, its own abilities, its own model and
@@ -626,6 +552,7 @@ export function Settings({
                         });
                       }}
                     >
+                      <BotAvatar profile={entry} size="sm" />
                       {entry.name}
                     </button>
                     <button
@@ -757,79 +684,104 @@ export function Settings({
                 }}
               />
             </label>
+            <BotIconChoices
+              profile={loaded.profile}
+              defaultPresetId={defaultAvatarId}
+              disabled={saving}
+              onPreset={(presetId) => {
+                void change(async () => {
+                  await window.marimo.call('profiles.update', {
+                    profileId: loaded.profile?.id ?? '',
+                    patch: {avatar: {kind: 'preset', id: presetId}},
+                  });
+                });
+              }}
+              onUpload={() => {
+                void change(async () => {
+                  await window.marimo.call('profiles.uploadAvatar', {
+                    profileId: loaded.profile?.id ?? '',
+                  });
+                });
+              }}
+              onClear={() => {
+                void change(async () => {
+                  await window.marimo.call('profiles.update', {
+                    profileId: loaded.profile?.id ?? '',
+                    patch: {avatar: null},
+                  });
+                });
+              }}
+            />
             {/*
-             * The identity is tuning, so it lives in the power screen. It is a
-             * paragraph of instruction addressed to a model, and the app's own
-             * text is a good answer for somebody who has not thought about
-             * prompts at all.
+             * The identity is a paragraph of instruction addressed to a model,
+             * and the app's own text is a good answer for somebody who has not
+             * thought about prompts at all. There is one screen now, so it is
+             * not hidden behind a mode.
              *
-             * "How to talk to me" below is the opposite, and stays in both: it
-             * is the user's own voice, and correcting a name or asking not to be
-             * flattered should not require turning on an advanced mode.
+             * "How to talk to me" below is the opposite: it is the user's own
+             * voice, and correcting a name or asking not to be flattered should
+             * not be buried among the app's text.
              */}
-            {power && (
-              /*
-               * Not a `<label>` any more, because it now holds a button: a click
-               * anywhere inside a label focuses its control, so the reset below
-               * would have been a click on the text box. The name is carried by
-               * `aria-label` instead, which is how the other fields that are not
-               * wrapped in a label do it.
-               */
-              <div className="settings-field">
-                <span>Identity</span>
-                <em className="settings-why">
-                  Who this bot is and how it should behave. Written as an
-                  instruction to it, and sent at the start of every
-                  conversation.
-                </em>
-                <textarea
-                  className="settings-input settings-identity"
-                  rows={6}
-                  aria-label="Identity"
-                  value={draft.identity}
-                  disabled={saving}
-                  onChange={(event) => {
-                    setDraft({...draft, identity: event.target.value});
-                  }}
-                  onBlur={() => {
-                    if (draft.identity === loaded.profile?.identity) {
-                      return;
-                    }
-                    const identity = draft.identity;
+            {/*
+             * Not a `<label>` any more, because it now holds a button: a click
+             * anywhere inside a label focuses its control, so the reset below
+             * would have been a click on the text box. The name is carried by
+             * `aria-label` instead, which is how the other fields that are not
+             * wrapped in a label do it.
+             */}
+            <div className="settings-field">
+              <span>Identity</span>
+              <em className="settings-why">
+                Who this bot is and how it should behave. Written as an
+                instruction to it, and sent at the start of every conversation.
+              </em>
+              <textarea
+                className="settings-input settings-identity"
+                rows={6}
+                aria-label="Identity"
+                value={draft.identity}
+                disabled={saving}
+                onChange={(event) => {
+                  setDraft({...draft, identity: event.target.value});
+                }}
+                onBlur={() => {
+                  if (draft.identity === loaded.profile?.identity) {
+                    return;
+                  }
+                  const identity = draft.identity;
+                  void change(async () => {
+                    await window.marimo.call('profiles.update', {
+                      profileId: loaded.profile?.id ?? '',
+                      patch: {identity},
+                    });
+                  });
+                }}
+              />
+              <div className="settings-row">
+                {/*
+                 * Saved in the click rather than left to a blur: the blur fires
+                 * first when the button takes focus, and would write whatever
+                 * the box held *before* the reset. The store serialises the
+                 * two, so the default is what lands.
+                 */}
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  disabled={saving || identityAtDefault}
+                  onClick={() => {
+                    setDraft({...draft, identity: resetIdentity});
                     void change(async () => {
                       await window.marimo.call('profiles.update', {
                         profileId: loaded.profile?.id ?? '',
-                        patch: {identity},
+                        patch: {identity: resetIdentity},
                       });
                     });
                   }}
-                />
-                <div className="settings-row">
-                  {/*
-                   * Saved in the click rather than left to a blur: the blur fires
-                   * first when the button takes focus, and would write whatever
-                   * the box held *before* the reset. The store serialises the
-                   * two, so the default is what lands.
-                   */}
-                  <button
-                    type="button"
-                    className="button button-quiet"
-                    disabled={saving || identityAtDefault}
-                    onClick={() => {
-                      setDraft({...draft, identity: resetIdentity});
-                      void change(async () => {
-                        await window.marimo.call('profiles.update', {
-                          profileId: loaded.profile?.id ?? '',
-                          patch: {identity: resetIdentity},
-                        });
-                      });
-                    }}
-                  >
-                    Reset to default
-                  </button>
-                </div>
+                >
+                  Reset to default
+                </button>
               </div>
-            )}
+            </div>
             {/*
              * The user's own words, in their own field. Kept out of the identity
              * above deliberately: Reset restores the app's text, and it must not
@@ -896,97 +848,75 @@ export function Settings({
         )}
 
         {/*
-          What the agent may do, drawn as three cards or as thirty switches.
-          
-          Both write the same profile field, and the card that is lit is worked
-          out from it rather than stored beside it — so ticking a box in the power
-          screen and coming back to the simple one cannot show a choice the profile
-          does not hold.
+          What the agent may do, drawn as switches rather than as three cards.
+          The setup flow still offers the cards, because that is the moment the
+          choice is made; here the bot already exists and the user is tuning it.
+          Both write the same `enabledTools`, so the grant remains the one truth.
         */}
-        {power ? (
-          <SettingsSection
-            title={`What ${loaded.profile?.name ?? 'this bot'} can do`}
-            opened={opened}
-            onToggle={fold}
-          >
-            <p className="settings-muted">
-              A tool that is switched off is not offered to the model at all —
-              it is not a suggestion it might ignore.
-            </p>
+        <SettingsSection
+          title={`What ${loaded.profile?.name ?? 'this bot'} can do`}
+          opened={opened}
+          onToggle={fold}
+        >
+          <p className="settings-muted">
+            A tool that is switched off is not offered to the model at all — it
+            is not a suggestion it might ignore.
+          </p>
 
-            <h4 className="settings-group">On to begin with</h4>
-            {onByDefault.map((tool) => (
-              <ToolRow
-                key={tool.name}
-                tool={tool}
-                on={granted.has(tool.name)}
-                disabled={saving}
-                onChange={toggle}
-              />
-            ))}
-
-            <h4 className="settings-group">Off until you turn it on</h4>
-            {offByDefault.map((tool) => (
-              <ToolRow
-                key={tool.name}
-                tool={tool}
-                on={granted.has(tool.name)}
-                disabled={saving}
-                onChange={toggle}
-              />
-            ))}
-
-            {/*
-              The third group, and the only one that can be empty — a heading
-              over nothing reads as a feature this build lacks rather than as a
-              step not taken yet, so an install with no connectors gets one line
-              instead.
-            */}
-            {connectors.length === 0 ? (
-              <p className="settings-muted">
-                No connectors are set up on this machine, so there is nothing
-                here to give a bot. The Connectors card below is where one is
-                added, and it appears here as soon as it is saved.
-              </p>
-            ) : (
-              <>
-                <h4 className="settings-group">Connectors</h4>
-                <p className="settings-why">
-                  {connectorsUnchosen
-                    ? 'This bot has never had connectors chosen for it, so it may use every connector that is switched on. Unchecking one is what narrows it.'
-                    : 'The connectors this bot may use. One that is not ticked is not offered to the model at all.'}
-                </p>
-                {connectors.map((connector) => (
-                  <ConnectorRow
-                    key={connector.id}
-                    connector={connector}
-                    on={connectorGrant.has(connector.id)}
-                    disabled={saving}
-                    onChange={toggleConnector}
-                  />
-                ))}
-              </>
-            )}
-          </SettingsSection>
-        ) : (
-          <SettingsSection
-            title={`What ${loaded.profile?.name ?? 'this bot'} can do`}
-            opened={opened}
-            onToggle={fold}
-          >
-            <CapabilityChoices
-              presets={loaded.catalog.presets}
-              granted={granted}
+          <h4 className="settings-group">On to begin with</h4>
+          {onByDefault.map((tool) => (
+            <ToolRow
+              key={tool.name}
+              tool={tool}
+              on={granted.has(tool.name)}
               disabled={saving}
-              onChoose={(tools) => {
-                const profile = loaded.profile;
-                if (profile !== undefined) {
-                  writeTools(profile.id, tools);
-                }
-              }}
+              onChange={toggle}
             />
-          </SettingsSection>
-        )}
+          ))}
+
+          <h4 className="settings-group">Off until you turn it on</h4>
+          {offByDefault.map((tool) => (
+            <ToolRow
+              key={tool.name}
+              tool={tool}
+              on={granted.has(tool.name)}
+              disabled={saving}
+              onChange={toggle}
+            />
+          ))}
+
+          {/*
+            The third group, and the only one that can be empty — a heading
+            over nothing reads as a feature this build lacks rather than as a
+            step not taken yet, so an install with no connectors gets one line
+            instead.
+          */}
+          {connectors.length === 0 ? (
+            <p className="settings-muted">
+              No connectors are set up on this machine, so there is nothing here
+              to give a bot. The Connectors card below is where one is added,
+              and it appears here as soon as it is saved.
+            </p>
+          ) : (
+            <>
+              <h4 className="settings-group">Connectors</h4>
+              <p className="settings-why">
+                {connectorsUnchosen
+                  ? 'This bot has never had connectors chosen for it, so it may use every connector that is switched on. Unchecking one is what narrows it.'
+                  : 'The connectors this bot may use. One that is not ticked is not offered to the model at all.'}
+              </p>
+              {connectors.map((connector) => (
+                <ConnectorRow
+                  key={connector.id}
+                  connector={connector}
+                  on={connectorGrant.has(connector.id)}
+                  disabled={saving}
+                  onChange={toggleConnector}
+                />
+              ))}
+            </>
+          )}
+        </SettingsSection>
 
         <SettingsSection
           title="Desktop companion"
@@ -1046,57 +976,47 @@ export function Settings({
             ))}
           </select>
 
-          {/*
-            A number to tune, so it is power-only. The two switches below are
-            not: they are what somebody reaches for when the moss covers a
-            film or stops answering the mouse, and a repair hidden behind an
-            advanced mode is a repair nobody finds.
-          */}
-          {power && (
-            <>
-              <h4 className="settings-group">How much it shows</h4>
-              <label className="settings-field">
-                <span>
-                  Messages above the moss
-                  <em className="settings-why">
-                    Older ones are always in the main window. Fewer keeps the
-                    pet to the answer that just arrived.
-                  </em>
-                </span>
-                <input
-                  className="settings-input"
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={loaded.settings.companion.visibleMessages}
-                  disabled={saving}
-                  onChange={(event) => {
-                    const visibleMessages = Number(event.target.value);
-                    /*
-                     * A field being cleared, or a keypress that would leave a 0 or a
-                     * 40 in it, passes through values the schema refuses. Writing one
-                     * would be a failed call and an error line under a spinner, so
-                     * the field is allowed to disagree with the stored number for as
-                     * long as it takes to type a good one — and the stored number is
-                     * what is still in force.
-                     */
-                    if (
-                      !Number.isInteger(visibleMessages) ||
-                      visibleMessages < 1 ||
-                      visibleMessages > 20
-                    ) {
-                      return;
-                    }
-                    void change(async () => {
-                      await window.marimo.call('settings.set', {
-                        patch: {companion: {visibleMessages}},
-                      });
-                    });
-                  }}
-                />
-              </label>
-            </>
-          )}
+          <h4 className="settings-group">How much it shows</h4>
+          <label className="settings-field">
+            <span>
+              Messages above the moss
+              <em className="settings-why">
+                Older ones are always in the main window. Fewer keeps the pet to
+                the answer that just arrived.
+              </em>
+            </span>
+            <input
+              className="settings-input"
+              type="number"
+              min={1}
+              max={20}
+              value={loaded.settings.companion.visibleMessages}
+              disabled={saving}
+              onChange={(event) => {
+                const visibleMessages = Number(event.target.value);
+                /*
+                 * A field being cleared, or a keypress that would leave a 0 or a
+                 * 40 in it, passes through values the schema refuses. Writing one
+                 * would be a failed call and an error line under a spinner, so
+                 * the field is allowed to disagree with the stored number for as
+                 * long as it takes to type a good one — and the stored number is
+                 * what is still in force.
+                 */
+                if (
+                  !Number.isInteger(visibleMessages) ||
+                  visibleMessages < 1 ||
+                  visibleMessages > 20
+                ) {
+                  return;
+                }
+                void change(async () => {
+                  await window.marimo.call('settings.set', {
+                    patch: {companion: {visibleMessages}},
+                  });
+                });
+              }}
+            />
+          </label>
 
           <label className="settings-check">
             <input
@@ -1156,49 +1076,47 @@ export function Settings({
           protocol's catalogue, so a command added there appears here, in the
           composer's menu, and nowhere else needs to know about it.
         */}
-        {power && (
-          <SettingsSection title="Commands" opened={opened} onToggle={fold}>
-            <p className="settings-muted">
-              Commands run against a conversation from the composer&rsquo;s +
-              menu. They are off the model&rsquo;s list entirely when switched
-              off here, rather than merely discouraged.
-            </p>
-            {COMMAND_IDS.map((id) => (
-              <label className="settings-check" key={id}>
-                <input
-                  type="checkbox"
-                  checked={!loaded.settings.disabledCommands.includes(id)}
-                  disabled={saving}
-                  onChange={(event) => {
-                    const on = event.target.checked;
-                    const next = COMMAND_IDS.filter((candidate) =>
-                      candidate === id
-                        ? !on
-                        : loaded.settings.disabledCommands.includes(candidate),
-                    );
-                    void change(async () => {
-                      await window.marimo.call('settings.set', {
-                        patch: {disabledCommands: next},
-                      });
+        <SettingsSection title="Commands" opened={opened} onToggle={fold}>
+          <p className="settings-muted">
+            Commands run against a conversation from the composer&rsquo;s + menu.
+            They are off the model&rsquo;s list entirely when switched off here,
+            rather than merely discouraged.
+          </p>
+          {COMMAND_IDS.map((id) => (
+            <label className="settings-check" key={id}>
+              <input
+                type="checkbox"
+                checked={!loaded.settings.disabledCommands.includes(id)}
+                disabled={saving}
+                onChange={(event) => {
+                  const on = event.target.checked;
+                  const next = COMMAND_IDS.filter((candidate) =>
+                    candidate === id
+                      ? !on
+                      : loaded.settings.disabledCommands.includes(candidate),
+                  );
+                  void change(async () => {
+                    await window.marimo.call('settings.set', {
+                      patch: {disabledCommands: next},
                     });
-                  }}
-                />
-                <span>
-                  {COMMANDS[id].label}
-                  <em className="settings-why">{COMMANDS[id].blurb}</em>
-                </span>
-              </label>
-            ))}
-          </SettingsSection>
-        )}
+                  });
+                }}
+              />
+              <span>
+                {COMMANDS[id].label}
+                <em className="settings-why">{COMMANDS[id].blurb}</em>
+              </span>
+            </label>
+          ))}
+        </SettingsSection>
 
         {/*
-          What answers, in both sizes.
+          What answers.
 
           It is not tuning. The app carries no model of its own, so a fresh
           install has nothing to think with until this card has been filled in —
           and a first run that cannot answer has to be fixable from the screen it
-          lands on, not from a mode the user has to find first.
+          lands on.
         */}
         <ProviderSection
           settings={loaded.settings}
@@ -1217,20 +1135,13 @@ export function Settings({
           end: memory is what the agent writes down, recall is how it finds it
           again — and the same file is one of the two things it indexes.
         */}
-        <Recall
-          opened={opened}
-          onToggle={fold}
-          power={loaded.settings.experienceMode === 'power'}
-        />
+        <Recall opened={opened} onToggle={fold} />
 
         {/*
-          Both sizes, not the power one alone.
-
-          Which connectors exist is not tuning, and it is not an advanced
-          subject: an install where nothing can be reached until a server is
-          added looked like an app with no such feature from the screen a new
-          user lands on. The per-agent grant lives with the agent, above; this
-          card is the install's own list, and it is where a server is dialled.
+          Which connectors exist is not tuning: an install where nothing can be
+          reached until a server is added would look like an app with no such
+          feature. The per-agent grant lives with the agent, above; this card is
+          the install's own list, and it is where a server is dialled.
         */}
         <Connectors
           servers={loaded.settings.mcpServers}
@@ -1244,28 +1155,24 @@ export function Settings({
         />
 
         {/*
-          Dream-RSI, power only — see the note at the top of its own file. Last
-          in the dialog because it is the thing fewest people will want, and a
-          capability nobody has turned on should not push the ones they have
-          further up the screen.
+          Dream-RSI — see the note at the top of its own file. Last in the dialog
+          because it is the thing fewest people will want, and a capability
+          nobody has turned on should not push the ones they have further up the
+          screen.
         */}
-        {power && (
-          <Dream
-            opened={opened}
-            onToggle={fold}
-            onChange={() => {
-              void load();
-            }}
-          />
-        )}
+        <Dream
+          opened={opened}
+          onToggle={fold}
+          onChange={() => {
+            void load();
+          }}
+        />
 
         {/*
-          Last, and on both screens.
+          Last.
 
-          A repair behind an advanced mode is a repair nobody finds, which is the
-          same reason the provider card and the connector list are on both — and
-          last because it is the thing fewest people want, and because a card
-          that erases the rest should not sit above any of it.
+          The reset is last because it is the thing fewest people want, and
+          because a card that erases the rest should not sit above any of it.
 
           `saving` is passed as well as the card's own state: a settings write
           already in flight can land after the folder is emptied, and a
@@ -1962,81 +1869,96 @@ function ConnectorRow({
 }
 
 /**
- * The same grants as three cards, for somebody who has never seen a tool list.
+ * Which icon this bot wears.
  *
- * The cards come from the catalogue rather than from a list here, so a tool
- * renamed in the agent package cannot leave a card promising something that no
- * longer exists — and a card the install cannot honour has already had the
- * missing names taken out of it before it arrived.
+ * Five shipped presets and one upload, in that order of reversibility. A preset
+ * is a profile write with no file behind it; an upload is a picker in the main
+ * process and one PNG in the user's data directory. Clearing goes back to the
+ * default for this bot's place in the roster, which is what "no choice" means.
  *
- * Which one is lit is worked out from the grant, never stored. That is what makes
- * the two screens one setting: tick a box in the power list, come back here, and
- * the card has gone dark because the profile no longer holds exactly that set.
- * The line under the cards says so rather than leaving the user to wonder why
- * none of them is lit.
+ * The preview is the same component the rail draws, so what the user is choosing
+ * is literally the picture that will appear beside the conversations.
  */
-function CapabilityChoices({
-  presets,
-  granted,
+function BotIconChoices({
+  profile,
+  defaultPresetId,
   disabled,
-  onChoose,
+  onPreset,
+  onUpload,
+  onClear,
 }: {
-  presets: readonly CapabilityPreset[];
-  granted: ReadonlySet<string>;
+  profile: AgentProfile;
+  /** The preset this bot's place in the roster starts on. */
+  defaultPresetId: string;
   disabled: boolean;
-  onChoose: (tools: string[]) => void;
+  onPreset: (presetId: string) => void;
+  onUpload: () => void;
+  onClear: () => void;
 }): React.JSX.Element {
-  const chosen = chosenPreset(presets, [...granted]);
+  const custom = profile.avatar?.kind === 'custom';
+  const presetId =
+    profile.avatar?.kind === 'preset' ? profile.avatar.id : undefined;
+  const atDefault =
+    profile.avatar === undefined || presetId === defaultPresetId;
+  const presetLabel =
+    BOT_AVATAR_PRESETS.find((preset) => preset.id === presetId)?.label ??
+    'default';
 
   return (
-    <>
-      <p className="settings-muted">
-        Everything here is something you chose. Running a command, replacing a
-        file that is already there, or scheduling a job asks you first.
-      </p>
-
-      <div className="capability-cards">
-        {presets.map((preset) => (
+    <div className="settings-field">
+      <span>Icon</span>
+      <em className="settings-why">
+        What this bot looks like in the sidebar. Upload a PNG or JPEG, or choose
+        one of the icons this app ships.
+      </em>
+      <div className="settings-avatar-current">
+        <BotAvatar profile={profile} size="md" />
+        <span className="settings-why">
+          {custom
+            ? 'Using the image you uploaded.'
+            : `Using the ${presetLabel} icon.`}
+        </span>
+      </div>
+      <div className="settings-avatars">
+        {BOT_AVATAR_PRESETS.map((preset) => (
           <button
             key={preset.id}
             type="button"
-            className="capability-card"
-            aria-pressed={chosen?.id === preset.id}
+            className="settings-avatar-choice"
+            aria-pressed={presetId === preset.id}
             disabled={disabled}
             onClick={() => {
-              onChoose(preset.tools);
+              onPreset(preset.id);
             }}
           >
-            <span className="capability-label">
-              {preset.label}
-              {/*
-                A real space before the tag. Flexbox drops a whitespace-only text
-                node from the layout, but `textContent` keeps it — and without it
-                a screen reader reads this card as "computerRecommended".
-              */}
-              {preset.recommended && (
-                <>
-                  {' '}
-                  <em className="capability-tag">Recommended</em>
-                </>
-              )}
-            </span>
-            <em className="capability-blurb">{preset.blurb}</em>
+            <BotAvatar
+              profile={{...profile, avatar: {kind: 'preset', id: preset.id}}}
+              size="md"
+            />
+            <span>{preset.label}</span>
           </button>
         ))}
       </div>
-
-      {chosen === undefined && (
-        <p className="settings-muted">
-          {granted.size === 0
-            ? 'This bot is not allowed to do anything at all yet — not even ' +
-              'read a file. Choosing one of the three above is how you change ' +
-              'that.'
-            : 'This bot has a set of abilities put together by hand, in Power ' +
-              'user mode. Choosing one of the three above replaces the whole ' +
-              'set, so anything switched on outside those three is switched off.'}
-        </p>
-      )}
-    </>
+      <div className="settings-row">
+        <button
+          type="button"
+          className="button button-quiet"
+          disabled={disabled}
+          onClick={onUpload}
+        >
+          {custom ? 'Upload a different image…' : 'Upload an image…'}
+        </button>
+        {!atDefault && (
+          <button
+            type="button"
+            className="button button-quiet"
+            disabled={disabled}
+            onClick={onClear}
+          >
+            Use the default icon
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

@@ -34,7 +34,7 @@ import {
 } from '@marimo/protocol';
 import type {AgentModel, ProviderId} from '@marimo/protocol';
 
-import {resolveAppPaths} from '../paths.js';
+import {avatarFile, resolveAppPaths} from '../paths.js';
 import type {AppPaths} from '../paths.js';
 import {FeedbackStore} from '../feedback.js';
 import {MemoryProposalStore} from '../memory-proposals.js';
@@ -1777,6 +1777,9 @@ describe('removing a bot', () => {
       messageId: 'message-1',
       excerpt: 'Wrong about the date.',
     });
+    const avatar = avatarFile(paths, bot.id);
+    await mkdir(dirname(avatar), {recursive: true});
+    await writeFile(avatar, 'a png would be here', 'utf8');
 
     await instance.removeProfile(bot.id);
 
@@ -1793,6 +1796,7 @@ describe('removing a bot', () => {
     expect(
       (await new FeedbackStore({file: paths.feedback}).load()).entries,
     ).toEqual([]);
+    expect(existsSync(avatar)).toBe(false);
   });
 
   /*

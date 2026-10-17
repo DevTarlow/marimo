@@ -32,6 +32,8 @@ import {
 
 import {
   agentProfileSchema,
+  DEFAULT_BOT_AVATAR,
+  defaultBotAvatarFor,
   profilePatchSchema,
   workspaceSchema,
 } from '@marimo/protocol';
@@ -255,6 +257,10 @@ export class ProfileStore {
         id: randomUUID(),
         name: unique,
         identity: this.options.botIdentity(unique),
+        // A bot made after the lead gets the next preset rather than a copy of
+        // the lead's mark, so two bots are distinguishable before either is
+        // edited. It is a default, not a lock: Settings changes it like a name.
+        avatar: defaultBotAvatarFor(file.profiles.length),
         enabledTools: [...this.options.defaultTools],
         enabledSkills: [...this.options.defaultSkills],
       };
@@ -286,11 +292,27 @@ export class ProfileStore {
         mcpServerIds: storedGrant,
         model: storedModel,
         spaceId: storedSpace,
+        avatar: storedAvatar,
         ...carried
       } = current;
       const grant = patchedValue(clean.mcpServerIds, storedGrant);
       const model = patchedValue(clean.model, storedModel);
       const space = patchedValue(clean.spaceId, storedSpace);
+      /*
+       * Clearing the icon is "back to the default for this bot", not "leave the
+       * field missing": a missing field is a state the window would have to
+       * re-derive, and it would choose Marimo for a bot whose place in the
+       * roster starts on another preset. The index is the same rule `parseFile`
+       * and `create` use.
+       */
+      const avatar =
+        patchedValue(clean.avatar, storedAvatar) ??
+        defaultBotAvatarFor(
+          Math.max(
+            0,
+            file.profiles.findIndex((entry) => entry.id === profileId),
+          ),
+        );
       const updated: AgentProfile = {
         ...carried,
         ...(clean.name !== undefined ? {name: clean.name} : {}),
@@ -315,6 +337,7 @@ export class ProfileStore {
         ...(grant === undefined ? {} : {mcpServerIds: [...new Set(grant)]}),
         ...(model === undefined ? {} : {model}),
         ...(space === undefined ? {} : {spaceId: space}),
+        ...(avatar === undefined ? {} : {avatar}),
       };
       await this.writeFile(replaceProfile(updated, file));
       return updated;
@@ -404,6 +427,8 @@ export class ProfileStore {
     const profile: AgentProfile = {
       id: randomUUID(),
       name: 'Marimo Bot',
+      // The lead is Marimo Bot, and the moss mark is the one icon that says so.
+      avatar: {...DEFAULT_BOT_AVATAR},
       /*
        * The lead, and the only profile `defaultIdentity` is for: it is first in
        * the document, which is what `AgentRuntime.catalog` reads to decide whose
@@ -499,7 +524,14 @@ function parseFile(raw: unknown): ProfileFile | undefined {
     if (!parsed.success) {
       continue;
     }
-    profiles.push(parsed.data);
+    /*
+     * An icon is filled in here rather than required by the schema, so every
+     * existing bot gains one without a migration write. The position in the
+     * roster is the seed and it is deterministic: the same file read twice gives
+     * the same icons, and the next real write persists them.
+     */
+    const avatar = parsed.data.avatar ?? defaultBotAvatarFor(profiles.length);
+    profiles.push({...parsed.data, avatar});
     const carried = legacyFrom(entry, parsed.data.id);
     if (carried !== undefined) {
       legacy.push(carried);
@@ -563,9 +595,9 @@ function activeProfileOf(file: ProfileSnapshot): AgentProfile {
  * Three cases, and the third is why this is a function rather than a `??` at the
  * call site: `undefined` keeps what is stored, `null` answers `undefined` so the
  * field is *removed* and its own default applies again, and anything else is the
- * new value. Three fields on a profile have that shape, and a rule with three
- * cases written out three times is one where a case eventually goes missing from
- * one of them.
+ * new value. Four fields on a profile have that shape — connectors, model, space
+ * and now the icon — and a rule with three cases written out four times is one
+ * where a case eventually goes missing from one of them.
  */
 function patchedValue<T>(
   patched: T | null | undefined,

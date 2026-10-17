@@ -1,5 +1,5 @@
 /**
- * Which card the simple screen lights up.
+ * Which card the setup flow lights up.
  *
  * The one thing that must not happen is two cards lit at once, or none with the
  * grant they describe: the screen would be telling the user their agent can do

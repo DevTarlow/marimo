@@ -2,7 +2,13 @@ import {isAbsolute, join, relative} from 'node:path';
 
 import {describe, expect, it} from 'vitest';
 
-import {resolveAppPaths, secretFile, secretFileName} from './paths.js';
+import {
+  avatarFile,
+  avatarFileName,
+  resolveAppPaths,
+  secretFile,
+  secretFileName,
+} from './paths.js';
 
 describe('resolveAppPaths', () => {
   const paths = resolveAppPaths('/data/marimo-agent');
@@ -13,6 +19,7 @@ describe('resolveAppPaths', () => {
       paths.settings,
       paths.secretsDir,
       paths.profiles,
+      paths.avatars,
       paths.jobs,
       paths.skills,
       paths.personMemoryDir,
@@ -96,6 +103,36 @@ describe('secretFileName', () => {
     // Folding them together would be a collision invented for no reason.
     expect(secretFileName('my.server')).toBe('my.server.bin');
     expect(secretFileName('my-server')).toBe('my-server.bin');
+  });
+});
+
+describe('avatarFileName', () => {
+  it('turns a profile id into one PNG name', () => {
+    expect(avatarFileName('6f7c4f5a-3a1b-4c9d-8e2f-1a2b3c4d5e6f')).toBe(
+      '6f7c4f5a-3a1b-4c9d-8e2f-1a2b3c4d5e6f.png',
+    );
+  });
+
+  it('cannot be walked out of the avatars directory', () => {
+    for (const hostile of [
+      '../../etc/passwd',
+      '..',
+      '/etc/shadow',
+      'a/../../b',
+      '....//....//x',
+      'with spaces',
+    ]) {
+      const file = avatarFile(resolveAppPaths('/data/marimo-agent'), hostile);
+      expect(file.startsWith('/data/marimo-agent/avatars/')).toBe(true);
+      expect(file).not.toContain('/../');
+      expect(file.endsWith('.png')).toBe(true);
+    }
+  });
+
+  it('falls back to a real name when nothing survives', () => {
+    expect(avatarFileName('///')).toBe('bot.png');
+    expect(avatarFileName('')).toBe('bot.png');
+    expect(avatarFileName('..')).toBe('bot.png');
   });
 });
 

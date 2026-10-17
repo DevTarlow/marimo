@@ -27,21 +27,6 @@
   border-right: 1px solid var(--border);
 }
 
-.rail-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-3) var(--space-2);
-}
-
-.rail-title {
-  flex: 1;
-  font-size: var(--text-xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-
 .rail-list {
   flex: 1;
   min-height: 0;
@@ -56,6 +41,102 @@
   margin: var(--space-2) var(--space-2);
   color: var(--text-faint);
   font-size: var(--text-sm);
+}
+
+/*
+ * The bots, at the top of the rail.
+ *
+ * A switcher, not a roster editor: selecting one changes whose conversations the
+ * Spaces tree below shows. The icon is the same component Settings previews, so
+ * the picture somebody chooses is the picture they get here.
+ */
+.rail-bots {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: var(--space-2);
+}
+
+.rail-bot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-align: left;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.rail-bot:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.rail-bot[aria-current='true'] {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rail-bot-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+/* The Spaces heading, with the one action that adds a place under it. */
+.rail-spaces-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.rail-spaces-head .rail-group-head {
+  flex: 1;
+  margin: 0;
+}
+
+/* One bot's picture, or the letter of its name when there is no picture. */
+.bot-avatar {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-weight: 600;
+  line-height: 1;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.bot-avatar[data-size='sm'] {
+  width: 24px;
+  height: 24px;
+  font-size: var(--text-xs);
+}
+
+.bot-avatar[data-size='md'] {
+  width: 36px;
+  height: 36px;
+  font-size: var(--text-sm);
+}
+
+.bot-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 /*
@@ -1314,21 +1395,7 @@
 }
 
 /*
- * How much of the app to show.
- *
- * A card like the sections below it, but not one that folds: this is the control
- * that decides which of *those* exist, and a switch hidden inside a panel it also
- * governs is one nobody finds. It sits above them all and stays there.
- */
-.settings-mode {
-  padding: var(--space-3) var(--space-4);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-/*
- * The three choices on the simple screen, as cards rather than switches.
+ * The three choices the setup flow offers, as cards rather than switches.
  *
  * A checkbox is the right control for "may it read my files", one capability at a
  * time. It is the wrong one for choosing between three whole answers, because
@@ -1499,7 +1566,10 @@
 }
 
 .settings-agent {
-  padding: var(--space-2) var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-1);
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
@@ -1519,6 +1589,7 @@
 }
 
 .settings-agent-new {
+  padding: var(--space-2) var(--space-3);
   border-style: dashed;
 }
 
@@ -1562,6 +1633,45 @@
   border-radius: var(--radius-pill);
   color: var(--text);
   font-size: var(--text-sm);
+}
+
+/* The current icon, the shipped choices, and the two writes beside them. */
+.settings-avatar-current {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-1) 0;
+}
+
+.settings-avatars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-2);
+}
+
+.settings-avatar-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.settings-avatar-choice:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.settings-avatar-choice[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
 }
 
 .settings-field {

@@ -70,7 +70,7 @@ pnpm build:web   # the renderer bundle — `build` alone leaves it stale
 | Done        | The chat: streamed answers rendered as markdown, tool calls that fold away, copy buttons, a rail of Spaces with the conversations filed under the one they work in, light and dark following the OS or chosen                           |
 | Done        | Spaces: a folder that holds its own chats, its agents and its documents — the markdown files in it, listed in a library and editable in the window, with a revision on every write so a stale tab cannot clobber what an agent wrote    |
 | Done        | A chat with more than one agent: the lead answers, `@` addresses a member, and the lead can hand work to a named agent with `ask_agent` — which runs inside the same conversation, so its approval card lands where you are reading, and which is bounded and cannot delegate further |
-| Done        | Two sizes of app: a simple screen and a power screen, with one switch between them                                                                                                                                                      |
+| Done        | One settings screen, and bots at the top of the sidebar with their own icons — five shipped presets and an uploaded image, changed in Settings                                                                                          |
 | Done        | The agent core: `AgentHost` over Google ADK, one OpenAI-compatible streaming client that serves every provider, ~28 built-in tools of which the app offers the ones its services can carry out, skills, `memory.md`, JSONL conversations |
 | Done        | Approvals that survive a restart, because a pending call is derived from the stored conversation rather than held in memory                                                                                                             |
 | Done        | MCP connectors: add one from either settings screen, test it from the same form, and choose whether to trust it — untrusted servers ask before every call. An agent uses the ones it was granted, and a scheduled job dials them too    |
@@ -196,10 +196,9 @@ written, and the profile can be edited while the app runs.
 **The switch is drawn from the settings document, not from live connections.** A
 grant screen has to exist *before* the server is reachable, or a connector that
 cannot be dialled yet — a wrong command, a secret this process cannot read — is
-one nobody can decide about. Adding, testing and trusting a server is on both
-settings screens, because that is a capability the user has; the grant itself is
-in power, because it is one switch per connector per agent among thirty rather
-than one of the three choices the simple screen exists for.
+one nobody can decide about. Adding, testing and trusting a server is on the one
+settings screen, because that is a capability the user has; the grant itself is
+one switch per connector per agent, beside the tool switches.
 
 **A connector's secret carries the same consent a provider's key does, and the
 consent has to travel with the write.** `secretStorage` is per connector and
@@ -425,35 +424,51 @@ It is a status rather than a one-shot notice because the card is drawn from a
 settings payload the window reads for its own reasons, and a message that cleared
 on read could be swallowed by a read nobody was showing the card for.
 
-### Two sizes, and one switch between them
+### One settings screen, and one grant behind it
 
-Everything the app can do is still a switch somebody turns on. What changed is
-that there are two screens to turn it on from: a simple one with three choices in
-plain words, and a power screen that adds the bot's own identity text, every tool
-as its own switch, the per-bot connector grants, the app's command list and the
-recording. They are the same app, the same stores and the
-same grants — the preset a user picks writes `enabledTools`, exactly as ticking
-the switches would, and the card that is lit is _worked out_ by comparing that
-grant against the lists. There is one source of truth for what an agent may do,
-and it is still the profile.
+Everything the app can do is a switch somebody turns on, and there is one screen
+to turn it on from. It used to come in two sizes with a switch between them; that
+switch made the bot's identity and the individual tool switches reachable only by
+leaving "the everyday settings", which made the same app look like two products
+and hid the controls from the people most likely to need them. The setup flow
+still offers three capability cards at the moment a bot is made, because that is
+where a person is choosing what it is *for*; Settings offers every tool as its own
+switch. Both write `enabledTools`, the card that is lit is worked out by comparing
+that grant against the lists, and the profile remains the one source of truth for
+what an agent may do.
 
-The line between the two screens is **the numbers versus the text**. The numbers —
-an output cap, a memory limit — are on both, because somebody who
-wants shorter answers should not have to find an advanced mode first, and the same
-goes for the provider card, since an app that carries no model has to be fixable
-from the screen a first run lands on. Power is where things are *written*: the
-identity, the per-tool switches, the connector grants, the command list. A switch
-that fixes something the user is looking at — the moss floating over a film, the
-moss not answering the mouse — stays where they are, because hiding an escape
-hatch from the person hitting the problem is how a setting comes to look like a
-bug.
+The provider card is not tuning and has never been optional: the app carries no
+model, so a fresh install cannot answer until it is pointed at one. The connector
+list is on the same screen for the reason from the other end — a capability nobody
+can see is one nobody turns on. The per-bot connector grant lives with the bot,
+above.
 
-Which screen a fresh install opens on is decided by _how_ the settings file was
-read rather than by what it holds. No file at all means somebody meeting this app
-for the first time, and gets the simple screen; a file that exists with no such
-field means somebody already using the app, and gets the app in full. A schema
-default cannot tell those two apart, which is why the store owns that decision
-and the field carries a `.catch` for the hand-edited typo.
+**An icon is a profile field and a file, and the field can never cost the bot.**
+`avatar` is optional on the profile: a preset names one of five shipped SVGs, and
+a custom icon names a version while the bytes live under `userData/avatars/`,
+served to the sandboxed renderer through the app's `marimo-asset` scheme. A
+malformed icon falls back to the default or the name's initial, which is the same
+rule the profile schema follows everywhere: an optional field that a newer build
+wrote must not make `ProfileStore.parseFile` skip the profile.
+
+### A conversation that stays bounded without being rewritten
+
+Automatic compaction is the manual `sessions.compact` brought forward to the
+moment before a turn, and it uses the same mechanism: a compacted event is an
+ordinary event carrying a summary and the span it stands for, so nothing on disk
+is rewritten and ADK's `getActiveEvents` does the rest. The trigger is a character
+budget (`AUTO_COMPACT_AT_CHARS`), not a token count: this app has no tokenizer and
+the provider catalogue carries no context-window metadata, so the number is a
+deliberately conservative estimate — four characters to a token is ADK's own
+rule — with room left for the instruction, tool schemas and the reply. The
+measurement counts reasoning, tool arguments and full tool results, which the
+summary renderer deliberately caps.
+
+The difference from the command is what happens when it cannot run. A manual
+compaction returns the reason and leaves the conversation alone; an automatic one
+returns the reason too, but the turn continues with the full history rather than
+failing, because the question the person just asked is not the summary's hostage.
+A pending approval is never compacted in either path.
 
 **The first run itself is a five-step flow, and one flag decides whether it is
 offered.** A fresh install has three things missing at once — a Space to work in,

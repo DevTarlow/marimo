@@ -871,16 +871,14 @@ describe('SettingsStore setupSeen', () => {
 });
 
 /**
- * How much of the app to draw.
+ * One screen, and an old file that still says otherwise.
  *
- * The one setting whose default depends on *how* the document was read rather
- * than on what it holds: "no file" and "a file with no such field" are the same
- * value to the schema and opposite answers to a person. A fresh install should
- * meet the simple screen; somebody who has been using the app for months should
- * not have the switches they rely on disappear because a build added a field
- * they never set.
+ * The mode field is gone; what matters is that its absence cannot cost the rest
+ * of the document. A settings file is flat, and a field this build no longer
+ * knows is stripped like any other unknown key — so an install that upgrades is
+ * left with its widths, theme and providers rather than a reset.
  */
-describe('SettingsStore experienceMode', () => {
+describe('SettingsStore with no experience mode', () => {
   let dir: string;
 
   beforeEach(async () => {
@@ -895,60 +893,16 @@ describe('SettingsStore experienceMode', () => {
     return new SettingsStore(join(dir, 'settings.json'));
   }
 
-  it('opens a fresh install on the simple screen', async () => {
-    expect((await store().load()).experienceMode).toBe('simple');
-  });
-
-  it('leaves a file written before the field existed in the app in full', async () => {
+  it('reads a file that still carries the old field and keeps everything else', async () => {
     await writeFile(
       join(dir, 'settings.json'),
-      JSON.stringify({sidebarWidth: 300}, null, 2),
+      JSON.stringify({experienceMode: 'power', sidebarWidth: 300}, null, 2),
       'utf8',
     );
     const settings = await store().load();
 
-    expect(settings.experienceMode).toBe('power');
     expect(settings.sidebarWidth).toBe(300);
-  });
-
-  /*
-   * A corrupt file is not a fresh install. The store reads leniently so the
-   * window still opens, and the lenient reading of "unreadable" must not be
-   * "show them less" — the user's file is still sitting there, and a later
-   * build or a hand-repair may make it readable again.
-   */
-  it('treats an unreadable file as somebody who was already here', async () => {
-    await writeFile(join(dir, 'settings.json'), '{ not json', 'utf8');
-    expect((await store().load()).experienceMode).toBe('power');
-  });
-
-  it('keeps the choice, through a write and through a restart', async () => {
-    const settings = store();
-    expect(
-      (await settings.patch({experienceMode: 'power'})).experienceMode,
-    ).toBe('power');
-    // An unrelated write must not bring the default back.
-    await settings.patch({notesWidth: 260});
-    // And a window opened later reads the file, not the default.
-    expect((await store().load()).experienceMode).toBe('power');
-  });
-
-  /*
-   * Why the field carries a `.catch`. It is flat, so a value the schema refuses
-   * would fail the whole document — and fall back to every default, costing the
-   * user their model, their folders and their Discord setup over one word. The
-   * fallback is the app in full, which is the state that hides nothing.
-   */
-  it('costs the mode its own value rather than every other setting', async () => {
-    await writeFile(
-      join(dir, 'settings.json'),
-      JSON.stringify({experienceMode: 'wizard', sidebarWidth: 300}, null, 2),
-      'utf8',
-    );
-    const settings = await store().load();
-
-    expect(settings.experienceMode).toBe('power');
-    expect(settings.sidebarWidth).toBe(300);
+    expect('experienceMode' in settings).toBe(false);
   });
 });
 

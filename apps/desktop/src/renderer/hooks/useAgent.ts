@@ -209,6 +209,14 @@ export interface AgentController {
    * there, not wherever the rail happens to be pointed.
    */
   newSession: (spaceId?: string) => Promise<void>;
+  /**
+   * Switches to another bot, and lands on its newest conversation.
+   *
+   * The switch is the same `profiles.select` Settings uses; what this adds is
+   * the reload. Conversations are scoped by profile, so the rail, the header and
+   * the transcript are all wrong until the active bot's list is read again.
+   */
+  selectProfile: (profileId: string) => Promise<void>;
   dismissError: () => void;
   /** The spaces every agent works in, and which one is current. */
   workspaces: Workspace[];
@@ -520,6 +528,43 @@ export function useAgent(): AgentController {
       setReady(true);
     }
   }, [loadTranscript, applyWorkspaceState]);
+
+  /**
+   * Switches bots, then reloads everything that is scoped to the active one.
+   *
+   * Deliberately does not abort a running turn. A turn belongs to the
+   * conversation it is in, not to the window looking at it, and a switch that
+   * killed an answer somebody asked for would make the rail's most ordinary
+   * control destructive.
+   */
+  const selectProfile = useCallback(
+    async (profileId: string): Promise<void> => {
+      if (profile?.id === profileId) {
+        return;
+      }
+      try {
+        await window.marimo.call('profiles.select', {profileId});
+        /*
+         * The live turn belongs to the conversation of the bot being left.
+         * Clearing before the reload matters because `boot` only reads the
+         * stored transcript; without this, a delta or an outbox from the old
+         * conversation would be drawn in the new one for as long as the read
+         * takes.
+         */
+        setLive(null);
+        setDelegations({});
+        helperAtWork.current = null;
+        setOutbox(null);
+        setStoredPending([]);
+        setMessages([]);
+        setSessionId(null);
+        await boot();
+      } catch (failure) {
+        setError(describe(failure));
+      }
+    },
+    [profile, boot],
+  );
 
   /* The stream. Registered once; everything it needs is read from refs. */
   useEffect(() => {
@@ -1180,6 +1225,7 @@ export function useAgent(): AgentController {
     },
     reload: boot,
     newSession,
+    selectProfile,
     dismissError: () => {
       setError(null);
     },

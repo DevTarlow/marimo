@@ -84,6 +84,7 @@ import type {
 import {reviewDelay} from '@marimo/agent';
 
 import type {AppPaths} from '../paths.js';
+import {avatarFile} from '../paths.js';
 import {DocumentService} from '../documents.js';
 import {DreamStore} from '../dream-store.js';
 import {ProfileStore} from '../profiles.js';
@@ -562,6 +563,14 @@ export class AgentRuntime {
       resolvePersonMemoryFile(this.options.paths.personMemoryDir, profileId),
     );
     await rm(memoryDir, {recursive: true, force: true});
+
+    /*
+     * And the picture. It is the one file that exists only for this bot and is
+     * not in a store keyed by it, so nothing else would remove it; a missing
+     * file is the ordinary case for a bot that never had one, and is not worth
+     * failing a removal that has already happened.
+     */
+    await rm(avatarFile(this.options.paths, profileId), {force: true});
 
     this.dropHost(profileId);
     return file;
@@ -1511,6 +1520,15 @@ export class AgentRuntime {
       yield refusal(sessionId, result.problem);
       return;
     }
+
+    /*
+     * Before the user's message is appended and before anything is sent: a
+     * conversation whose active history has outgrown its budget is summarized
+     * once, so the turn that follows is a request that fits. Automatic failure is
+     * not a turn failure — `autoCompact` answers rather than throws, and the
+     * provider's own refusal (if any) is the sentence the user sees.
+     */
+    await result.host.autoCompact(sessionId, profileId);
 
     /*
      * The addressed agent, resolved before anything is sent. Resolved through the

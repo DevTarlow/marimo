@@ -638,3 +638,116 @@ describe('the folders a pre-workspaces file carried', () => {
     expect(await profiles.legacyWorkspaces()).toBeUndefined();
   });
 });
+
+/*
+ * The icon, which is the first profile field the user can replace with a file.
+ *
+ * What matters is that the pointer is optional and never decides whether the
+ * bot exists. The picture is a file beside the profile; the profile carried a
+ * marker and a version, and every failure of that marker falls back to an icon
+ * rather than to a skipped profile.
+ */
+describe('ProfileStore avatars', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(process.cwd(), '.marimo-avatars-'));
+    file = join(dir, 'profiles.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, {recursive: true, force: true});
+  });
+
+  function store(): ProfileStore {
+    return new ProfileStore({
+      file,
+      defaultIdentity: 'You are an agent.',
+      botIdentity: (name) => `You are ${name}.`,
+      defaultTools: TOOLS,
+      defaultSkills: SKILLS,
+    });
+  }
+
+  it('gives the lead Marimo and the next bot a different preset', async () => {
+    const profiles = store();
+    const lead = await profiles.activeProfile();
+    expect(lead.avatar).toEqual({kind: 'preset', id: 'marimo'});
+
+    const second = await profiles.create('Writer');
+    expect(second.avatar).toEqual({kind: 'preset', id: 'sprout'});
+  });
+
+  it('gives an existing profile an icon without a migration write', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: 'lead',
+        profiles: [
+          {
+            id: 'lead',
+            name: 'Marimo Bot',
+            identity: 'You are an agent.',
+            enabledTools: [],
+            enabledSkills: [],
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const lead = await store().activeProfile();
+    expect(lead.avatar).toEqual({kind: 'preset', id: 'marimo'});
+  });
+
+  it('stores a chosen preset, a custom marker and a clear', async () => {
+    const profiles = store();
+    const lead = await profiles.activeProfile();
+
+    const chosen = await profiles.update(lead.id, {
+      avatar: {kind: 'preset', id: 'wave'},
+    });
+    expect(chosen.avatar).toEqual({kind: 'preset', id: 'wave'});
+
+    const custom = await profiles.update(lead.id, {
+      avatar: {kind: 'custom', id: 'version-1'},
+    });
+    expect(custom.avatar).toEqual({kind: 'custom', id: 'version-1'});
+
+    // A patch about something else leaves it alone.
+    const renamed = await profiles.update(lead.id, {name: 'Other'});
+    expect(renamed.avatar).toEqual({kind: 'custom', id: 'version-1'});
+
+    // `null` is the third answer: back to the default for this roster position,
+    // stored rather than left missing so the window and a restart agree.
+    const cleared = await profiles.update(lead.id, {avatar: null});
+    expect(cleared.avatar).toEqual({kind: 'preset', id: 'marimo'});
+  });
+
+  it('costs a malformed icon rather than the bot', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: 'lead',
+        profiles: [
+          {
+            id: 'lead',
+            name: 'Marimo Bot',
+            identity: 'You are an agent.',
+            avatar: {kind: 'from-the-future', id: 'x'},
+            enabledTools: [],
+            enabledSkills: [],
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const lead = await store().activeProfile();
+    expect(lead.name).toBe('Marimo Bot');
+    expect(lead.avatar).toEqual({kind: 'preset', id: 'marimo'});
+  });
+});

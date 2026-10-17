@@ -137,16 +137,15 @@
 /*
  * How roomy the window is, chosen by which screen the app is showing.
  *
- * `comfortable` is what the simple screen draws and `compact` is the block
- * above, unchanged — which is deliberate rather than lazy. One set of numbers
- * exists for the dense case and this block overrides the handful the roomy case
- * needs, so there is no second copy of the scale to keep in step with the first,
- * and the screen a power user sees is pixel-identical to the one this app has
- * always had.
+ * `comfortable` is what the main window draws and `compact` is the block above,
+ * unchanged — which is deliberate rather than lazy. One set of numbers exists
+ * for the dense case and this block overrides the handful the roomy case needs,
+ * so there is no second copy of the scale to keep in step with the first.
  *
- * Set on `<html>` by the window, beside `data-theme`, and only there: the
- * companion is a fixed 340×460 bubble whose layout is measured in its own test,
- * and breathing room inside it would be a bug rather than a kindness.
+ * Set on `<html>` by the main window's entry point, before React mounts, and
+ * only there: the companion is a fixed 340×460 bubble whose layout is measured
+ * in its own test, and breathing room inside it would be a bug rather than a
+ * kindness.
  *
  * Type goes up about one step, spacing about a fifth. Both are tokens, which is
  * the whole reason this is twelve lines rather than an audit of every rule: no

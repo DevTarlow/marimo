@@ -16,7 +16,6 @@ import {COMMAND_IDS, COMMANDS, PROVIDERS, THEME_MODES} from '@marimo/protocol';
 import type {
   AgentModel,
   AppInfo,
-  ExperienceMode,
   PublicSettings,
   Theme,
   ThemeMode,
@@ -182,23 +181,12 @@ export function App(): React.JSX.Element {
   };
 
   /*
-   * Which size the app is drawn at.
-   *
-   * `simple` is the everyday screen and gets the roomy one; `power` keeps the
-   * density this app has always had, so somebody who turns the switch on to find
-   * a setting does not also find everything moved. Set on `<html>` beside
-   * `data-theme`, and only on this window: the companion is a fixed 340×460
-   * bubble whose layout is measured in its own test.
-   *
-   * Flipped from Settings rather than from here, which is why the dialog hands
-   * the new value back: the mode is a fact about this window, and the window is
-   * not the dialog.
+   * The window's density is fixed now. It used to follow the simple/power
+   * setting, and the only reason the compact scale existed was to keep the
+   * power screen looking like the app always had. One screen means one scale;
+   * `main.tsx` sets it before the first paint, and the companion keeps the
+   * compact values because it is a fixed 340×460 bubble that measured them.
    */
-  const experienceMode: ExperienceMode = settings?.experienceMode ?? 'simple';
-  useEffect(() => {
-    document.documentElement.dataset['density'] =
-      experienceMode === 'simple' ? 'comfortable' : 'compact';
-  }, [experienceMode]);
 
   const busy = agent.busy;
   const disabled = agent.profile === undefined;
@@ -480,17 +468,6 @@ export function App(): React.JSX.Element {
         {...(settingsSection === null ? {} : {openSection: settingsSection})}
         lastReview={agent.lastReview}
         {...(info === null ? {} : {userDataFolder: info.userData})}
-        onExperienceModeChange={(mode) => {
-          /*
-           * The density is this window's, and the switch is in the dialog, so
-           * the new value comes back rather than being read again: the redraw
-           * has to happen on the flip, not when the dialog closes — a screen
-           * that re-spaces itself two clicks later reads as a bug.
-           */
-          setSettings((current) =>
-            current === null ? current : {...current, experienceMode: mode},
-          );
-        }}
       />
     );
   }
@@ -504,11 +481,16 @@ export function App(): React.JSX.Element {
         }}
       />
       <WorkspaceRail
+        bots={agent.agents}
+        activeProfileId={agent.profile?.id ?? null}
         workspaces={agent.workspaces}
         sessions={agent.sessions}
         activeSessionId={agent.sessionId}
         activeWorkspaceId={agent.activeWorkspaceId}
         disabled={disabled}
+        onSelectProfile={(profileId) => {
+          void agent.selectProfile(profileId);
+        }}
         onOpenSession={(id) => {
           void agent.open(id);
         }}

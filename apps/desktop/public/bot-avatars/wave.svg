@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Wave">
+  <rect width="96" height="96" rx="24" fill="#1f4f70"/>
+  <path d="M20 54c8-12 16-12 24 0s16 12 24 0 12-9 12-5v17c-8 9-16 9-24 0s-16-9-24 0-12 6-12 2V54Z" fill="#67c6e3"/>
+  <path d="M20 38c8-9 16-9 24 0s16 9 24 0 12-7 12-4v7c-8 8-16 8-24 0s-16-8-24 0-12 5-12 2v-5Z" fill="#b7ecf7"/>
+</svg>

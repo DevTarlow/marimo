@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Sprout">
+  <rect width="96" height="96" rx="24" fill="#456b1f"/>
+  <path d="M48 74V42" stroke="#e8f6cc" stroke-width="6" stroke-linecap="round"/>
+  <path d="M48 48C35 48 26 40 24 28c13 0 22 8 24 20Z" fill="#a6d96a"/>
+  <path d="M48 44c11 0 19-7 21-18-11 0-19 7-21 18Z" fill="#c7eb94"/>
+  <circle cx="48" cy="78" r="5" fill="#e8f6cc"/>
+</svg>

@@ -51,6 +51,20 @@ export const COMPACT_KEEP_EVENTS = 12;
  */
 export const MAX_COMPACT_INPUT_CHARS = 120_000;
 
+/**
+ * When a conversation is long enough to summarize without being asked.
+ *
+ * A character budget rather than a token count, because this app has no
+ * tokenizer and the provider catalogue carries no context-window metadata.
+ * ADK estimates four characters to a token, so this is roughly fifteen thousand
+ * tokens — well under a 32k-token context once the instruction, tool schemas and
+ * the reply have their room, and far enough above a normal conversation that a
+ * chat is not rewritten on every turn. It is deliberately conservative: the
+ * failure on the other side is a provider refusing a request because the history
+ * did not fit, which the user reads as the app being broken.
+ */
+export const AUTO_COMPACT_AT_CHARS = 60_000;
+
 /** How much of one tool result goes into the summary prompt. */
 export const MAX_SUMMARY_RESULT_CHARS = 500;
 
@@ -167,6 +181,73 @@ export function planCompaction(
 }
 
 /**
+ * How much of the active context one event contributes, in characters.
+ *
+ * Everything the model is actually sent counts: text, reasoning, a tool call's
+ * arguments and a tool result in full. The summary renderer below is the wrong
+ * measurement because it caps each result at 500 characters — a turn that read a
+ * large file would look small to it and never trigger a summary.
+ */
+function eventContextChars(event: AdkEvent): number {
+  let total = 0;
+  const compacted = (event as {compactedContent?: unknown}).compactedContent;
+  if (typeof compacted === 'string') {
+    total += compacted.length;
+  }
+  for (const part of event.content?.parts ?? []) {
+    if (part.functionCall !== undefined) {
+      total += part.functionCall.name?.length ?? 0;
+      total += jsonLength(part.functionCall.args);
+      continue;
+    }
+    if (part.functionResponse !== undefined) {
+      total += resultText(part.functionResponse.response).length;
+      continue;
+    }
+    if (typeof part.text === 'string') {
+      total += part.text.length;
+    }
+  }
+  // A small allowance for the roles, ids and separators a request carries.
+  return total + 16;
+}
+
+/**
+ * The size of what a request built from these events would contain.
+ *
+ * Active events rather than the whole log: a conversation whose older half is
+ * already a summary is measured by the summary plus what came after it, which is
+ * exactly what the model is sent. An already-compacted conversation therefore
+ * does not trigger a second summary just because its file is long.
+ */
+export function activeContextChars(events: readonly AdkEvent[]): number {
+  return activeEvents(events).reduce(
+    (total, event) => total + eventContextChars(event),
+    0,
+  );
+}
+
+/**
+ * What to summarize automatically, or `undefined` when the conversation fits.
+ *
+ * The size test comes first, and that order is the point: `planCompaction` alone
+ * answers "is there an older half to replace", which is true after a dozen
+ * messages even when the whole conversation is a few kilobytes. Automatic
+ * summarization is for a context that has grown too large, not for a
+ * conversation that has merely continued.
+ */
+export function planAutoCompaction(
+  events: readonly AdkEvent[],
+  options: {keep?: number; atChars?: number} = {},
+): CompactionPlan | undefined {
+  const atChars = options.atChars ?? AUTO_COMPACT_AT_CHARS;
+  if (activeContextChars(events) < atChars) {
+    return undefined;
+  }
+  return planCompaction(events, options.keep);
+}
+
+/**
  * The conversation as text for the summariser.
  *
  * Tool calls are included, with their results capped: what a coding agent *did*
@@ -216,6 +297,14 @@ function renderEvent(event: AdkEvent): string {
     }
   }
   return lines.length === 0 ? '' : `${who}: ${lines.join('\n')}`;
+}
+
+function jsonLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 function resultText(response: unknown): string {

@@ -43,6 +43,15 @@ export interface AppPaths {
   /** Agent profiles: identities and the capabilities they carry. */
   profiles: string;
   /**
+   * The images the user uploaded for their bots.
+   *
+   * A directory of its own rather than a field on the profile, because a picture
+   * is bytes and the profile document is a small JSON file read on every launch.
+   * One PNG per profile, named by the profile id through {@link avatarFileName};
+   * the profile carries only the marker that says which icon and which version.
+   */
+  avatars: string;
+  /**
    * The folders every agent can work in, and which one is current.
    *
    * Its own document rather than a field on each profile: a folder is a place on
@@ -141,6 +150,7 @@ export function resolveAppPaths(userData: string): AppPaths {
       providerIdSchema.options.map((id) => [id, secretFileIn(secretsDir, id)]),
     ) as Record<ProviderId, string>,
     profiles: join(userData, 'profiles.json'),
+    avatars: join(userData, 'avatars'),
     workspaces: join(userData, 'workspaces.json'),
     jobs: join(userData, 'jobs.json'),
     memoryProposals: join(userData, 'memory-proposals.json'),
@@ -242,4 +252,26 @@ export function secretFileName(name: string): string {
 
 function secretFileIn(directory: string, name: string): string {
   return join(directory, secretFileName(name));
+}
+
+/**
+ * The file holding one bot's uploaded icon.
+ *
+ * The same one-safe-segment rule as a secret name, for a different reason: a
+ * profile id is app-generated, but a hand-edited file or an older test fixture
+ * can contain anything, and the name is used both to write and to serve. It has
+ * to be impossible for one helper to answer a path outside the directory the
+ * other one is allowed to read.
+ */
+export function avatarFileName(profileId: string): string {
+  const safe = profileId
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, '-')
+    .replace(/^[.-]+/u, '')
+    .slice(0, 80);
+  return `${safe.length > 0 ? safe : 'bot'}.png`;
+}
+
+export function avatarFile(paths: AppPaths, profileId: string): string {
+  return join(paths.avatars, avatarFileName(profileId));
 }

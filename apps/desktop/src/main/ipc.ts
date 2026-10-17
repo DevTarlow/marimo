@@ -12,6 +12,7 @@
  * to keep in step with the first. The one exception is a turn's *own* refusal,
  * which is not an error in this sense — see `AgentService.send`.
  */
+import {randomUUID} from 'node:crypto';
 import {stat} from 'node:fs/promises';
 
 import {
@@ -38,6 +39,7 @@ import type {AppPaths} from '@marimo/runtime';
 import {PRODUCT_NAME} from '../shared/product.js';
 
 import {attachableFiles} from './attach.js';
+import {uploadBotAvatar} from './avatar.js';
 import type {AgentService} from './agent.js';
 import {settingsForWindow} from './public-settings.js';
 import {safeStorageCipher} from './secrets.js';
@@ -578,6 +580,29 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
       const service = agent();
       await service.selectProfile(params.profileId);
       return await profileState(service);
+    },
+
+    /*
+     * The picker and the picture are main-process work; the profile only learns
+     * that this bot now wears a custom icon. The profile is checked before the
+     * picker opens, so a stale id fails before a file can be written for nobody.
+     */
+    'profiles.uploadAvatar': async (params) => {
+      const service = agent();
+      const {profiles} = await service.profiles();
+      if (!profiles.some((entry) => entry.id === params.profileId)) {
+        throw new Error(`Unknown bot: ${params.profileId}`);
+      }
+      const changed = await uploadBotAvatar(
+        dependencies.paths.avatars,
+        params.profileId,
+      );
+      if (changed) {
+        await service.updateProfile(params.profileId, {
+          avatar: {kind: 'custom', id: randomUUID()},
+        });
+      }
+      return {...(await profileState(service)), changed};
     },
 
     'profiles.remove': async (params) => {

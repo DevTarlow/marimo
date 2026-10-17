@@ -5,14 +5,14 @@
  * The card is one switch and two numbers, and the two numbers are the whole
  * feature. Everything else about it — the recorder, the tree format, the replay —
  * is machinery with nothing worth turning, which is why this is the smallest card
- * in the power screen rather than the largest.
+ * on the screen rather than the largest.
  *
  * Three decisions shape it.
  *
- * **Power only.** The exploration weight and the pruning threshold are numbers to
- * adjust, and this screen's own rule is that a number to adjust belongs in power
- * while a switch that fixes something stays where the user is. Somebody who never
- * opens this card is running the same agent they were before the feature existed.
+ * **Off until asked.** The exploration weight and the pruning threshold are
+ * numbers to adjust, and somebody who never opens this card is running the same
+ * agent they were before the feature existed. It is last in the dialog because
+ * it is the thing fewest people want, not because it is hidden.
  *
  * **The pruning warning is on the card, not in a tooltip.** Pruning is the one
  * setting here whose failure mode is invisible: an agent that has been stopped

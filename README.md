@@ -29,16 +29,22 @@ server you run yourself. It says nothing until you choose.
   about a file by name, or let a bot write one and watch the same file appear in
   the drawer. If a file changed since you opened it, the save is refused, your
   draft stays, and you choose which version wins.
-- Make as many bots as you like in Settings. Each one gets a name, an identity
-  you write, its own tools, the Space it works in and, if you want, a model of
-  its own. Several can share a chat; type `@` to put a question to one of them.
-  Ask Marimo Bot for a blog post and it can hand the writing to Writer, whose answer
-  comes back into the same conversation under its own name, with any approval it
-  needs asked under the turn you are reading.
+- Make as many bots as you like in Settings. Each one gets a name, an icon, an
+  identity you write, its own tools, the Space it works in and, if you want, a
+  model of its own. The bots sit at the top of the sidebar; pick one to see its
+  conversations, and choose one of five shipped icons or upload your own picture
+  in Settings. Several can share a chat; type `@` to put a question to one of
+  them. Ask Marimo Bot for a blog post and it can hand the writing to Writer,
+  whose answer comes back into the same conversation under its own name, with
+  any approval it needs asked under the turn you are reading.
 - Removing a bot asks first and says what goes: the bot, its conversations, the
   jobs it had scheduled and what it remembered about you. Files it wrote inside
   your Spaces stay where they are, and the last bot stays too, because something
   has to answer.
+- It keeps a long conversation in bounds. Once the history grows past a
+  conservative size, the older part is replaced by a summary the model writes;
+  the transcript keeps everything, and **Compact** in the composer's `+` menu is
+  still there when you want it on your terms.
 - It remembers what you tell it. Facts about you follow you between Spaces, and
   the conventions of a project stay with that project. Settings shows everything
   it remembers and when each line was written. When an answer is wrong, "Not
@@ -95,8 +101,9 @@ readable. It is off unless you tick it.
 Closing the window does not quit Marimo Bot. It stays in the tray so the moss ball
 and your scheduled tasks keep working, and you quit it from the tray menu.
 
-Settings comes in two sizes: simple for the everyday settings, and power user,
-which shows every tool as its own switch.
+Settings is one screen. It holds the bots and their icons, what each one may do,
+the service that answers, memory, search, connectors and the recording; every
+tool is a switch, and a tool that is off is not offered to the model at all.
 
 ## Privacy
 

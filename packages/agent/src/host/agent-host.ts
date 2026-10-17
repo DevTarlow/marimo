@@ -76,9 +76,11 @@ import type {WebSearchProvider} from '../tools/web-search-tool.js';
 import {
   buildCompactedEvent,
   compactionPrompt,
+  planAutoCompaction,
   planCompaction,
   renderForSummary,
 } from './compaction.js';
+import type {CompactionPlan} from './compaction.js';
 import {projectTranscript} from './transcript.js';
 import {RepeatedToolCallPlugin} from './tool-loop-plugin.js';
 
@@ -901,6 +903,80 @@ export class AgentHost {
   async compact(sessionId: string, profileId?: string): Promise<CompactResult> {
     await this.assertOwned(sessionId, profileId);
 
+    const refused = await this.compactionRefusal(sessionId);
+    if (refused !== undefined) {
+      return refused;
+    }
+
+    const session = await this.sessionForCompaction(sessionId);
+    const plan = planCompaction(session.events);
+    if (plan === undefined) {
+      return {
+        compacted: false,
+        reason: 'Nothing to compact yet — this conversation is short enough to fit.',
+      };
+    }
+    return await this.applyCompaction(session, plan);
+  }
+
+  /**
+   * Summarizes the older half automatically, when the context has grown.
+   *
+   * The difference from {@link compact} is who decided and what happens on a
+   * failure. This one runs before a user's next turn and is allowed to do
+   * nothing at all: a conversation that fits is the ordinary case, and a model
+   * call that fails must not turn the question the person just asked into an
+   * error. The full history is still there, so the turn proceeds and the provider
+   * decides — which it would have done anyway.
+   *
+   * The approval and one-turn-at-a-time rules are the same, because a summary is
+   * a write to the conversation a paused turn is reading.
+   */
+  async autoCompact(
+    sessionId: string,
+    profileId?: string,
+    atChars?: number,
+  ): Promise<CompactResult> {
+    await this.assertOwned(sessionId, profileId);
+
+    try {
+      const refused = await this.compactionRefusal(sessionId);
+      if (refused !== undefined) {
+        return refused;
+      }
+
+      const session = await this.sessionForCompaction(sessionId);
+      const plan = planAutoCompaction(
+        session.events,
+        atChars === undefined ? {} : {atChars},
+      );
+      if (plan === undefined) {
+        return {
+          compacted: false,
+          reason: 'This conversation still fits, so nothing was summarized.',
+        };
+      }
+      return await this.applyCompaction(session, plan);
+    } catch {
+      /*
+       * Deliberately swallowed. A summariser that is down, a provider that
+       * refuses the summary prompt, a write that cannot land: each of those is a
+       * reason to send the turn uncompacted, not a reason to fail it. A command
+       * the user ran still throws, because there the error is the answer.
+       */
+      return {
+        compacted: false,
+        reason:
+          'The conversation could not be summarized automatically, so this ' +
+          'turn used the full history.',
+      };
+    }
+  }
+
+  /** The two refusals shared by a manual and an automatic compaction. */
+  private async compactionRefusal(
+    sessionId: string,
+  ): Promise<CompactResult | undefined> {
     /*
      * One turn at a time, and a compaction is a write to the conversation the
      * turn is reading. The gates are the sharper half of the same rule: a paused
@@ -924,7 +1000,12 @@ export class AgentHost {
           'the turn — and then compact.',
       };
     }
+    return undefined;
+  }
 
+  private async sessionForCompaction(
+    sessionId: string,
+  ): Promise<NonNullable<Awaited<ReturnType<FileSessionService['getSession']>>>> {
     const session = await this.sessionService.getSession({
       appName: this.appName,
       userId: this.userId,
@@ -933,21 +1014,22 @@ export class AgentHost {
     if (session === undefined) {
       throw new Error(`Unknown session: ${sessionId}`);
     }
+    return session;
+  }
 
-    const plan = planCompaction(session.events);
-    if (plan === undefined) {
-      return {
-        compacted: false,
-        reason: 'Nothing to compact yet — this conversation is short enough to fit.',
-      };
-    }
-
-    /*
-     * The one call this needs, and it is deliberately not a turn: `ask` has no
-     * tools, so the provider's "a tool-carrying turn must carry its reasoning"
-     * rule does not apply to it, and nothing it does is written to the session.
-     * A failed call throws out of here with the conversation untouched.
-     */
+  /**
+   * Asks the model for one summary and appends it.
+   *
+   * The call is deliberately not a turn: `ask` has no tools, so the provider's
+   * "a tool-carrying turn must carry its reasoning" rule does not apply to it,
+   * and nothing it does is written to the session. A failed call throws with the
+   * conversation untouched; what each caller does with that differs, which is why
+   * the try/catch lives outside this method.
+   */
+  private async applyCompaction(
+    session: NonNullable<Awaited<ReturnType<FileSessionService['getSession']>>>,
+    plan: CompactionPlan,
+  ): Promise<CompactResult> {
     const summary = (
       await this.ask(
         compactionPrompt(renderForSummary(plan.summarise), plan.previous),

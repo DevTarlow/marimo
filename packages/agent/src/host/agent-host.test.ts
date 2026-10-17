@@ -1214,6 +1214,67 @@ describe('AgentHost', () => {
     expect(await host.eventsFor(session)).toHaveLength(2);
   });
 
+  it('summarizes automatically only once the context is over its cap', async () => {
+    const {host, session} = await startHost((messages, index) => {
+      // The summariser's call is the one with nothing but the prompt.
+      if (messages.length === 1) {
+        return textChunks('They were talking about a file.');
+      }
+      return textChunks(`answer ${String(index)}`);
+    });
+
+    for (let turn = 0; turn < 8; turn += 1) {
+      await collect(host.run(session, `question ${String(turn)}`));
+    }
+    const before = await host.eventsFor(session);
+
+    // A cap this conversation is nowhere near: the ordinary case, and it must
+    // not rewrite anything.
+    const skipped = await host.autoCompact(session, undefined, 10_000_000);
+    expect(skipped.compacted).toBe(false);
+    expect(await host.eventsFor(session)).toHaveLength(before.length);
+
+    // The same conversation with a cap it has crossed.
+    const compacted = await host.autoCompact(session, undefined, 100);
+    expect(compacted.compacted).toBe(true);
+    const after = await host.eventsFor(session);
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.slice(0, before.length)).toEqual(before);
+  });
+
+  it('leaves the conversation alone when the automatic summary is empty', async () => {
+    const {host, session} = await startHost((messages, index) =>
+      messages.length === 1 ? textChunks('') : textChunks(`answer ${String(index)}`),
+    );
+
+    for (let turn = 0; turn < 8; turn += 1) {
+      await collect(host.run(session, `question ${String(turn)}`));
+    }
+    const before = await host.eventsFor(session);
+
+    const result = await host.autoCompact(session, undefined, 100);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toMatch(/empty summary/u);
+    expect(await host.eventsFor(session)).toEqual(before);
+  });
+
+  it('does not let an automatic summary rewrite a paused turn', async () => {
+    const {host, session} = await startHost(() =>
+      toolCallChunks('call_shell', 'run_shell', {
+        command: `echo marimo-auto-gate-${String(Date.now())}`,
+      }),
+    );
+
+    const paused = await collect(host.run(session, 'run it'));
+    expect(paused.some((event) => event.type === 'approval.request')).toBe(true);
+    const before = await host.eventsFor(session);
+
+    const result = await host.autoCompact(session, undefined, 1);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toMatch(/approval/u);
+    expect(await host.eventsFor(session)).toEqual(before);
+  });
+
   it('refuses to compact a conversation that is waiting for an approval', async () => {
     const {host, session} = await startHost(() =>
       toolCallChunks('call_shell', 'run_shell', {

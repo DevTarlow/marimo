@@ -95,7 +95,7 @@ export const SAFE_DEFAULT_TOOLS = [
  * The tiers are *reach*, not harmlessness, and the third stops short of
  * `run_shell` on purpose: every preset here is something somebody could hand to
  * a friend without a paragraph of warning, and running commands on their
- * computer is not. It is one switch away in the power screen, beside the tool
+ * computer is not. It is one switch away in Settings, beside the tool
  * list that explains what it does.
  *
  * The middle tier is `SAFE_DEFAULT_TOOLS` itself rather than a copy of it, so

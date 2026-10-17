@@ -574,7 +574,7 @@ describe('the tool catalogue', () => {
 });
 
 /*
- * The three choices the simple screen offers.
+ * The three choices the setup flow offers.
  *
  * The failure this guards against is the one every hand-written list of names
  * eventually has: a tool renamed in the catalogue and not here grants nothing,
@@ -652,7 +652,7 @@ describe('the capability presets', () => {
   /*
    * The tiers are reach, and the line is that none of them runs a command on
    * somebody's computer. That is the one capability this app does not hand out
-   * as a preset — it lives in the power screen beside the switch that explains
+   * as a preset — it lives in Settings beside the switch that explains
    * it.
    */
   it('never grants a shell, and grows by reach', () => {

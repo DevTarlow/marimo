@@ -15,6 +15,8 @@
 
 /* Where everything lives. */
 export {
+  avatarFile,
+  avatarFileName,
   defaultUserDataDir,
   resolveAppPaths,
   secretFile,

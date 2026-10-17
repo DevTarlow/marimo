@@ -297,6 +297,22 @@ function of one document and cannot write another, so the only thing standing
 between a user's folders and a profile edit during the upgrade is the write path
 carrying them forward until the new store has taken them.
 
+**A bot's uploaded icon is an app-owned file that is not a document.** It is one
+PNG under `userData/avatars/`, named through `avatarFileName` in
+`packages/runtime/src/paths.ts`, and the profile carries only a marker with a
+version. The renderer cannot read the user-data directory, so the bytes reach it
+through the app's `marimo-asset` scheme and a handler that serves nothing outside
+that directory. The marker is optional and tolerant on purpose: `ProfileStore`
+skips a profile the schema refuses, so a malformed or newer icon has to cost the
+picture, not the bot. Removing a bot removes its file; a missing file falls back
+to the name's initial. An uploaded picture is not a document in a Space and is
+never indexed as one.
+
+**There is one settings screen, and it is not a mode.** The simple/power switch
+was removed because it made the identity and the per-tool switches reachable only
+by leaving the everyday screen. Do not add a setting that decides which settings
+exist; if a control is worth having, put it on the one screen.
+
 ## The loop
 
 **A task is done when it is committed; the branch moves when a human says so.**

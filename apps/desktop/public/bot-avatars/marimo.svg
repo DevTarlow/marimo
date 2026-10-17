@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Marimo">
+  <rect width="96" height="96" rx="24" fill="#1f6f50"/>
+  <circle cx="48" cy="50" r="27" fill="#7fcf9f"/>
+  <circle cx="38" cy="42" r="7" fill="#4fae7a"/>
+  <circle cx="57" cy="59" r="6" fill="#4fae7a"/>
+  <circle cx="58" cy="40" r="4" fill="#a6e6bd"/>
+  <circle cx="41" cy="62" r="4" fill="#a6e6bd"/>
+  <path d="M48 23c7 0 13 3 17 8-5-3-11-4-17-4s-12 1-17 4c4-5 10-8 17-8Z" fill="#c8f2d8"/>
+</svg>

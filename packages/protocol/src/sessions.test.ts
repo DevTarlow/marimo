@@ -10,8 +10,13 @@
 import {describe, expect, it} from 'vitest';
 
 import {
+  BOT_AVATAR_PRESETS,
+  DEFAULT_BOT_AVATAR_ID,
   agentCallSchemas,
   agentProfileSchema,
+  botAvatarSchema,
+  botAvatarUrl,
+  defaultBotAvatarFor,
   workspacesFileSchema,
 } from './index.js';
 
@@ -351,5 +356,67 @@ describe('the filing calls', () => {
         model: null,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('a bot icon', () => {
+  it('offers five stable presets, with Marimo as the default', () => {
+    expect(BOT_AVATAR_PRESETS.map((preset) => preset.id)).toEqual([
+      'marimo',
+      'sprout',
+      'pebble',
+      'wave',
+      'spark',
+    ]);
+    expect(DEFAULT_BOT_AVATAR_ID).toBe('marimo');
+    expect(defaultBotAvatarFor(0)).toEqual({kind: 'preset', id: 'marimo'});
+    expect(defaultBotAvatarFor(1)).toEqual({kind: 'preset', id: 'sprout'});
+    // A wrap is deliberate: a sixth bot starting at Marimo again is better than
+    // one with no icon.
+    expect(defaultBotAvatarFor(5)).toEqual({kind: 'preset', id: 'marimo'});
+    expect(defaultBotAvatarFor(-1)).toEqual({kind: 'preset', id: 'spark'});
+  });
+
+  it('parses an absent icon and a malformed one without dropping the profile', () => {
+    const base = {
+      id: 'agent',
+      name: 'Agent',
+      identity: 'You are an agent.',
+      enabledTools: [],
+      enabledSkills: [],
+    };
+    expect(agentProfileSchema.parse(base).avatar).toBeUndefined();
+    // A hand-edited or newer value costs the picture, not the bot. This is the
+    // reason the field is optional and carries a catch.
+    const malformed = agentProfileSchema.parse({
+      ...base,
+      avatar: {kind: 'from-the-future', id: 'x'},
+    });
+    expect(malformed.avatar).toBeUndefined();
+  });
+
+  it('keeps an unknown preset id parseable for the renderer to fall back from', () => {
+    expect(
+      botAvatarSchema.parse({kind: 'preset', id: 'a-new-shape'}).id,
+    ).toBe('a-new-shape');
+  });
+
+  it('lets a patch clear the icon, and the upload call names the bot', () => {
+    const patch = agentCallSchemas['profiles.update'].parse({
+      profileId: 'agent',
+      patch: {avatar: null},
+    });
+    expect(patch.patch.avatar).toBeNull();
+    expect(
+      agentCallSchemas['profiles.uploadAvatar'].safeParse({profileId: ''})
+        .success,
+    ).toBe(false);
+  });
+
+  it('builds a versioned URL the asset handler can read back', () => {
+    const url = botAvatarUrl('bot/with spaces', 'version 1');
+    expect(url.startsWith('marimo-asset://bot/')).toBe(true);
+    expect(url).toContain('bot%2Fwith%20spaces.png');
+    expect(url).toContain('v=version%201');
   });
 });

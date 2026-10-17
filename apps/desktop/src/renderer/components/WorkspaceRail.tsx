@@ -20,9 +20,10 @@
  */
 import {useEffect, useMemo, useRef, useState} from 'react';
 
-import type {SessionSummary, Workspace} from '@marimo/protocol';
+import type {AgentProfile, SessionSummary, Workspace} from '@marimo/protocol';
 
 import {groupSessions} from '../workspace-groups.js';
+import {BotAvatar} from './BotAvatar.js';
 import {KeepRunning} from './KeepRunning.js';
 import {SessionMenu} from './SessionMenu.js';
 import {WorkspaceMenu} from './WorkspaceMenu.js';
@@ -37,11 +38,14 @@ type OpenMenu =
 type Editing = {kind: 'session' | 'workspace'; id: string; value: string};
 
 export function WorkspaceRail({
+  bots,
+  activeProfileId,
   workspaces,
   sessions,
   activeSessionId,
   activeWorkspaceId,
   disabled,
+  onSelectProfile,
   onOpenSession,
   onNewSession,
   onSelectWorkspace,
@@ -53,11 +57,16 @@ export function WorkspaceRail({
   onRenameSession,
   onDeleteSession,
 }: {
+  /** Every bot in the install, in the roster's own order. */
+  bots: AgentProfile[];
+  /** The bot whose conversations the Spaces tree below is showing. */
+  activeProfileId: string | null;
   workspaces: Workspace[];
   sessions: SessionSummary[];
   activeSessionId: string | null;
   activeWorkspaceId: string | null;
   disabled: boolean;
+  onSelectProfile: (profileId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onNewSession: (workspaceId: string) => void;
   onSelectWorkspace: (workspaceId: string) => void;
@@ -246,19 +255,7 @@ export function WorkspaceRail({
     });
 
   return (
-    <aside className="rail" aria-label="Spaces">
-      <div className="rail-head">
-        <span className="rail-title">Spaces</span>
-        <button
-          type="button"
-          className="button button-quiet button-small"
-          disabled={disabled}
-          onClick={onLoadWorkspace}
-        >
-          Load a space…
-        </button>
-      </div>
-
+    <aside className="rail" aria-label="Bots and spaces">
       <nav
         className="rail-list"
         // The menu is anchored to a rectangle that scrolls away beneath it.
@@ -266,6 +263,42 @@ export function WorkspaceRail({
           setMenu(null);
         }}
       >
+        <section className="rail-bots" aria-label="Bots">
+          <h2 className="rail-group-head">Bots</h2>
+          {bots.map((bot) => {
+            const active = bot.id === activeProfileId;
+            return (
+              <button
+                type="button"
+                className="rail-bot"
+                key={bot.id}
+                aria-current={active ? 'true' : undefined}
+                title={
+                  active ? `${bot.name} is active` : `Switch to ${bot.name}`
+                }
+                onClick={() => {
+                  onSelectProfile(bot.id);
+                }}
+              >
+                <BotAvatar profile={bot} size="sm" />
+                <span className="rail-bot-name">{bot.name}</span>
+              </button>
+            );
+          })}
+        </section>
+
+        <div className="rail-spaces-head">
+          <h2 className="rail-group-head">Spaces</h2>
+          <button
+            type="button"
+            className="button button-quiet button-small"
+            disabled={disabled}
+            onClick={onLoadWorkspace}
+          >
+            Load a space…
+          </button>
+        </div>
+
         {groups.length === 0 && (
           <p className="rail-empty">
             No spaces yet. Load one and every bot can work in it.

@@ -174,21 +174,29 @@ export function defaultAppearance(): Appearance {
 }
 
 /**
- * The custom scheme the renderer loads imported backgrounds through.
+ * The custom scheme the renderer loads app-owned images through.
  *
- * Backgrounds live in the user-data directory, which the renderer cannot read:
- * it is sandboxed, and in development it is served from `http://localhost`, so a
- * `file://` URL would be blocked by both the origin and the CSP. A scheme of the
- * app's own is registered in the main process and allowed in `img-src`, so a
- * wallpaper is fetched the same way in development and in a packaged build.
+ * An uploaded bot icon lives in the user-data directory, which the renderer
+ * cannot read: it is sandboxed, and in development it is served from
+ * `http://localhost`, so a `file://` URL would be blocked by both the origin and
+ * the CSP. A scheme of the app's own is registered in the main process and
+ * allowed in `img-src`, so the same picture arrives in development and in a
+ * packaged build.
  *
  * Both sides build the URL, so the literal lives here rather than in either one.
  */
-export const BACKGROUND_SCHEME = 'marimo-asset';
+export const ASSET_SCHEME = 'marimo-asset';
 
-/** `marimo-asset://background/<file>`, percent-encoded. */
-export function backgroundUrl(name: string): string {
-  return `${BACKGROUND_SCHEME}://background/${encodeURIComponent(name)}`;
+/**
+ * `marimo-asset://bot/<profile id>.png?v=<version>`.
+ *
+ * The version is what makes a replacement show up: the URL a browser cached is
+ * now a different URL, so no cache-busting header or reload dance is needed. The
+ * profile id is percent-encoded because it is the path, and the query is ignored
+ * by the handler — it exists only to make the URL distinct.
+ */
+export function botAvatarUrl(profileId: string, version: string): string {
+  return `${ASSET_SCHEME}://bot/${encodeURIComponent(profileId)}.png?v=${encodeURIComponent(version)}`;
 }
 
 /*
@@ -432,23 +440,6 @@ export const DEFAULT_MEMORY_REVIEW_EVENTS = 40;
 export function defaultWindowState(): WindowState {
   return {width: 1180, height: 780, x: null, y: null};
 }
-
-/**
- * How much of the app is on screen.
- *
- * `simple` is for somebody who wants a companion: a name, one answer about what
- * it may do, and the model. `power` is everything the app can do, down to the
- * individual tool switches.
- *
- * Not a level and not a capability — nothing about the agent changes with this
- * value. It decides which controls are drawn and how roomy they are, which is
- * why it is stored rather than held in the window that reads it: it is the
- * user's answer about the app, like the theme beside it, and a restart should
- * not put the switches back.
- */
-export const EXPERIENCE_MODES = ['simple', 'power'] as const;
-export const experienceModeSchema = z.enum(EXPERIENCE_MODES);
-export type ExperienceMode = z.infer<typeof experienceModeSchema>;
 
 /**
  * Recall: the embedding model, and what of it this install uses.
@@ -778,23 +769,6 @@ export function defaultDreamSettings(): DreamSettings {
  * schema simply strips.
  */
 export const settingsSchema = z.object({
-  /**
-   * How much of the app to draw; see `EXPERIENCE_MODES`.
-   *
-   * `.catch` rather than a plain enum, for the reason the two list fields further
-   * down have it: a hand-edited file with a typo in this one word must cost the
-   * mode its own value, not fail the whole settings parse and reset every other
-   * preference the user has. What it falls back to is `power`, the app in full —
-   * the state that hides nothing, which is the right thing to land on when the
-   * file does not say what was meant.
-   *
-   * The default for a file that has never existed is the other one, and it is
-   * decided in the store rather than here: a fresh install should open on the
-   * simple screen, while a file written before this field existed belongs to
-   * somebody already using the whole app. One schema, two defaults, and the fact
-   * that tells them apart is whether there was a file at all.
-   */
-  experienceMode: experienceModeSchema.catch('power'),
   /**
    * Whether the setup flow has had its turn.
    *
@@ -1243,6 +1217,65 @@ export const agentModelSchema = z.object({
 export type AgentModel = z.infer<typeof agentModelSchema>;
 
 /**
+ * The icons a bot can wear without the user supplying a picture.
+ *
+ * Five, because a pick-list of one is not a choice and a wall of abstract shapes
+ * is worse than a name. The ids are stable and are what a profile stores; the
+ * labels are what Settings draws. `marimo` is first because it is the default
+ * and the lead's own mark.
+ */
+export const BOT_AVATAR_PRESETS = [
+  {id: 'marimo', label: 'Marimo'},
+  {id: 'sprout', label: 'Sprout'},
+  {id: 'pebble', label: 'Pebble'},
+  {id: 'wave', label: 'Wave'},
+  {id: 'spark', label: 'Spark'},
+] as const;
+
+export const DEFAULT_BOT_AVATAR_ID = 'marimo';
+
+/**
+ * One bot's icon, as the profile stores it.
+ *
+ * `kind: 'custom'` means an image the user uploaded; `id` is then the version
+ * that makes a replacement's URL different from the one the browser cached.
+ * `kind: 'preset'` means one of the shipped icons and `id` names it.
+ *
+ * Deliberately permissive about `id`: a profile written by a newer build may
+ * name an icon this build does not ship, and the renderer can fall back to the
+ * initial. `ProfileStore.parseFile` skips a profile the schema refuses, so
+ * strictness here would cost a real bot rather than its picture.
+ */
+export const botAvatarSchema = z.object({
+  kind: z.enum(['preset', 'custom']),
+  id: z.string().min(1),
+});
+
+export type BotAvatar = z.infer<typeof botAvatarSchema>;
+
+export const DEFAULT_BOT_AVATAR: BotAvatar = {
+  kind: 'preset',
+  id: DEFAULT_BOT_AVATAR_ID,
+};
+
+/**
+ * The icon a profile starts with, by its position in the roster.
+ *
+ * The lead gets Marimo; every bot after it gets the next preset, so two bots
+ * made one after the other are distinguishable in the rail without either one
+ * being edited. A wrap is deliberate: the sixth bot starting at Marimo again is
+ * better than a bot with no icon.
+ */
+export function defaultBotAvatarFor(index: number): BotAvatar {
+  const preset =
+    BOT_AVATAR_PRESETS[
+      ((index % BOT_AVATAR_PRESETS.length) + BOT_AVATAR_PRESETS.length) %
+        BOT_AVATAR_PRESETS.length
+    ] ?? BOT_AVATAR_PRESETS[0];
+  return {kind: 'preset', id: preset.id};
+}
+
+/**
  * An agent: its identity (the system prompt) and the tools and skills it is
  * allowed to use. Switching profile is what makes the app feel like a different
  * agent, so each one also owns its conversations.
@@ -1273,6 +1306,15 @@ export const agentProfileSchema = z.object({
    * upgrade, which is why this one can never become required.
    */
   preferences: z.string().optional(),
+  /**
+   * The icon this bot is drawn with, when it has one of its own.
+   *
+   * Optional, and malformed values fall back to the default icon rather than
+   * failing the profile. `ProfileStore.parseFile` skips a profile the schema
+   * refuses, so a newer build's icon id, or a hand-edited one, must cost the
+   * picture rather than the bot.
+   */
+  avatar: botAvatarSchema.optional().catch(undefined),
   /** Tool names this profile may use, from `profiles.catalog`. */
   enabledTools: z.array(z.string()),
   /** Skill names this profile carries, from `profiles.catalog`. */
@@ -1329,6 +1371,12 @@ export const profilePatchSchema = z.object({
   identity: z.string().optional(),
   /** An empty string clears it; absent leaves whatever is stored alone. */
   preferences: z.string().optional(),
+  /**
+   * The icon, or `null` to go back to the default for this bot's place in the
+   * roster. Absent leaves whatever is stored alone — the same three answers
+   * `mcpServerIds`, `model` and `spaceId` carry below.
+   */
+  avatar: botAvatarSchema.nullable().optional(),
   enabledTools: z.array(z.string()).optional(),
   enabledSkills: z.array(z.string()).optional(),
   /**
@@ -3273,6 +3321,13 @@ export const agentCallSchemas = {
   }),
   'profiles.select': z.object({profileId: z.string().min(1)}),
   /*
+   * An upload is its own call because the file picker, the image decoder and the
+   * one file the app writes all live in the main process. It answers with the
+   * whole profile state, like every other profile write, and `changed: false`
+   * for a picker the user closed — an answer rather than an error.
+   */
+  'profiles.uploadAvatar': z.object({profileId: z.string().min(1)}),
+  /*
    * Removal takes the bot's conversations, jobs and memory with it, which is why
    * it is one call rather than a delete of the profile plus a second call per
    * thing it owned: a client that did the first and not the rest would leave
@@ -3383,6 +3438,11 @@ export interface AgentCallResults {
   'profiles.update': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.create': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.select': {profiles: AgentProfile[]; activeProfileId: string};
+  'profiles.uploadAvatar': {
+    profiles: AgentProfile[];
+    activeProfileId: string;
+    changed: boolean;
+  };
   'profiles.remove': {profiles: AgentProfile[]; activeProfileId: string};
   'settings.get': {settings: PublicSettings};
   'settings.set': {settings: PublicSettings};
@@ -3415,7 +3475,7 @@ export interface ProfileCatalog {
    */
   connectors: CatalogConnector[];
   /**
-   * The same tools, grouped into the three choices the simple screen offers.
+   * The same tools, grouped into the three choices the setup flow offers.
    *
    * Here rather than in the renderer because the names are the agent package's:
    * a list written in the window would be a second copy of the tool names, and

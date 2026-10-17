@@ -41,6 +41,7 @@ import type {TrayItem} from './tray.js';
 import {AgentService} from './agent.js';
 import {disable, statusOf} from './service.js';
 import type {ServiceContext} from './service.js';
+import {installAssetHandler, registerAssetScheme} from './assets.js';
 import {registerMediaScheme} from './media/decode-window.js';
 import {
   applyUserDataPath,
@@ -345,6 +346,14 @@ let toldAboutTray = false;
 
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
+
+  /*
+   * The handler for uploaded bot icons. It has to exist before the window loads,
+   * because the first read of a profile with a custom icon asks for one — and a
+   * scheme with no handler answers every request with a failure rather than
+   * waiting for one to appear.
+   */
+  installAssetHandler(paths.avatars);
 
   /*
    * One description of this install's background service, used by the card that
@@ -863,6 +872,14 @@ if (!hasLock) {
    * never arrive, or a frame that taints the canvas it is drawn into.
    */
   registerMediaScheme();
+
+  /*
+   * The app's own image scheme, for the same reason and in the same place. It
+   * serves only the icons under `userData/avatars/`; the handler itself is
+   * installed after the app is ready, because Electron does not build the
+   * request job factory before then.
+   */
+  registerAssetScheme();
 
   /*
    * Launching the app again brings the window back.

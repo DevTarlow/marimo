@@ -1,13 +1,13 @@
 /**
  * Which of the three choices a grant came from.
  *
- * The simple screen offers three cards and the power screen offers thirty
- * switches, and behind both of them is the same fact: a list of tool names on the
- * profile. So the card that is lit is *worked out* rather than stored — a grant
- * that matches one of the presets is that preset, and a grant that matches none
- * is a custom set that nobody has to record the existence of. Storing the choice
- * as well would be a second place for it to be wrong, and the two would disagree
- * the first time somebody ticked a box in the power screen.
+ * The setup flow offers three cards and Settings offers every switch, and behind
+ * both of them is the same fact: a list of tool names on the profile. So the card
+ * that is lit is *worked out* rather than stored — a grant that matches one of the
+ * presets is that preset, and a grant that matches none is a custom set that
+ * nobody has to record the existence of. Storing the choice as well would be a
+ * second place for it to be wrong, and the two would disagree the first time
+ * somebody ticked a box in Settings.
  *
  * Out of the component because this is the part worth pinning. Comparing sets by
  * size is where an off-by-one turns into two cards lit at once, or none, and that

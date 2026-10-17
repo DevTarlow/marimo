@@ -23,12 +23,9 @@ import {SettingsSection} from './SettingsSection.js';
 export function Recall({
   opened,
   onToggle,
-  power,
 }: {
   opened: ReadonlySet<string>;
   onToggle: (title: string, expanded: boolean) => void;
-  /** Whether the power screen is showing, which draws the command line. */
-  power: boolean;
 }): React.JSX.Element {
   const [status, setStatus] = useState<RecallModelStatus | null>(null);
   const [settings, setSettings] = useState<PublicSettings | null>(null);
@@ -341,7 +338,7 @@ export function Recall({
         </>
       )}
 
-      {power && status !== null && (
+      {status !== null && (
         <details className="settings-detail">
           <summary>The engine</summary>
           <p className="settings-muted">

@@ -14,11 +14,14 @@ import {describe, expect, it} from 'vitest';
 
 import type {AdkEvent} from '../sessions/file-session-service.js';
 import {
+  AUTO_COMPACT_AT_CHARS,
+  activeContextChars,
   activeEvents,
   buildCompactedEvent,
   compactionPrompt,
   MAX_COMPACT_INPUT_CHARS,
   MAX_SUMMARY_RESULT_CHARS,
+  planAutoCompaction,
   planCompaction,
   renderForSummary,
   retainStartIndex,
@@ -265,5 +268,51 @@ describe('buildCompactedEvent', () => {
      * cards of the turn that is waiting.
      */
     expect(event.invocationId).toBe('');
+  });
+});
+
+describe('automatic compaction', () => {
+  it('measures what the model is sent, including reasoning and tool output', () => {
+    const events = [
+      user('look at the file', 1_000),
+      agent(
+        [
+          {text: 'thinking about it', thought: true},
+          {functionCall: {id: 'c1', name: 'read_file', args: {path: 'a.ts'}}},
+        ],
+        1_010,
+      ),
+      toolResult('c1', 'x'.repeat(10_000), 1_020),
+    ];
+
+    // The summary renderer would cap that result at 500 characters; the context
+    // measurement must not, because this is the number the trigger is based on.
+    expect(activeContextChars(events)).toBeGreaterThan(10_000);
+  });
+
+  it('does not summarize below the cap, however many short turns there are', () => {
+    expect(
+      planAutoCompaction(conversation(30), {atChars: AUTO_COMPACT_AT_CHARS}),
+    ).toBeUndefined();
+  });
+
+  it('summarizes once the cap is crossed, and keeps the tool-call cut', () => {
+    const events = [
+      ...conversation(8),
+      user('y'.repeat(1_000), 20_000),
+    ];
+    const plan = planAutoCompaction(events, {keep: 4, atChars: 1_000});
+    expect(plan).toBeDefined();
+    expect(plan?.summarise).toEqual(events.slice(0, events.length - 4));
+  });
+
+  it('does nothing for a long message that has no older half to replace', () => {
+    // One event is under `keep`, so the size test passes but `planCompaction`
+    // has no cut to make. The result is "nothing to do", not an empty summary.
+    expect(
+      planAutoCompaction([user('y'.repeat(100_000), 1_000)], {
+        atChars: 1_000,
+      }),
+    ).toBeUndefined();
   });
 });

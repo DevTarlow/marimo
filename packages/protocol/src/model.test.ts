@@ -230,7 +230,6 @@ describe('the Dream-RSI settings', () => {
 });
 function settingsShape(): Record<string, unknown> {
   return {
-    experienceMode: 'power',
     appearance: defaultAppearance(),
     providers: defaultProviders(),
     allowPrivateNetworkFetch: false,

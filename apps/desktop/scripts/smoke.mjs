@@ -464,6 +464,77 @@ async function main() {
     }
 
     /*
+     * The bots above the spaces, which is where a person switches whose
+     * conversations they are looking at. One row has to be marked current, and
+     * every row has a picture or the letter that stands in for one.
+     */
+    const botRail = await evaluate(`(() => {
+      const rows = [...document.querySelectorAll('.rail-bot')];
+      return JSON.stringify({
+        rows: rows.length,
+        current: rows.filter((row) => row.getAttribute('aria-current') === 'true').length,
+        icons: rows.filter((row) => row.querySelector('.bot-avatar') !== null).length,
+        names: rows.map((row) => row.querySelector('.rail-bot-name')?.textContent ?? ''),
+      });
+    })()`);
+    const bots = JSON.parse(botRail);
+    if (bots.rows < 1) {
+      fail('the rail draws no bots');
+    } else if (bots.current !== 1) {
+      fail(`the rail marks ${String(bots.current)} bots as current, not one`);
+    } else if (bots.icons !== bots.rows) {
+      fail('a bot in the rail has no icon or initial to draw');
+    } else {
+      ok(`the rail lists ${String(bots.rows)} bot(s): ${bots.names.join(', ')}`);
+    }
+
+    /*
+     * A custom icon, served through the app's own scheme.
+     *
+     * The upload itself needs a native picker, which a smoke check cannot drive,
+     * so this writes the one PNG the picker would have written and points the
+     * profile at it. What it proves is the half that can break silently: the
+     * renderer asks `marimo-asset://` for the picture, the main process serves
+     * only the avatars directory, and the CSP allows the scheme. A failure here
+     * shows as the letter fallback, which is otherwise a perfectly healthy rail.
+     */
+    const activeBotId = await evaluate(
+      `window.marimo.call('profiles.list', {}).then(({activeProfileId}) => activeProfileId)`,
+    );
+    if (typeof activeBotId === 'string' && activeBotId.length > 0) {
+      await mkdir(join(userData, 'avatars'), {recursive: true});
+      await writeFile(
+        join(userData, 'avatars', `${activeBotId.toLowerCase()}.png`),
+        Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6nWQAAAAASUVORK5CYII=',
+          'base64',
+        ),
+      );
+      await evaluate(
+        `window.marimo.call('profiles.update', ${JSON.stringify({
+          profileId: activeBotId,
+          patch: {avatar: {kind: 'custom', id: 'smoke'}},
+        })})`,
+      );
+      await reload();
+      const customAvatar = await until('the custom bot icon to load', async () =>
+        await evaluate(`(() => {
+          const image = document.querySelector(
+            '.rail-bot[aria-current="true"] .bot-avatar img',
+          );
+          return image !== null && image.complete && image.naturalWidth > 0
+            ? image.currentSrc
+            : undefined;
+        })()`),
+      );
+      if (!String(customAvatar).startsWith('marimo-asset://bot/')) {
+        fail(`the custom bot icon did not load through the asset scheme: ${String(customAvatar)}`);
+      } else {
+        ok('a custom bot icon was served through marimo-asset');
+      }
+    }
+
+    /*
      * The menu, opened the way a person opens it — a click on the row's `…`,
      * not a call to a handler.
      */
@@ -1151,153 +1222,57 @@ async function main() {
       });
 
       /*
-       * Which size the dialog opens at, and what that size means.
+       * One screen, and it holds the whole app.
        *
-       * A fresh install lands on the simple screen — that is the whole promise of
-       * it, and it is one line in a store and a page of React away from being
-       * false. Counting the sections is the only way to know, because every check
-       * below reaches *into* this dialog and a section that quietly stopped being
-       * drawn would take its own coverage with it.
+       * The old shape had a switch that decided which cards existed; a build
+       * that removed the switch and forgot a card would still look like a
+       * settings page. So the check looks for the absence of the switch *and*
+       * for the presence of the sections that used to be behind it, plus the
+       * icon controls that are new here.
        */
-      const simpleScreen = await until('the settings sections', async () => {
+      const settingsScreen = await until('the settings sections', async () => {
         const value = await evaluate(`(() => {
         const sections = [...document.querySelectorAll('details.settings-section')];
         if (sections.length === 0) return undefined;
-        const box = document.querySelector('.settings-mode input[type="checkbox"]');
-        const cards = [...document.querySelectorAll('.capability-card')];
         return JSON.stringify({
           titles: sections.map((entry) => entry.querySelector('h3')?.textContent ?? ''),
           openOnArrival: sections.filter((entry) => entry.open).length,
-          mode: box?.checked ?? null,
-          choices: cards.map((card) => ({
-            label: card.querySelector('.capability-label')?.textContent ?? '',
-            chosen: card.getAttribute('aria-pressed') === 'true',
-          })),
-          /*
-           * Whether the card explains a grant that is none of the three. That
-           * sentence is the whole answer to "why is nothing lit", and a fresh
-           * install is in exactly that state when the setup flow has granted the
-           * lead the tool it hands work to a bot with.
-           */
-          handMade:
-            document
-              .querySelector('.capability-cards')
-              ?.nextElementSibling?.textContent?.includes('put together') ?? false,
+          hasModeSwitch: document.querySelector('.settings-mode') !== null,
+          capabilityCards: document.querySelectorAll('.capability-card').length,
+          botRows: document.querySelectorAll('.settings-agent').length,
+          avatarChoices: document.querySelectorAll('.settings-avatar-choice').length,
           density: document.documentElement.dataset.density ?? '',
         });
       })()`);
         return value === undefined ? undefined : JSON.parse(value);
       });
 
-      const litCards = simpleScreen.choices.filter((entry) => entry.chosen);
-      if (simpleScreen.mode !== false) {
-        fail('a fresh install opens with the power-user switch already on');
-      } else if (!simpleScreen.titles.includes('Provider')) {
-        /*
-         * The Provider card is on the simple screen, and that is deliberate
-         * rather than a leak from the power screen: the app carries no model of
-         * its own, so a fresh install that cannot answer has to be fixable from
-         * the screen it lands on. The old assertion here was the opposite, and
-         * it was right when a bundled model meant there was nothing to fix.
-         */
-        fail('a fresh install cannot reach the provider that answers for it');
-      } else if (!simpleScreen.titles.includes('Connectors')) {
-        /*
-         * The card an install adds an MCP server from belongs to the screen a
-         * first run lands on. It used to be power-only, which made the whole
-         * capability look absent to anybody who never flipped the switch — and
-         * the grant (which agent may use which connector) is the part that
-         * stays in power, because that is one switch among thirty.
-         */
-        fail('a fresh install cannot reach the connectors it has');
-      } else if (simpleScreen.titles.length < 4) {
+      if (settingsScreen.hasModeSwitch) {
+        fail('the single settings screen still draws a simple/power switch');
+      } else if (!settingsScreen.titles.includes('Provider')) {
+        fail('the settings screen cannot reach the provider that answers for it');
+      } else if (!settingsScreen.titles.includes('Connectors')) {
+        fail('the settings screen cannot reach the connectors it has');
+      } else if (!settingsScreen.titles.includes('Commands')) {
+        fail('the settings screen does not draw the command switches');
+      } else if (!settingsScreen.titles.some((title) => title.endsWith('can do'))) {
+        fail('the settings screen does not draw the per-tool switches');
+      } else if (settingsScreen.capabilityCards !== 0) {
+        fail('the settings screen still draws the setup flow\'s capability cards');
+      } else if (settingsScreen.botRows < 1) {
+        fail('the settings screen draws no bot rows');
+      } else if (settingsScreen.avatarChoices < 5) {
         fail(
-          `the simple screen has only ${String(simpleScreen.titles.length)} section(s)`,
+          `the settings screen offers ${String(settingsScreen.avatarChoices)} icon choices, not five`,
         );
-      } else if (simpleScreen.choices.length < 3) {
-        fail(
-          `the simple screen offers ${String(simpleScreen.choices.length)} choice(s)`,
-        );
-      } else if (litCards.length > 1) {
-        fail(
-          `${String(litCards.length)} of the ${String(simpleScreen.choices.length)} ability ` +
-            'cards are lit at once',
-        );
-      } else if (litCards.length === 0 && simpleScreen.handMade !== true) {
-        /*
-         * None lit is a state rather than a bug — it is what a grant put
-         * together by hand looks like, and the cards have to say so instead of
-         * leaving the user to guess why their bot matches nothing. A fresh
-         * install lands here because the setup flow granted the lead the one
-         * tool it needs to hand work to the bots the person just made.
-         */
-        fail('no ability card is lit and the card does not say why');
-      } else if (simpleScreen.openOnArrival > 0) {
+      } else if (settingsScreen.openOnArrival > 0) {
         fail('a fresh install opens with a settings section already expanded');
-      } else if (simpleScreen.density !== 'comfortable') {
-        fail(`the simple screen is drawn at density "${simpleScreen.density}"`);
+      } else if (settingsScreen.density !== 'comfortable') {
+        fail(`the settings screen is drawn at density "${settingsScreen.density}"`);
       } else {
         ok(
-          `a fresh install opens simple: ${String(simpleScreen.titles.length)} sections, ` +
-            `${String(simpleScreen.choices.length)} choices, ` +
-            `${litCards.length === 0 ? 'a hand-made grant explained' : `"${litCards[0].label}" lit`}`,
-        );
-      }
-
-      /*
-       * The switch, turned the way a person turns it.
-       *
-       * Its effect is deliberately in two places at once that neither the store nor
-       * a unit test can see together: which sections this dialog draws, and how
-       * roomy the window behind it is. Both are asserted in one look, because a
-       * switch that turned on the sections and not the density is exactly the kind
-       * of half-working that ships.
-       */
-      await evaluate(`(() => {
-      const box = document.querySelector('.settings-mode input[type="checkbox"]');
-      if (box !== null && !box.checked) box.click();
-    })()`);
-
-      const powerScreen = await until('the power screen', async () => {
-        const value = await evaluate(`(() => {
-        const sections = [...document.querySelectorAll('details.settings-section')];
-        const box = document.querySelector('.settings-mode input[type="checkbox"]');
-        return JSON.stringify({
-          count: sections.length,
-          titles: sections.map((entry) => entry.querySelector('h3')?.textContent ?? ''),
-          checked: box?.checked ?? null,
-          density: document.documentElement.dataset.density ?? '',
-        });
-      })()`);
-        const parsed = value === undefined ? undefined : JSON.parse(value);
-        /*
-         * Waited on by what the power screen *is*, not by how many sections it
-         * has. The count was the old proxy and it broke the moment a card moved
-         * to both screens: the simple screen reached the threshold and the probe
-         * returned before the switch had taken effect, which read as a switch
-         * that would not stay on. The checkbox and the density are the two
-         * effects this switch has, and neither moves when a card does.
-         */
-        return parsed?.checked === true && parsed?.density === 'compact'
-          ? parsed
-          : undefined;
-      });
-
-      if (powerScreen.checked !== true) {
-        fail('the power-user switch would not stay on');
-      } else if (!powerScreen.titles.includes('Provider')) {
-        fail('the power screen does not draw the Provider section');
-      } else if (powerScreen.titles.includes('Model')) {
-        // The Model card described an engine this app started and supervised.
-        // Nothing starts it now, so a card that describes it is a card that
-        // describes nothing.
-        fail('the power screen still draws a card for a model the app runs');
-      } else if (powerScreen.density !== 'compact') {
-        fail(`the power screen is drawn at density "${powerScreen.density}"`);
-      } else {
-        ok(
-          `the switch reveals the whole app: ${String(powerScreen.count)} sections, ` +
-            'and the window back to its usual density',
+          `settings is one screen: ${String(settingsScreen.titles.length)} sections, ` +
+            `${String(settingsScreen.avatarChoices)} icon choices, no mode switch`,
         );
       }
 

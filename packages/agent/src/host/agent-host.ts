@@ -26,6 +26,7 @@ import type {
   AgentUiEvent,
   CompactResult,
   PendingGate,
+  SessionPurpose,
   SessionSource,
   SessionSummary,
   TokenUsage,
@@ -746,6 +747,7 @@ export class AgentHost {
     profileId?: string,
     workspaceId?: string,
     source?: SessionSource,
+    purpose?: SessionPurpose,
   ): Promise<SessionSummary> {
     const state: Record<string, unknown> = {};
     if (title) {
@@ -759,6 +761,9 @@ export class AgentHost {
     }
     if (source) {
       state['source'] = source;
+    }
+    if (purpose) {
+      state['purpose'] = purpose;
     }
 
     const session = await this.sessionService.createSession({
@@ -778,7 +783,22 @@ export class AgentHost {
           messageCount: 0,
           ...(workspaceId ? {workspaceId} : {}),
           ...(source ? {source} : {}),
+          ...(purpose ? {purpose} : {}),
         };
+  }
+
+  /**
+   * What a conversation is for, for the turn that is about to run.
+   *
+   * Read from the index rather than from the in-memory active turn: a reloaded
+   * window and a restarted service both need the builder's instruction, and the
+   * conversation on disk is the state machine. An unreadable entry answers
+   * `undefined` — an ordinary chat — because losing a purpose is a duller
+   * conversation, while throwing here would be a turn that never starts.
+   */
+  async sessionPurpose(sessionId: string): Promise<SessionPurpose | undefined> {
+    const entry = await this.sessionService.getIndexEntry(sessionId);
+    return entry?.purpose;
   }
 
   /**
@@ -1667,10 +1687,10 @@ export class AgentHost {
         composeInstruction({
           base: configNow().systemPrompt,
           // Read per request for the same reason as the tools below it: someone
-          // editing how they want to be talked to while a turn is running should
-          // reach that turn's next request rather than the next turn.
-          ...(configNow().preferences !== undefined
-            ? {preferences: configNow().preferences}
+          // editing their Persona while a turn is running should reach that
+          // turn's next request rather than the next turn.
+          ...(configNow().persona !== undefined
+            ? {persona: configNow().persona}
             : {}),
           /*
            * Read per request rather than per turn: the model may have just
@@ -2478,6 +2498,7 @@ function toSummary(entry: {
   messageCount: number;
   workspaceId?: string;
   source?: SessionSource;
+  purpose?: SessionPurpose;
   model?: AgentModel;
   agentIds?: string[];
 }): SessionSummary {
@@ -2489,6 +2510,7 @@ function toSummary(entry: {
     messageCount: entry.messageCount,
     ...(entry.workspaceId ? {workspaceId: entry.workspaceId} : {}),
     ...(entry.source ? {source: entry.source} : {}),
+    ...(entry.purpose ? {purpose: entry.purpose} : {}),
     ...(entry.model ? {model: entry.model} : {}),
     /*
      * Carried only when there is more than one, so a chat with one agent reports

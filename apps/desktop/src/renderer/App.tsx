@@ -384,6 +384,85 @@ export function App(): React.JSX.Element {
   };
 
   /**
+   * Leaves the setup flow in the conversation that builds a bot.
+   *
+   * Deliberately **not** `closeSetup` followed by a reload: that reload would
+   * land on the newest conversation of the lead, which is a different chat from
+   * the one that was just created. The purpose is stored on the session, so all
+   * this has to do is make sure the lead is the active bot, start the session,
+   * and let the latch down. A failure goes back to the Setup with a sentence.
+   */
+  const startBuilderFromSetup = async (): Promise<{
+    ok: boolean;
+    problem?: string;
+  }> => {
+    if (settings === null) {
+      return {ok: false, problem: 'The settings have not loaded yet.'};
+    }
+    const lead = settings.profiles[0];
+    if (lead === undefined) {
+      return {ok: false, problem: 'This install has no bot to talk to.'};
+    }
+    try {
+      if (settings.activeProfileId !== lead.id) {
+        await agent.selectProfile(lead.id);
+      }
+      const started = await agent.startBotBuilder();
+      if (!started.ok) {
+        return started;
+      }
+      setSetupPhase('left');
+      void window.marimo
+        .call('settings.set', {patch: {setupSeen: true}})
+        .then(({settings: saved}) => {
+          setSettings(saved);
+        })
+        .catch(() => undefined);
+      return {ok: true};
+    } catch (failure) {
+      return {
+        ok: false,
+        problem: failure instanceof Error ? failure.message : String(failure),
+      };
+    }
+  };
+
+  /**
+   * The same handoff from Settings: make the lead active, start the builder,
+   * close the settings screen. A refusal stays in the dialog under the button.
+   */
+  const startBuilderFromSettings = async (): Promise<{
+    ok: boolean;
+    problem?: string;
+  }> => {
+    if (settings === null) {
+      return {ok: false, problem: 'The settings have not loaded yet.'};
+    }
+    const lead = settings.profiles[0];
+    if (lead === undefined) {
+      return {ok: false, problem: 'This install has no bot to talk to.'};
+    }
+    try {
+      if (settings.activeProfileId !== lead.id) {
+        await agent.selectProfile(lead.id);
+      }
+      const started = await agent.startBotBuilder();
+      if (!started.ok) {
+        return started;
+      }
+      setShowSettings(false);
+      setSettingsSection(null);
+      void loadSettings();
+      return {ok: true};
+    } catch (failure) {
+      return {
+        ok: false,
+        problem: failure instanceof Error ? failure.message : String(failure),
+      };
+    }
+  };
+
+  /**
    * Offers the flow again, from the short card.
    *
    * The latch goes back to `inSetup` rather than to `unknown`, so the flow is on
@@ -425,7 +504,12 @@ export function App(): React.JSX.Element {
    * key worked. The offer is already standing by the time the flow closes, so
    * this is a pause rather than a lost question.
    */
-  if (recallIntro && settings !== null && screen !== 'setup') {
+  if (
+    recallIntro &&
+    settings !== null &&
+    screen !== 'setup' &&
+    agent.sessionPurpose !== 'bot-builder'
+  ) {
     return (
       <RecallIntro
         onDone={() => {
@@ -467,6 +551,7 @@ export function App(): React.JSX.Element {
         }}
         {...(settingsSection === null ? {} : {openSection: settingsSection})}
         lastReview={agent.lastReview}
+        onStartBotBuilder={startBuilderFromSettings}
         {...(info === null ? {} : {userDataFolder: info.userData})}
       />
     );
@@ -680,6 +765,7 @@ export function App(): React.JSX.Element {
             settings={settings}
             agent={agent}
             onSettings={setSettings}
+            onStartBuilder={startBuilderFromSetup}
             onClose={closeSetup}
           />
         ) : screen === 'cannotAnswer' ? (
@@ -713,13 +799,31 @@ export function App(): React.JSX.Element {
             outbox={agent.outbox}
             live={agent.live}
             delegations={agent.delegations}
-            agents={agent.agents}
+            agents={settings?.profiles ?? agent.agents}
             leadId={leadId}
             pending={agent.pending}
             onDecide={(callId, confirmed) => {
               void agent.decide(callId, confirmed);
             }}
             onFeedback={agent.noteCorrection}
+            onBotCreated={(next) => {
+              /*
+               * Only the roster changed. A full `agent.reload()` would land on
+               * the lead's newest conversation, which after making a bot is not
+               * necessarily the builder conversation the card is in; the person
+               * is reading that thread and should stay in it.
+               */
+              setSettings((current) =>
+                current === null
+                  ? current
+                  : {
+                      ...current,
+                      profiles: next.profiles,
+                      activeProfileId: next.activeProfileId,
+                    },
+              );
+            }}
+            builder={agent.sessionPurpose === 'bot-builder'}
             busy={busy}
           />
         )}

@@ -21,8 +21,8 @@ hold more than one of them, and Marimo Bot can hand work to one.
 ```
 packages/protocol   The typed contract: zod schemas for every IPC call, the
                     AgentUiEvent union, the provider catalogue, the model pair,
-                    cron, the profile and job documents, and the two identity
-                    seeds — Marimo Bot's and a bot's. No Electron, no Node, no React.
+                    cron, the profile and job documents, and the Role/Persona
+                    seeds plus the starter roles. No Electron, no Node, no React.
 packages/agent      Everything ADK: the OpenAI-compatible client, tool set,
                     skills that compose the system instruction, the file-backed
                     memory and session stores, AgentHost, and the
@@ -197,7 +197,7 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     when they stopped rather than answering as if the folder ended there, which is
     invariant 7.
 22. **A prompt must not advertise a capability the profile does not have.** The
-    tool list and the identity agree, or the model narrates a capability it was
+    tool list and the prompt agree, or the model narrates a capability it was
     never given. `ProfileStore.create()` seeded every new profile with Marimo Bot's
     text, so a bot the user named Writer introduced itself as Marimo Bot and was told
     to hand work to other bots — with no `ask_agent` to hand anything to. What
@@ -205,17 +205,23 @@ Each of these is silent when it breaks. That is the whole reason they are listed
     delegation it never made, which reads exactly like one that did. This is
     invariant 9 one layer up, and the layer below was already right — the
     filtered tool list was correct and the prose lied about it. So there are two
-    seeds. `DEFAULT_AGENT_IDENTITY` is the agent the person talks to;
-    `botIdentityFor(name)` is a bot, which names itself, says this person made it
-    and Marimo Bot hands it work, and asks it to write for the person — what it did,
-    what it could not, what it would need — rather than work around a permission
-    it does not have. `ProfileCatalog.identitySeeds` carries them keyed by
-    profile id, so Reset puts back the seed for *that* profile and the window
-    holds neither text: a renderer with its own copy resets a bot to Marimo Bot, or
-    to a version the app never shipped. The trap in the other direction is the
-    same rule about the lead's prompt: it must not tell Marimo Bot to do everything
-    alone either, because the person paid for the bots by making them — its text
-    says when to hand work over, and that the person should hear about it.
+    seeds. `DEFAULT_AGENT_ROLE` / `DEFAULT_AGENT_PERSONA` are the agent the person
+    talks to; `botRoleFor(name, template)` / `botPersonaFor(template)` are a bot,
+    which names itself, says this person made it and Marimo Bot hands it work, and
+    asks it to write for the person — what it did, what it could not, what it would
+    need — rather than work around a permission it does not have. The starter roles
+    in `bots.ts` are the same rule at the level of a template: their Role and
+    Persona name no tool, because the capability skills are what tell the model
+    what it can do and they follow the grant. `ProfileCatalog.roleSeeds` and
+    `personaSeeds` carry the texts keyed by profile id, so Reset puts back the seed
+    for *that* profile and the window holds neither: a renderer with its own copy
+    resets a bot to Marimo Bot, or to a version the app never shipped. The trap in
+    the other direction is the same rule about the lead's prompt: it must not tell
+    Marimo Bot to do everything alone either, because the person paid for the bots
+    by making them — its text says when to hand work over, and that the person
+    should hear about it. The builder's turn instruction is not an exception: the
+    guided path grants `draft_bot` before the conversation starts, and
+    `startBuilderSession` refuses in code if it is missing.
 
 ## Documents
 
@@ -309,8 +315,8 @@ to the name's initial. An uploaded picture is not a document in a Space and is
 never indexed as one.
 
 **There is one settings screen, and it is not a mode.** The simple/power switch
-was removed because it made the identity and the per-tool switches reachable only
-by leaving the everyday screen. Do not add a setting that decides which settings
+was removed because it made the Role and the per-tool switches reachable only by
+leaving the everyday screen. Do not add a setting that decides which settings
 exist; if a control is worth having, put it on the one screen.
 
 ## The loop

@@ -1456,6 +1456,192 @@
   font-style: normal;
 }
 
+/*
+ * The three ways to make a bot, and the starter roles themselves.
+ *
+ * Same card language as the capability choices, because they are the same kind
+ * of decision: this one, not a list of switches. The starter grid is two columns
+ * on a wide panel and one on a narrow one; the path cards are a stack, because
+ * there are only three and each one is a paragraph.
+ */
+.setup-path-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.setup-path-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.setup-path-card:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--accent-border);
+}
+
+.setup-path-label {
+  color: var(--text);
+  font-size: var(--text-base);
+}
+
+.setup-path-blurb {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-style: normal;
+}
+
+.bot-template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.bot-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.bot-template-card:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.bot-template-card[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.bot-template-label {
+  color: var(--text);
+  font-size: var(--text-base);
+}
+
+.bot-template-blurb {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-style: normal;
+}
+
+/*
+ * The builder's opening question and the draft card it ends in. Both are drawn
+ * in the transcript, so they use the same surface and radius as an answer
+ * bubble rather than a settings card.
+ */
+.builder-intro,
+.bot-draft {
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.builder-intro-head,
+.bot-draft-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.builder-intro-who,
+.bot-draft-name {
+  color: var(--text);
+  font-size: var(--text-base);
+}
+
+.builder-intro-tag,
+.bot-draft-tag {
+  padding: 1px var(--space-2);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.builder-intro-question {
+  margin: 0 0 var(--space-2);
+  color: var(--text);
+  font-size: var(--text-base);
+}
+
+.builder-intro-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.bot-draft-problem,
+.bot-draft-created {
+  color: var(--text-muted);
+}
+
+.bot-draft-abilities,
+.bot-draft-role {
+  margin: var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.bot-draft-abilities summary,
+.bot-draft-role summary {
+  cursor: pointer;
+}
+
+.bot-draft-abilities ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+}
+
+.bot-draft-role pre {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  overflow-x: auto;
+  background: var(--surface-sunken, var(--surface));
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+
+.new-bot {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.new-bot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  color: var(--text);
+  font-size: var(--text-base);
+}
+
 .settings-group {
   margin: var(--space-3) 0 0;
   font-size: var(--text-xs);

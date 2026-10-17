@@ -44,12 +44,12 @@ describe('the profile schema', () => {
   });
 
   /*
-   * `preferences` is optional on purpose, and this is the test that keeps it so:
+   * `persona` is optional on purpose, and this is the test that keeps it so:
    * `ProfileStore.parseFile` skips a profile that fails this schema, and a file
    * whose every profile was skipped is quarantined and replaced with a fresh one.
    * A required field here would lose every existing agent on upgrade.
    */
-  it('reads a profile written before preferences existed', () => {
+  it('reads a profile written before Persona existed', () => {
     const parsed = agentProfileSchema.safeParse({
       id: 'agent',
       name: 'Agent',
@@ -58,12 +58,28 @@ describe('the profile schema', () => {
       enabledSkills: [],
     });
     expect(parsed.success).toBe(true);
-    expect(
-      parsed.success ? parsed.data.preferences : 'unparsed',
-    ).toBeUndefined();
+    expect(parsed.success ? parsed.data.persona : 'unparsed').toBeUndefined();
   });
 
-  it('carries the preferences the user wrote', () => {
+  it('carries the Persona the person wrote', () => {
+    const parsed = agentProfileSchema.parse({
+      id: 'agent',
+      name: 'Agent',
+      identity: 'You are an agent.',
+      persona: 'Dry and precise. Call me Tarlow.',
+      enabledTools: [],
+      enabledSkills: [],
+    });
+    expect(parsed.persona).toBe('Dry and precise. Call me Tarlow.');
+  });
+
+  /*
+   * The old field is still readable because existing files have it and the store
+   * adopts it on the way in. This build does not write it; keeping it on the
+   * schema is what lets an upgrade read the words instead of quarantining the
+   * roster.
+   */
+  it('still reads the old preferences field', () => {
     const parsed = agentProfileSchema.parse({
       id: 'agent',
       name: 'Agent',
@@ -76,7 +92,7 @@ describe('the profile schema', () => {
   });
 
   /*
-   * The space an agent starts new chats in, and the same rule as `preferences`
+   * The space an agent starts new chats in, and the same rule as `persona`
    * above: it is optional because `ProfileStore.parseFile` skips a profile this
    * schema refuses, and a file whose every profile was skipped is quarantined —
    * so a required field here would lose every existing agent on upgrade.
@@ -121,14 +137,14 @@ describe('the profile schema', () => {
     ).toBe(false);
   });
 
-  it('lets a patch clear preferences with an empty string', () => {
+  it('lets a patch clear Persona with an empty string', () => {
     const parsed = agentCallSchemas['profiles.update'].parse({
       profileId: 'agent',
-      patch: {preferences: ''},
+      patch: {persona: ''},
     });
     // Not `undefined`: "clear it" and "say nothing about it" are different
     // requests, and the store tells them apart by exactly this.
-    expect(parsed.patch.preferences).toBe('');
+    expect(parsed.patch.persona).toBe('');
   });
 
   /*

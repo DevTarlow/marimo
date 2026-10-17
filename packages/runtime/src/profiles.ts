@@ -47,21 +47,45 @@ export interface ProfileSeed {
 
 export interface ProfileStoreOptions {
   file: string;
-  /** Identity the first profile — the lead — starts with. */
-  defaultIdentity: string;
-  /**
-   * Identity a bot the user makes starts with, from the name it was given.
-   *
-   * Deliberately not `defaultIdentity`: that text describes the lead, and a bot
-   * seeded with it would introduce itself as Marimo Bot and be told to hand work to
-   * bots it has no tool to do. Naming itself is the one thing a bot's seed has
-   * to do, which is why this takes the name rather than being a constant.
-   */
-  botIdentity: (name: string) => string;
+  /** Role the first profile — the lead — starts with. */
+  defaultRole: string;
+  /** Persona the first profile starts with. */
+  defaultPersona: string;
   /** Tool names a brand-new profile starts with. */
   defaultTools: string[];
   /** Skill names a brand-new profile starts with. */
   defaultSkills: string[];
+}
+
+/**
+ * What a caller has already resolved when it asks for a new profile.
+ *
+ * The store owns the file, the unique name and the defaults; it does not own
+ * the starter roles. A Role and Persona are computed by the runtime, from the
+ * draft the person reviewed, and handed here finished — which is what keeps the
+ * protocol's template text out of a store that also has to run in the headless
+ * runner without caring what a Writer is.
+ */
+export interface NewProfileSeed {
+  /** What the person typed, before it is made unique. */
+  name?: string;
+  /**
+   * The Role text, as a function of the name the store settles on.
+   *
+   * A function rather than a finished string because the store is what makes a
+   * duplicate name unique, and a bot that answers to "Writer 2" must not be told
+   * it is "Writer" in its own Role. The Persona does not take the name — it is
+   * the character, and the Role is where a bot learns what it is called.
+   */
+  role: (name: string) => string;
+  /** The finished Persona text, or absent for a bot that has none. */
+  persona?: string;
+  /** The grant, already filtered against the tools this install has. */
+  tools?: string[];
+  avatar?: AgentProfile['avatar'];
+  templateId?: string;
+  /** The draft card that asked, when one did. */
+  createdFromCall?: string;
 }
 
 export interface ProfileSnapshot {
@@ -242,27 +266,34 @@ export class ProfileStore {
     return activeProfileOf(await this.load());
   }
 
-  /** Creates a profile and switches to it, so "New agent" is one click. */
-  async create(name?: string): Promise<AgentProfile> {
+  /**
+   * Creates a profile from a resolved seed and switches to it.
+   *
+   * The Role and Persona arrive finished rather than as a name to build from,
+   * because a starter role's text is protocol data and this store has no
+   * business knowing what a Writer is. What the store still owns is the unique
+   * label: two agents with the same name are indistinguishable in the picker, so
+   * a new one always gets a distinct one.
+   */
+  async create(seed: NewProfileSeed): Promise<AgentProfile> {
     return await this.withLock(async () => {
       const file = await this.load();
-      /*
-       * Two agents with the same name are indistinguishable in the picker, so a
-       * new one always gets a distinct label. The identity is built from that
-       * label rather than from what was typed, so a bot called "Agent 2" says so
-       * instead of naming the one that already existed.
-       */
-      const unique = uniqueName(file.profiles, name?.trim() || 'Agent');
+      const unique = uniqueName(file.profiles, seed.name?.trim() || 'Agent');
       const profile: AgentProfile = {
         id: randomUUID(),
         name: unique,
-        identity: this.options.botIdentity(unique),
+        identity: seed.role(unique),
         // A bot made after the lead gets the next preset rather than a copy of
         // the lead's mark, so two bots are distinguishable before either is
         // edited. It is a default, not a lock: Settings changes it like a name.
-        avatar: defaultBotAvatarFor(file.profiles.length),
-        enabledTools: [...this.options.defaultTools],
+        avatar: seed.avatar ?? defaultBotAvatarFor(file.profiles.length),
+        enabledTools: [...(seed.tools ?? this.options.defaultTools)],
         enabledSkills: [...this.options.defaultSkills],
+        ...(seed.persona === undefined ? {} : {persona: seed.persona}),
+        ...(seed.templateId === undefined ? {} : {templateId: seed.templateId}),
+        ...(seed.createdFromCall === undefined
+          ? {}
+          : {createdFromCall: seed.createdFromCall}),
       };
       await this.writeFile({
         ...file,
@@ -320,11 +351,10 @@ export class ProfileStore {
         /*
          * An empty string is kept rather than dropped: "clear it" and "leave it
          * alone" are different requests, and only one of them arrives as
-         * `undefined`. The composer treats a blank preference as absent.
+         * `undefined`. A cleared Persona is a real answer — the template's
+         * character gone — and the prompt builder treats blank as absent.
          */
-        ...(clean.preferences !== undefined
-          ? {preferences: clean.preferences}
-          : {}),
+        ...(clean.persona !== undefined ? {persona: clean.persona} : {}),
         ...(clean.enabledTools !== undefined
           ? {enabledTools: [...new Set(clean.enabledTools)]}
           : {}),
@@ -430,12 +460,13 @@ export class ProfileStore {
       // The lead is Marimo Bot, and the moss mark is the one icon that says so.
       avatar: {...DEFAULT_BOT_AVATAR},
       /*
-       * The lead, and the only profile `defaultIdentity` is for: it is first in
-       * the document, which is what `AgentRuntime.catalog` reads to decide whose
-       * Reset seed is the app's constant. A bot made later is seeded from its own
-       * name instead — see `create`.
+       * The lead, and the only profile `defaultRole` is for: it is first in the
+       * document, which is what `AgentRuntime.catalog` reads to decide whose
+       * Reset seed is the app's constant. A bot made later arrives with its own
+       * Role and Persona — see `create`.
        */
-      identity: seed?.systemPrompt?.trim() || this.options.defaultIdentity,
+      identity: seed?.systemPrompt?.trim() || this.options.defaultRole,
+      persona: this.options.defaultPersona,
       enabledTools: [...this.options.defaultTools],
       enabledSkills: [...this.options.defaultSkills],
     };
@@ -529,9 +560,17 @@ function parseFile(raw: unknown): ProfileFile | undefined {
      * existing bot gains one without a migration write. The position in the
      * roster is the seed and it is deterministic: the same file read twice gives
      * the same icons, and the next real write persists them.
+     *
+     * The old "How to talk to me" text is adopted the same way. It has to happen
+     * on read rather than as a migration because profiles are version 1 and a
+     * version bump for a move inside one profile would quarantine a roster on an
+     * upgrade if anything went wrong. Moving it here means the next write drops
+     * the old field, and a read that never writes still sees the words.
      */
-    const avatar = parsed.data.avatar ?? defaultBotAvatarFor(profiles.length);
-    profiles.push({...parsed.data, avatar});
+    const {preferences, ...rest} = parsed.data;
+    const persona = adoptPersona(rest.persona, preferences);
+    const avatar = rest.avatar ?? defaultBotAvatarFor(profiles.length);
+    profiles.push({...rest, ...(persona === undefined ? {} : {persona}), avatar});
     const carried = legacyFrom(entry, parsed.data.id);
     if (carried !== undefined) {
       legacy.push(carried);
@@ -553,6 +592,30 @@ function parseFile(raw: unknown): ProfileFile | undefined {
     activeProfileId,
     ...(legacy.length > 0 ? {legacy} : {}),
   };
+}
+
+/**
+ * The Persona a profile has, with the old "How to talk to me" text folded in.
+ *
+ * The common case is one of them: a profile written before the split has only
+ * `preferences`, and one written after has only `persona`. Both at once is a
+ * hand-edited or transitional file, and losing either would be losing words the
+ * person wrote — so they are kept, with the old text under a heading that says
+ * what it is. Blank is absent, which is what the prompt builder reads.
+ */
+function adoptPersona(
+  persona: string | undefined,
+  preferences: string | undefined,
+): string | undefined {
+  const own = persona?.trim() ?? '';
+  const old = preferences?.trim() ?? '';
+  if (own.length === 0) {
+    return old.length === 0 ? undefined : old;
+  }
+  if (old.length === 0) {
+    return own;
+  }
+  return `${own}\n\n## How I want to be spoken to\n\n${old}`;
 }
 
 /**

@@ -49,12 +49,18 @@ import type {
   WebSearchProvider,
 } from '@marimo/agent';
 import {
-  DEFAULT_AGENT_IDENTITY,
+  availableBotTemplates,
+  botPersonaFor,
+  botRoleFor,
+  botTemplateById,
+  BOT_AVATAR_PRESETS,
+  DEFAULT_AGENT_PERSONA,
+  DEFAULT_AGENT_ROLE,
   DEFAULT_DREAM_KEEP_LOGS,
   DEFAULT_DREAM_RESULT_BYTES,
-  botIdentityFor,
+  DRAFT_BOT_TOOL,
 } from '@marimo/protocol';
-import type {ProviderId} from '@marimo/protocol';
+import type {BotDraft, ProviderId, SessionPurpose} from '@marimo/protocol';
 import type {
   AgentModel,
   AgentProfile,
@@ -96,6 +102,7 @@ import {SettingsStore} from '../settings.js';
 import {SkillStore} from '../skills.js';
 import {WorkspaceStore, workspaceRootFor} from '../workspaces.js';
 import {resolveAgentConfig} from './resolve.js';
+import {BOT_BUILDER_INSTRUCTION} from './bot-builder.js';
 import {turnInstruction} from './pet-turn.js';
 import {turnContext} from './turn-context.js';
 
@@ -239,22 +246,24 @@ export class AgentRuntime {
       /*
        * Two seeds, because there are two kinds of profile and the texts are not
        * interchangeable. `freshFile` makes the first one at install — the lead,
-       * the agent the person talks to — and `DEFAULT_AGENT_IDENTITY` describes
-       * exactly that one. Every profile `create` makes afterwards is a bot the
-       * user named, and `botIdentityFor` seeds it with that name.
+       * the agent the person talks to — and `DEFAULT_AGENT_ROLE` /
+       * `DEFAULT_AGENT_PERSONA` describe exactly that one. Every profile
+       * `create` makes afterwards is a bot, and its Role and Persona are
+       * resolved from the starter role the person chose.
        *
        * A bot handed the lead's text is the defect these two exist to prevent:
-       * it introduces itself as Marimo Bot — the one thing the bots feature is built
-       * so that a user never sees — and it is told to hand work to bots, which
-       * it has no `ask_agent` to do.
+       * it introduces itself as Marimo Bot — the one thing the bots feature is
+       * built so that a user never sees — and it is told to hand work to bots,
+       * which it has no `ask_agent` to do.
        *
-       * The identity is seeded rather than left blank because an agent with no
-       * persona at all is not "unconfigured" — it is one whose replies have no
-       * stated idea of who they are for, and the user has no text to edit back
-       * to. It stays editable, and Settings resets each profile to its own seed.
+       * Both are seeded rather than left blank because an agent with no stated
+       * idea of who it is for narrates itself from whatever is left, and the
+       * user has no text to edit back to. The Role stays editable and Reset puts
+       * the seed back; the Persona is the person's and is never reset
+       * automatically.
        */
-      defaultIdentity: DEFAULT_AGENT_IDENTITY,
-      botIdentity: botIdentityFor,
+      defaultRole: DEFAULT_AGENT_ROLE,
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       /*
        * A brand-new profile starts with no capabilities: every one of those is
        * something the user turns on, which is the whole shape of this app. What
@@ -425,28 +434,50 @@ export class AgentRuntime {
        */
       presets: capabilityPresets(tools.map((tool) => tool.name)),
       /*
-       * And the one tool the setup flow grants by name, carried the same way the
-       * presets are: the name is the agent package's, and the window offers a
-       * checkbox that writes it into the lead's profile. Named here only when
-       * the narrowed tool list actually holds it, so a build whose tool set lost
-       * it cannot offer a box that grants nothing.
+       * The starter roles, narrowed the same way. A card that offered a tool
+       * this build does not carry would be a choice that grants nothing.
+       */
+      botTemplates: availableBotTemplates(tools.map((tool) => tool.name)),
+      /*
+       * And the two tools the setup flow grants by name, carried the same way
+       * the presets are: the names belong to the agent package, and a window
+       * with its own copy of a string would grant a name nothing answers to.
+       * Named here only when the narrowed tool list actually holds them.
        */
       ...(tools.some((tool) => tool.name === ASK_AGENT_TOOL)
         ? {delegationTool: ASK_AGENT_TOOL}
         : {}),
+      ...(tools.some((tool) => tool.name === DRAFT_BOT_TOOL)
+        ? {builderTool: DRAFT_BOT_TOOL}
+        : {}),
       /*
-       * What Reset puts back, per profile. The lead is the *first profile in the
-       * document* — the one `freshFile` created at install — and it is the only
-       * one `DEFAULT_AGENT_IDENTITY` was written for; every other profile is a
-       * bot, and its seed is built from the name it answers to. Delete the lead
-       * and the next first profile becomes the lead, which is exactly what the
-       * seeding rule already does for it, so this stays a fact about position
-       * rather than about an id that could go stale.
+       * What the two Reset buttons put back, per profile. The lead is the *first
+       * profile in the document* — the one `freshFile` created at install — and
+       * it is the only one `DEFAULT_AGENT_ROLE` / `DEFAULT_AGENT_PERSONA` were
+       * written for; every other profile is a bot, seeded from its starter role
+       * or from its own name. Delete the lead and the next first profile becomes
+       * the lead, which is exactly what the seeding rule already does for it, so
+       * this stays a fact about position rather than about an id that could go
+       * stale.
+       *
+       * The two maps are separate because the buttons are: Role's Reset is safe
+       * to press, and Persona's "use the template text" is the one that replaces
+       * words the person wrote.
        */
-      identitySeeds: Object.fromEntries(
+      roleSeeds: Object.fromEntries(
         profiles.map((profile, index) => [
           profile.id,
-          index === 0 ? DEFAULT_AGENT_IDENTITY : botIdentityFor(profile.name),
+          index === 0
+            ? DEFAULT_AGENT_ROLE
+            : botRoleFor(profile.name, botTemplateById(profile.templateId)),
+        ]),
+      ),
+      personaSeeds: Object.fromEntries(
+        profiles.map((profile, index) => [
+          profile.id,
+          index === 0
+            ? DEFAULT_AGENT_PERSONA
+            : botPersonaFor(botTemplateById(profile.templateId)),
         ]),
       ),
     };
@@ -503,8 +534,50 @@ export class AgentRuntime {
     return updated;
   }
 
-  async createProfile(name?: string): Promise<AgentProfile> {
-    return await this.profileStore.create(name);
+  /**
+   * Makes a bot from the draft the person reviewed, and nothing else.
+   *
+   * The draft is allowed to be empty: that is the blank bot Settings has always
+   * made. Everything the card did not decide is filled here from the starter
+   * role or from the defaults, and the tools are filtered against what this
+   * install actually has — a draft naming a tool this build does not carry must
+   * grant nothing rather than store a name the host will silently drop.
+   *
+   * The Role is handed to the store as a function of the name because the store
+   * is what makes a duplicate unique; see `NewProfileSeed`.
+   */
+  async createProfile(
+    draft: BotDraft = {},
+    sourceCallId?: string,
+  ): Promise<AgentProfile> {
+    const template = botTemplateById(draft.templateId);
+    const catalog = await this.catalog();
+    const available = new Set(catalog.tools.map((tool) => tool.name));
+    const requested = draft.tools ?? template?.tools ?? [...SAFE_DEFAULT_TOOLS];
+    const tools = [...new Set(requested)].filter((name) =>
+      available.has(name),
+    );
+    const avatarId = draft.avatar ?? template?.avatar;
+    const avatar = BOT_AVATAR_PRESETS.some((preset) => preset.id === avatarId)
+      ? {kind: 'preset' as const, id: avatarId as string}
+      : undefined;
+    /*
+     * Absent and empty are different answers here. Absent is a caller that
+     * decided nothing — the step-by-step and starter forms — so the seed
+     * applies. An empty string is somebody who cleared the box in the review
+     * card, and storing the seed over that would be the app overruling them.
+     */
+    const persona = draft.persona;
+    const name = draft.name ?? template?.suggestedName;
+    return await this.profileStore.create({
+      ...(name === undefined ? {} : {name}),
+      role: (resolved) => botRoleFor(resolved, template),
+      ...(persona === undefined ? {persona: botPersonaFor(template)} : {persona}),
+      tools,
+      ...(avatar === undefined ? {} : {avatar}),
+      ...(template === undefined ? {} : {templateId: template.id}),
+      ...(sourceCallId === undefined ? {} : {createdFromCall: sourceCallId}),
+    });
   }
 
   async selectProfile(profileId: string): Promise<AgentProfile> {
@@ -1320,6 +1393,40 @@ export class AgentRuntime {
   }
 
   /**
+   * Starts the conversation that makes a bot.
+   *
+   * The tool is checked here rather than left to the instruction: the builder
+   * conversation is a prompt, and a prompt that tells Marimo to call something
+   * it was not granted is exactly the invariant about absent capabilities. The
+   * window grants the tool before asking, so this is the code-level backstop.
+   *
+   * Nothing is created here. The purpose is written onto the session so every
+   * turn carries the builder instruction, and the window draws the opening
+   * question from the same constant the instruction quotes.
+   */
+  async startBuilderSession(profileId: string): Promise<SessionSummary> {
+    const profile = await this.profileFor(profileId);
+    if (!profile) {
+      throw new Error(`Unknown bot: ${profileId}`);
+    }
+    if (!profile.enabledTools.includes(DRAFT_BOT_TOOL)) {
+      throw new Error(
+        'Marimo Bot cannot help make a bot because the draft-bot tool is ' +
+          'switched off for it. Turn it on in Settings and try again.',
+      );
+    }
+    const host = await this.ensureHost(profileId);
+    const purpose: SessionPurpose = 'bot-builder';
+    return await host.createSession(
+      'Making a bot',
+      profileId,
+      await this.spaceFor(profile),
+      undefined,
+      purpose,
+    );
+  }
+
+  /**
    * The space a new conversation is filed in.
    *
    * Three answers, in this order and no other: the space the *caller* named —
@@ -1565,20 +1672,38 @@ export class AgentRuntime {
      * you are about to answer" rather than "how long since they last spoke".
      */
     const activity = await result.host.sessionActivity(sessionId);
-    const instruction = turnInstruction(
-      origin,
-      (await this.settingsStore.load()).companion.answerLength,
-      turnContext({
-        now: new Date(),
+    /*
+     * The builder instruction goes last, after the ordinary turn context. It is
+     * the most specific thing this turn is for, and it is a stored fact about
+     * the conversation rather than a flag the window has to remember across a
+     * reload.
+     */
+    const purpose = await result.host.sessionPurpose(sessionId);
+    const instruction = [
+      turnInstruction(
         origin,
-        ...(activity.lastActivity === undefined
-          ? {}
-          : {lastActivity: activity.lastActivity}),
-        firstExchange: activity.firstExchange,
-        text,
-      }),
+        (await this.settingsStore.load()).companion.answerLength,
+        turnContext({
+          now: new Date(),
+          origin,
+          ...(activity.lastActivity === undefined
+            ? {}
+            : {lastActivity: activity.lastActivity}),
+          firstExchange: activity.firstExchange,
+          text,
+        }),
+      ),
+      purpose === 'bot-builder' ? BOT_BUILDER_INSTRUCTION : undefined,
+    ]
+      .filter((part): part is string => part !== undefined)
+      .join('\n\n');
+    yield* result.host.run(
+      sessionId,
+      text,
+      instruction.length > 0 ? instruction : undefined,
+      profileId,
+      as,
     );
-    yield* result.host.run(sessionId, text, instruction, profileId, as);
   }
 
   async *approve(

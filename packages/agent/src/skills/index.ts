@@ -1,14 +1,14 @@
 /**
  * The composed system instruction.
  *
- * The user's prompt says who the agent is; this module says how it works and
- * what it currently remembers. The protocol and the memory block are appended by
- * the agent layer rather than stored in settings, so a prompt saved by an older
- * build still gets both.
+ * The profile's Role says what the agent is for; its Persona says who it is.
+ * This module says how it works and what it currently remembers. The protocol
+ * and the memory block are appended by the agent layer rather than stored in
+ * settings, so a prompt saved by an older build still gets both.
  *
- * The one piece of the prompt the app does not own is `preferences`: text the
- * user wrote about how they want to be talked to. It rides here, beside the
- * identity, because that is what it disagrees with.
+ * The one piece of the prompt the app does not own is `persona`: the person's
+ * description of the character, the job and how they want to be spoken to. It
+ * rides here, after the Role, because that is what it disagrees with.
  *
  * What is *in* the prompt is a property of the profile's tools, not of a second
  * list of switches. The operating protocol is unconditional, because the app's
@@ -44,20 +44,22 @@ const BUILT_IN_NAMES: ReadonlySet<string> = new Set(
 );
 
 export interface ComposeInstructionOptions {
-  /** The profile's identity: persona and formatting. */
+  /** The profile's Role: what it is for, what it may claim, and its standards. */
   base: string;
   /**
-   * Standing instructions the user wrote about how they want to be talked to.
+   * The person's Persona: character, the job in their words, and how they want
+   * to be spoken to.
    *
-   * Its position is the reason it is a field rather than more text in `base`. The
-   * conflicts that actually happen are with the identity's own manner lines —
-   * "funny when it is funny" against "skip the jokes, I have had a day" — so the
-   * user's words have to come *after* the identity to win them. They come
-   * before the protocol because the protocol is the app's method rules and is
-   * meant to be unbeatable: a preference can ask for a different voice, not for a
-   * claim that a tool ran when it did not. Absent or blank means they wrote none.
+   * Its position is the reason it is a field rather than more text in `base`.
+   * The conflicts that actually happen are with the Role's own defaults —
+   * "be dry" against "be warm, I have had a day" — so the person's words have to
+   * come *after* the Role to win them. They come before the protocol because the
+   * protocol is the app's method rules and is meant to be unbeatable: a Persona
+   * can ask for a different voice, not for a claim that a tool ran when it did
+   * not, and not for a tool the profile was never given. Absent or blank means
+   * they wrote none.
    */
-  preferences?: string;
+  persona?: string;
   /** Current memory.md contents, or `''` when there is none. */
   memory: string;
   /**
@@ -112,7 +114,7 @@ export function renderSkills(skills: readonly Skill[]): string {
 
 export function composeInstruction({
   base,
-  preferences,
+  persona,
   memory: memoryText,
   instruction,
   tools,
@@ -130,13 +132,11 @@ export function composeInstruction({
   ];
   const memoryBody =
     memoryText.trim().length > 0 ? memoryText.trim() : EMPTY_MEMORY;
-  const preferencesBody = preferences?.trim() ?? '';
+  const personaBody = persona?.trim() ?? '';
 
   const sections = [
     base.trim(),
-    preferencesBody.length > 0
-      ? `# The user's preferences\n\n${preferencesBody}`
-      : '',
+    personaBody.length > 0 ? `# Persona\n\n${personaBody}` : '',
     reasoning ? `# Operating protocol\n\n${reasoning.instructions}` : '',
     capabilitySkills.length > 0
       ? `# Skills\n\n${renderSkills(capabilitySkills)}`

@@ -9,11 +9,14 @@
  */
 import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 
+import {DRAFT_BOT_TOOL} from '@marimo/protocol';
 import type {AgentProfile, PendingGate, TranscriptMessage} from '@marimo/protocol';
 
 import {shouldFollow, shouldOfferJump} from '../scroll.js';
 import {participantFor} from '../participants.js';
 import {Copy, Markdown} from './Markdown.js';
+import {BotBuilderIntro} from './BotBuilderIntro.js';
+import {BotDraftCard} from './BotDraftCard.js';
 
 import type {Delegation, LiveToolCall, LiveTurn} from '../hooks/useAgent.js';
 
@@ -208,10 +211,16 @@ function ApprovalCard({
 
 function Message({
   message,
+  agents,
+  leadId,
   author,
   onFeedback,
+  onBotCreated,
 }: {
   message: TranscriptMessage;
+  /** The roster, for a draft card's receipt and its restored lead. */
+  agents: readonly AgentProfile[];
+  leadId: string | undefined;
   /**
    * Who wrote it, when that is not the conversation's lead. Absent for every
    * message in a chat with one participant, which is most of them.
@@ -222,6 +231,11 @@ function Message({
     excerpt: string,
     correction?: string,
   ) => Promise<boolean>;
+  onBotCreated?: (next: {
+    profiles: AgentProfile[];
+    activeProfileId: string;
+    created: AgentProfile;
+  }) => void;
 }): React.JSX.Element {
   /**
    * Whether the correction box is open, and what has been typed into it.
@@ -278,9 +292,19 @@ function Message({
       )}
       {message.toolCalls !== undefined && message.toolCalls.length > 0 && (
         <div className="calls">
-          {message.toolCalls.map((call) => (
-            <ToolCall key={call.callId} call={call} />
-          ))}
+          {message.toolCalls.map((call) =>
+            call.tool === DRAFT_BOT_TOOL ? (
+              <BotDraftCard
+                key={call.callId}
+                call={call}
+                profiles={agents}
+                leadId={leadId}
+                {...(onBotCreated === undefined ? {} : {onBotCreated})}
+              />
+            ) : (
+              <ToolCall key={call.callId} call={call} />
+            ),
+          )}
         </div>
       )}
       {message.text.length > 0 && (
@@ -381,6 +405,8 @@ export function Transcript({
   leadId,
   onDecide,
   onFeedback,
+  onBotCreated,
+  builder,
   busy,
 }: {
   messages: TranscriptMessage[];
@@ -421,9 +447,25 @@ export function Transcript({
     excerpt: string,
     correction?: string,
   ) => Promise<boolean>;
+  /**
+   * A bot was made from a draft card, so the window's settings copy is stale.
+   * Absent in a transcript with nowhere to put it, which draws the card's
+   * receipt but leaves the rail to the next reload.
+   */
+  onBotCreated?: (next: {
+    profiles: AgentProfile[];
+    activeProfileId: string;
+    created: AgentProfile;
+  }) => void;
+  /**
+   * Whether this is the conversation that makes a bot. It changes the opening:
+   * a pinned question from Marimo instead of the empty-chat invitation.
+   */
+  builder?: boolean;
   busy: boolean;
 }): React.JSX.Element {
   const empty =
+    !builder &&
     messages.length === 0 &&
     outbox === null &&
     live === null &&
@@ -519,6 +561,12 @@ export function Transcript({
       ref={view}
       onScroll={onScroll}
     >
+      {builder === true && (
+        <BotBuilderIntro
+          lead={agents.find((entry) => entry.id === leadId)}
+        />
+      )}
+
       {empty && (
         <div className="empty">
           <img className="empty-mark" src="./marimo-logo.png" alt="" />
@@ -548,8 +596,11 @@ export function Transcript({
           <Message
             key={message.id}
             message={message}
+            agents={agents}
+            leadId={leadId}
             {...(other === undefined ? {} : {author: other})}
             {...(onFeedback === undefined ? {} : {onFeedback})}
+            {...(onBotCreated === undefined ? {} : {onBotCreated})}
           />
         );
       })}
@@ -571,10 +622,21 @@ export function Transcript({
                  * helper's thread instead — the hook files it there — so anything
                  * still in this list is the lead's own, or the delegation itself.
                  */
-                return work === undefined ? (
-                  <ToolCall key={call.callId} call={call} />
+                if (work !== undefined) {
+                  return (
+                    <Thread key={call.callId} work={work} open={threadOpen(work)} />
+                  );
+                }
+                return call.tool === DRAFT_BOT_TOOL ? (
+                  <BotDraftCard
+                    key={call.callId}
+                    call={call}
+                    profiles={agents}
+                    leadId={leadId}
+                    {...(onBotCreated === undefined ? {} : {onBotCreated})}
+                  />
                 ) : (
-                  <Thread key={call.callId} work={work} open={threadOpen(work)} />
+                  <ToolCall key={call.callId} call={call} />
                 );
               })}
               {unplaced.map(([callId, work]) => (

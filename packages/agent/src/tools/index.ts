@@ -24,6 +24,7 @@ import type {AgentConfig} from '../config.js';
 import {MemoryStore} from '../memory/index.js';
 import {ASK_AGENT_TOOL, createAskAgentTool} from './ask-agent-tool.js';
 import type {AgentDelegation} from './ask-agent-tool.js';
+import {createDraftBotTool} from './bot-tools.js';
 import {deskTools} from './desk-tools.js';
 import type {DeskService} from './desk-tools.js';
 import {discordTools} from './discord-tools.js';
@@ -338,6 +339,9 @@ const TOOL_BLURBS: Record<string, string> = {
   ask_agent:
     'Hand a piece of work to one of your other bots by name, and get its ' +
     'answer back. It cannot see this chat, so the task has to stand alone.',
+  draft_bot:
+    'Draft a new bot for you to review. It never creates one on its own: you ' +
+    'see the name, character and abilities in a card and decide.',
   recall:
     'Search your space and its own notes by what you mean, not by the exact words.',
   read_memory: 'Read its own notes about you and this space.',
@@ -536,6 +540,15 @@ function baseTools(config: AgentConfig, deps: ToolDependencies): BaseTool[] {
   if (deps.delegate) {
     tools.push(createAskAgentTool(deps.delegate, deps.delegate));
   }
+
+  /*
+   * The bot drafter, before the profile's selection for the same reason: it is
+   * a capability like any other, granted by the lead's profile rather than by
+   * the setup flow. The setup flow adds it when somebody chooses the guided
+   * path; a profile without it is never offered it, which is what keeps the
+   * builder instruction from asking for a call that cannot happen.
+   */
+  tools.push(createDraftBotTool());
 
   const granted = filterTools(tools, config.enabledTools);
 

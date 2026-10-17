@@ -1,10 +1,17 @@
 /**
- * The last step of the setup flow: what should answer.
+ * The first step of the setup flow: what should answer.
  *
- * This is the step the whole flow exists for, because it is the one thing the
- * app cannot do for itself. It carries no model, so a fresh install says nothing
- * until somebody points it at a service, and the choice is more than a name: an
- * address, a key, and which of that service's models to use.
+ * It moved to the front when the flow gained a guided bot builder. Marimo cannot
+ * help make a bot before the app can answer, and a wizard that asks for a Space
+ * and a bot before it has a model is asking somebody to describe work nothing
+ * can do yet. So this is the one required step: the rest of the flow is offered
+ * after it, and "Set this up later" closes the flow rather than continuing into
+ * screens that cannot work.
+ *
+ * This is still the step the whole flow exists for, because it is the one thing
+ * the app cannot do for itself. It carries no model, so a fresh install says
+ * nothing until somebody points it at a service, and the choice is more than a
+ * name: an address, a key, and which of that service's models to use.
  *
  * Three deliberate differences from the provider card in Settings, which is the
  * same setup for somebody who already knows the app:
@@ -42,17 +49,17 @@ export function SetupProvider({
   settings,
   onSettings,
   onBack,
-  onDone,
+  onNext,
+  onLater,
 }: {
   settings: PublicSettings;
   /** The write's own answer, so this step and the window cannot disagree. */
   onSettings: (next: PublicSettings) => void;
   onBack: () => void;
-  /**
-   * Closes the flow. Both exits use it: finishing and deferring differ in the
-   * label and in what the settings already say, not in what has to be written.
-   */
-  onDone: () => void;
+  /** Continues to the Space and bot steps, only when the app can answer. */
+  onNext: () => void;
+  /** Closes the flow without making a bot, for somebody setting the rest up later. */
+  onLater: () => void;
 }): React.JSX.Element {
   const [saving, setSaving] = useState(false);
   const [fetching, setFetching] = useState(false);
@@ -432,9 +439,9 @@ export function SetupProvider({
           type="button"
           className="button button-primary"
           disabled={busy || !ready}
-          onClick={onDone}
+          onClick={onNext}
         >
-          Start chatting
+          Continue
         </button>
         <button
           type="button"
@@ -448,7 +455,7 @@ export function SetupProvider({
           type="button"
           className="button button-quiet"
           disabled={busy}
-          onClick={onDone}
+          onClick={onLater}
         >
           Set this up later
         </button>

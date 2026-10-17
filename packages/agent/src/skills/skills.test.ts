@@ -1,6 +1,13 @@
 import {describe, expect, it} from 'vitest';
 
-import {DEFAULT_AGENT_IDENTITY, botIdentityFor} from '@marimo/protocol';
+import {
+  BOT_TEMPLATES,
+  botPersonaFor,
+  botRoleFor,
+  DEFAULT_AGENT_PERSONA,
+  DEFAULT_AGENT_ROLE,
+  DEFAULT_BOT_PERSONA,
+} from '@marimo/protocol';
 
 import {SKILLS, composeInstruction, renderSkills} from './index.js';
 
@@ -62,46 +69,46 @@ describe('composeInstruction', () => {
   });
 
   /*
-   * The user's own words, and the position of them is the whole design: they come
-   * after the identity so they win the manner conflicts that actually happen, and
-   * before the protocol so they cannot license a claim that a tool ran.
+   * The person's own words, and the position of them is the whole design: they
+   * come after the Role so they win the manner conflicts that actually happen,
+   * and before the protocol so they cannot license a claim that a tool ran.
    */
-  describe("the user's preferences", () => {
-    it('ride between the identity and the app protocol', () => {
+  describe('the Persona', () => {
+    it('rides between the Role and the app protocol', () => {
       const text = composeInstruction({
         base: 'You are Marimo Bot.',
-        preferences: 'Call me Tarlow, and skip the emoji.',
+        persona: 'Call me Tarlow, and skip the emoji.',
         memory: '',
       });
-      const identity = text.indexOf('You are Marimo Bot.');
-      const preferences = text.indexOf("# The user's preferences");
+      const role = text.indexOf('You are Marimo Bot.');
+      const persona = text.indexOf('# Persona');
       const protocol = text.indexOf('# Operating protocol');
-      expect(identity).toBeGreaterThanOrEqual(0);
+      expect(role).toBeGreaterThanOrEqual(0);
       expect(text).toContain('Call me Tarlow, and skip the emoji.');
-      expect(preferences).toBeGreaterThan(identity);
-      expect(protocol).toBeGreaterThan(preferences);
+      expect(persona).toBeGreaterThan(role);
+      expect(protocol).toBeGreaterThan(persona);
     });
 
-    it('are carried by an agent that can do nothing at all', () => {
+    it('is carried by an agent that can do nothing at all', () => {
       // Not a capability, so unlike a skill it does not follow the tool list: the
       // profile that grants nothing is still speaking to this person.
       const text = composeInstruction({
         base: 'base',
-        preferences: 'Be blunt.',
+        persona: 'Be blunt.',
         memory: '',
         tools: [],
       });
       expect(text).toContain('Be blunt.');
     });
 
-    it('leave no heading behind when there are none', () => {
-      for (const preferences of [undefined, '', '   \n  ']) {
+    it('leaves no heading behind when there is none', () => {
+      for (const persona of [undefined, '', '   \n  ']) {
         const text = composeInstruction({
           base: 'base',
-          ...(preferences === undefined ? {} : {preferences}),
+          ...(persona === undefined ? {} : {persona}),
           memory: '',
         });
-        expect(text).not.toContain("The user's preferences");
+        expect(text).not.toContain('# Persona');
       }
     });
   });
@@ -162,21 +169,30 @@ describe('composeInstruction', () => {
 
     /*
      * And the other direction, which is what keeps this from creeping back: the
-     * editable identity says who the agent is, and none of the app's method.
+     * editable Role and Persona say who the agent is, and none of the app's
+     * method.
      *
-     * Both seeds are checked here rather than the rule being written twice: a
+     * Every seed is checked here rather than the rule being written twice: a
      * bot's text is prepended to the same protocol, so the same drift is
      * possible in it, and a second copy of this list would be a second thing to
      * forget when the vocabulary changes.
      */
-    it("leaves the app's own rules out of the editable identity", () => {
-      for (const identity of [
-        DEFAULT_AGENT_IDENTITY,
-        botIdentityFor('Writer'),
-      ]) {
-        expect(identity).not.toContain('gated call');
-        expect(identity).not.toContain('GitHub-flavoured');
-        expect(identity).not.toContain('# Operating protocol');
+    it("leaves the app's own rules out of the editable text", () => {
+      const texts = [
+        DEFAULT_AGENT_ROLE,
+        DEFAULT_AGENT_PERSONA,
+        DEFAULT_BOT_PERSONA,
+        botRoleFor('Writer'),
+        botPersonaFor(undefined),
+        ...BOT_TEMPLATES.flatMap((template) => [
+          botRoleFor(template.label, template),
+          botPersonaFor(template),
+        ]),
+      ];
+      for (const text of texts) {
+        expect(text).not.toContain('gated call');
+        expect(text).not.toContain('GitHub-flavoured');
+        expect(text).not.toContain('# Operating protocol');
       }
     });
   });

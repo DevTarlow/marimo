@@ -423,7 +423,7 @@ describe('a blog post, from the chat to the website repo', () => {
       spaceId: blogId,
     });
 
-    const writer = await agent.createProfile('Writer');
+    const writer = await agent.createProfile({name: 'Writer'});
     await agent.updateProfile(writer.id, {
       identity: WRITER_IDENTITY,
       // Which Space the writer works in when the lead names none. This is the
@@ -582,7 +582,7 @@ describe('a blog post, from the chat to the website repo', () => {
       enabledTools: ['ask_agent'],
     });
 
-    const writer = await agent.createProfile('Writer');
+    const writer = await agent.createProfile({name: 'Writer'});
     await agent.updateProfile(writer.id, {
       identity: WRITER_IDENTITY,
       // No `spaceId`: this writer has nowhere of its own.

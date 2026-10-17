@@ -194,12 +194,13 @@ export async function resolveAgentConfig(
         : {}),
       systemPrompt: profile.identity,
       /*
-       * Carried beside the identity rather than folded into it: the two have
-       * different owners, and the agent's prompt is composed so the user's words
-       * outrank the app's on manner without outranking the app's method rules.
+       * Carried beside the Role rather than folded into it: the two have
+       * different owners, and the agent's prompt is composed so the person's
+       * words outrank the app's on manner without outranking the app's method
+       * rules. Blank is absent, which is what the composer reads.
        */
-      ...(profile.preferences !== undefined
-        ? {preferences: profile.preferences}
+      ...(profile.persona !== undefined && profile.persona.trim().length > 0
+        ? {persona: profile.persona}
         : {}),
       profileId: profile.id,
       workspaceRoot,

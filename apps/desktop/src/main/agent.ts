@@ -39,6 +39,7 @@ import type {
   AgentModel,
   AgentProfile,
   AgentUiEvent,
+  BotDraft,
   CompactResult,
   DocumentRead,
   DocumentRevision,
@@ -1143,8 +1144,8 @@ export class AgentService {
     await this.runtime.updateProfile(profileId, patch);
   }
 
-  async createProfile(name?: string) {
-    const created = await this.runtime.createProfile(name);
+  async createProfile(draft?: BotDraft, sourceCallId?: string) {
+    const created = await this.runtime.createProfile(draft, sourceCallId);
     await this.runtime.selectProfile(created.id);
     return created;
   }
@@ -1186,6 +1187,16 @@ export class AgentService {
       throw new Error(`There is no bot called "${profileId}".`);
     }
     return session;
+  }
+
+  /**
+   * Starts the conversation that makes a bot.
+   *
+   * The runtime owns the purpose and the tool check; this only names it. There
+   * is no turn here — the window opens the session and draws the opening card.
+   */
+  async startBotBuilder(profileId: string): Promise<SessionSummary> {
+    return await this.runtime.startBuilderSession(profileId);
   }
 
   /**

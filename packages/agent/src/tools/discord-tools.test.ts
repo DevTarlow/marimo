@@ -298,6 +298,7 @@ describe('Discord tools', () => {
         'send_discord_message',
         'read_discord_messages',
         'list_discord_channels',
+        'draft_bot',
       ]);
     });
 

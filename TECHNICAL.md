@@ -472,24 +472,48 @@ A pending approval is never compacted in either path.
 
 **The first run itself is a five-step flow, and one flag decides whether it is
 offered.** A fresh install has three things missing at once — a Space to work in,
-a bot to give work to, and the service that answers — and the flow is those in the
-order they are useful. It writes as it goes, exactly as Settings does, so quitting
-in the middle loses nothing, and each step reads what already exists rather than
-creating a second copy of it. The last step is the only one that cannot be
-skipped: until a provider is chosen and readable the window offers no message box
-at all, because a field whose every message ends in the same refusal is worse than
-no field.
+a bot to give work to, and the service that answers — and the flow is now model
+first: until a provider is chosen and readable the window offers no message box at
+all, and a wizard that asked for a Space and a bot before it had a model would be
+asking somebody to describe work nothing can do. A provider that cannot answer is
+the one step that cannot be continued past; "set this up later" closes the flow
+rather than walking into screens that cannot work. It writes as it goes, exactly
+as Settings does, so quitting in the middle loses nothing, and each step reads
+what already exists rather than creating a second copy of it.
 
-**The step after a bot is made owns `preferences`**, the field Settings calls "How
-to talk to me". It is the one thing about a bot that is the person's own text
-rather than the app's, it is sent after the identity so it wins where the two
-disagree, and a field nobody opens a settings screen to find is a field that stays
-empty — so it is asked for at the moment somebody is thinking about the bot at all.
-The bot exists by then: the step edits a profile on the roster rather than a draft
-in a form, which is why going back from it returns to the list of bots and never to
-the form that would make a second one. Adding another bot from that list goes
-through the same two steps, so the words are offered for every bot rather than for
-the first one only.
+**A bot can be made three ways, and they share one draft.** A starter role gives a
+name, a Role, a first Persona, a grant and an icon in one click; the step-by-step
+form asks for a role, a name and abilities; and the guided path hands the rest of
+the conversation to Marimo. All three end in `profiles.create` with the same
+`BotDraft`, so the store cannot tell which door somebody came through and the
+Persona is never a second, quieter way of describing a bot. The starter roles are
+protocol data, narrowed against the tools this install actually has before a card
+is drawn — a card that granted a tool this build does not carry would be a choice
+that does nothing.
+
+**The step after a bot is made owns its Persona**, the field that replaced "How to
+talk to me". It is the one thing about a bot that is the person's own text rather
+than the app's: what it is for, how it should sound, and how they want to be spoken
+to. It is sent after the Role so it wins where the two disagree, and a field nobody
+opens a settings screen to find stays empty — so it is asked for at the moment
+somebody is thinking about the bot at all. The bot exists by then: the step edits a
+profile on the roster rather than a draft in a form, which is why going back from
+it returns to the list of bots and never to the form that would make a second one.
+Adding another bot goes through the same path, so a Persona is offered for every
+bot rather than for the first one only.
+
+**The guided path is a conversation with a stored purpose.** `sessions.startBuilder`
+creates an ordinary session titled "Making a bot" with `purpose: 'bot-builder'`,
+after checking in code that the lead actually has the `draft_bot` tool. Every turn
+of that session carries `BOT_BUILDER_INSTRUCTION` after the ordinary turn context:
+ask one question at a time, and when there is enough, call `draft_bot`. The opening
+question is a card the window draws from the purpose and the same constant the
+instruction quotes, not a seeded model message — an assistant-first history is
+accepted by some providers and not others, and a small model can lose an
+instruction it was never given. The tool never creates anything. The window draws
+its arguments as a review card, the person edits the name, Persona and template,
+and only their Create press reaches `profiles.create`. `createdFromCall` on the
+profile is what stops a card revisited after a reload making the same bot twice.
 
 Which screen a launch gets is `firstRunScreen` in
 `apps/desktop/src/renderer/first-run.ts` — four answers (`waiting`, `setup`,
@@ -670,41 +694,56 @@ because the helper's invocation sits between its parent's two halves and the
 parent's own id appears again as the log unwinds. Clearing on that would take down
 the card the helper had just put up.
 
-### An identity is seeded, and a bot is seeded as itself
+### A Role is seeded, and a Persona is the person's
 
-**An identity is the system prompt, and it is the one piece of it the user owns.**
-It is `identity` on the profile, and `composeInstruction` puts it first — ahead of
-the operating protocol, the skills and the memory — so everything the app knows
-about how a turn runs is appended after it and a person rewriting their identity
-cannot lose the rules about approvals, refusals or a paused turn. Blank is not a
-neutral default and was never the answer: an agent with nothing said about whom it
-is for narrates itself from whatever is left, and the user has no text to edit
-back to. So `ProfileStore` *seeds* a new profile, and Settings' Reset is that same
-seed put back.
+**The stored field is still `identity`, and the window calls it Role.** Renaming it
+would be a document migration for a word the person never reads, and every existing
+file already uses this one — the same decision `workspace`/Space makes. The Role is
+the app's brief: what the bot is for, what it may claim, and the contract every bot
+in this app has. `composeInstruction` puts it first. Blank is not a neutral default
+and was never the answer: an agent with nothing said about whom it is for narrates
+itself from whatever is left, and the person has no text to edit back to. So
+`ProfileStore` seeds a new profile, and Settings' Role Reset is that same seed put
+back.
+
+**The Persona follows the Role, and it is the one piece of the prompt the person
+owns.** It is `persona` on the profile: character, the job in their own words, and
+how they want to be spoken to. It is sent after the Role so it wins the manner
+conflicts that actually happen, and before the operating protocol so it cannot
+license a claim that a tool ran or a capability the profile does not have. It is
+never reset automatically; Settings offers the starter text as a replacement and
+asks first. `preferences` — the old "How to talk to me" — is adopted into it on
+read, under a heading if both exist, so an upgrade loses neither half. That is the
+one layout decision in this section that is a *move* rather than a rename: the two
+fields had different owners, and one user-authored text is the simpler model the
+person asked for.
 
 **There are two seeds because there are two kinds of profile, and they are not
-interchangeable.** `DEFAULT_AGENT_IDENTITY` is Marimo Bot, the agent the person talks
-to; `botIdentityFor(name)` is a bot they made. The difference matters because a
-prompt is a claim about what the profile can do. A bot seeded with Marimo Bot's text
-would introduce itself as Marimo Bot — the one confusion bots exist to avoid — and
-would be told to hand work to other bots, which is an instruction it has no
-`ask_agent` to follow. What that produces is silence in the tool log and a
-sentence in the transcript: a model narrating a delegation it never made. So the
-bot's seed names the bot, says this person made it and Marimo Bot hands it work, and
-asks it to write for the person — what it did, what it could not, what it would
-need — and to name a permission it lacks rather than work around it. Both texts
-are written out in full rather than composed from shared fragments, because an
-identity is text a person may edit and a template would put the seam in their
-editor.
+interchangeable.** `DEFAULT_AGENT_ROLE` / `DEFAULT_AGENT_PERSONA` are Marimo Bot, the
+agent the person talks to; `botRoleFor(name, template)` / `botPersonaFor(template)`
+are a bot they made. The difference matters because a prompt is a claim about what
+the profile can do. A bot seeded with Marimo Bot's text would introduce itself as
+Marimo Bot — the one confusion bots exist to avoid — and would be told to hand work
+to other bots, which is an instruction it has no `ask_agent` to follow. What that
+produces is silence in the tool log and a sentence in the transcript: a model
+narrating a delegation it never made. So the bot's Role names the bot, says this
+person made it and Marimo Bot hands it work, and asks it to write for the person —
+what it did, what it could not, what it would need — and to name a permission it
+lacks rather than work around it.
 
-**`preferences` follows the identity, and the catalogue carries the seeds to the
-window.** The user's own words about manner are inserted directly after the
-identity and before the app's own blocks, so they win wherever the two disagree;
-that is the same promise Marimo Bot's closing paragraph makes, and it holds for a bot
-because it is the same composition. `ProfileCatalog.identitySeeds` holds both
-texts keyed by profile id, so Reset restores the seed for the profile in front of
-it and the renderer holds neither: a window with its own copy could reset a bot to
-Marimo Bot, or to a version the app never shipped, and look like the button working.
+**The starter roles are data, and neither half names a tool.** `BOT_TEMPLATES` in
+`packages/protocol/src/bots.ts` carries the Role, the first Persona, the grant and
+the icon for Writer, Marketer, Researcher, Coder, Analyst and Personal assistant.
+A Role that said "you can search the web" would be a prompt claiming a capability
+the profile may not have; the capability skills already tell the model what its
+tools are, and they follow the grant. The runtime narrows each template's tools
+against the install before the window sees it, and filters again on create.
+
+**`ProfileCatalog.roleSeeds` and `personaSeeds` carry the texts to the window.** The
+two maps are separate because the buttons are: Role's Reset is safe to press, and
+Persona's "use the starter text" replaces words only the person wrote. The renderer
+holds neither: a window with its own copy could reset a bot to Marimo Bot, or to a
+version the app never shipped, and look like the button working.
 
 ### A Space's documents are the markdown files in it
 

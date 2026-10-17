@@ -29,9 +29,12 @@ server you run yourself. It says nothing until you choose.
   about a file by name, or let a bot write one and watch the same file appear in
   the drawer. If a file changed since you opened it, the save is refused, your
   draft stays, and you choose which version wins.
-- Make as many bots as you like in Settings. Each one gets a name, an icon, an
-  identity you write, its own tools, the Space it works in and, if you want, a
-  model of its own. The bots sit at the top of the sidebar; pick one to see its
+- Make as many bots as you like in Settings, or in the first-run flow: start from
+  a role like Writer or Marketer, build one step by step, or talk it through with
+  Marimo. Each bot gets a name, an icon, a **Role** the app writes and a **Persona**
+  that is yours — what it is for, how it sounds, and how you want to be spoken to.
+  It also gets its own tools, the Space it works in and, if you want, a model of
+  its own. The bots sit at the top of the sidebar; pick one to see its
   conversations, and choose one of five shipped icons or upload your own picture
   in Settings. Several can share a chat; type `@` to put a question to one of
   them. Ask Marimo Bot for a blog post and it can hand the writing to Writer,

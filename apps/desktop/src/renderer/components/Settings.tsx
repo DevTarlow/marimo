@@ -70,6 +70,7 @@ import {Memory} from './Memory.js';
 import {ModelPicker} from './ModelPicker.js';
 import type {PopoverAnchor} from './Popover.js';
 import {Recall} from './Recall.js';
+import {NewBotDialog} from './NewBotDialog.js';
 import {ResetMarimo} from './ResetMarimo.js';
 import {SettingsSection} from './SettingsSection.js';
 
@@ -121,8 +122,14 @@ export function Settings({
   lastReview,
   openSection,
   userDataFolder,
+  onStartBotBuilder,
 }: {
   onClose: () => void;
+  /**
+   * Hands the window to the bot-builder conversation. The App closes Settings on
+   * success; a refusal comes back here as a sentence under the dialog.
+   */
+  onStartBotBuilder?: () => Promise<{ok: boolean; problem?: string}>;
   /** What the last background look read and found, for the Memory card. */
   lastReview?: {events: number; found: number} | null;
   /**
@@ -148,13 +155,15 @@ export function Settings({
   /**
    * The fields being edited. Committed on blur, not on every letter.
    *
-   * `preferences` is a string here and optional on the profile, because a text
-   * box has no way to show "absent" and `''` is what an empty one means.
+   * `persona` is a string here and optional on the profile, because a text box
+   * has no way to show "absent" and `''` is what an empty one means. `identity`
+   * is the stored Role, and the field is labelled Role everywhere the person
+   * reads it.
    */
   const [draft, setDraft] = useState<{
     name: string;
     identity: string;
-    preferences: string;
+    persona: string;
   } | null>(null);
   /**
    * The sections the user has opened, by title.
@@ -175,6 +184,17 @@ export function Settings({
   const [renaming, setRenaming] = useState<{id: string; value: string} | null>(
     null,
   );
+  /**
+   * Whether the Persona field is asking before replacing the person's words.
+   *
+   * The Role's Reset is a button anybody can press without fear: it restores
+   * text the app wrote. The Persona's template text is different — pressing it
+   * would replace something only the person wrote — so it asks first, in place,
+   * the same way removing a bot does.
+   */
+  const [confirmingPersona, setConfirmingPersona] = useState(false);
+  /** Whether the new-bot panel is open under the roster. */
+  const [newBotOpen, setNewBotOpen] = useState(false);
   /*
    * Escape has to beat the blur that follows it. Unmounting the input fires a
    * blur whose handler still closes over the old draft, so a cancelled edit
@@ -225,7 +245,7 @@ export function Settings({
           : {
               name: profile.name,
               identity: profile.identity,
-              preferences: profile.preferences ?? '',
+              persona: profile.persona ?? '',
             },
       );
       /*
@@ -249,6 +269,15 @@ export function Settings({
   useEffect(() => {
     void load();
   }, []);
+
+  /*
+   * A confirmation about one bot's Persona is not a confirmation about
+   * another's. Moving to a different bot cancels it rather than leaving a
+   * Replace button pointed at words the person has not read.
+   */
+  useEffect(() => {
+    setConfirmingPersona(false);
+  }, [loaded?.profile?.id]);
 
   /** Runs a change, and says so when it fails rather than pretending. */
   const change = async (work: () => Promise<unknown>): Promise<void> => {
@@ -391,13 +420,14 @@ export function Settings({
       ? undefined
       : loaded.settings.profiles.find((entry) => entry.id === menu.id);
   /*
-   * The text Reset would put back for *this* profile, read from the catalogue
-   * rather than imported: the lead's is the app constant and a bot's is built
-   * from its own name, so one import could only ever be right for one of them.
-   * The empty id is the no-profile case, where the field is not drawn at all.
+   * The two seeds, read from the catalogue rather than imported: the lead's are
+   * the app constants, a starter bot's come from its template, and a custom
+   * bot's are built from its own name — so one import could only ever be right
+   * for one kind. The empty id is the no-profile case, where neither field is
+   * drawn.
    */
-  const resetIdentity =
-    loaded.catalog.identitySeeds[loaded.profile?.id ?? ''];
+  const resetRole = loaded.catalog.roleSeeds[loaded.profile?.id ?? ''];
+  const resetPersona = loaded.catalog.personaSeeds[loaded.profile?.id ?? ''];
   /*
    * What "the default icon" means for this bot is its place in the roster, not
    * Marimo's mark: the first bot is the lead, and every one after it starts on
@@ -417,10 +447,10 @@ export function Settings({
    * is what is stored. A box showing the default it has not saved yet is a
    * change waiting to happen, and the button is how it gets saved.
    */
-  const identityAtDefault =
+  const roleAtDefault =
     loaded.profile !== undefined &&
-    draft?.identity === resetIdentity &&
-    loaded.profile.identity === resetIdentity;
+    draft?.identity === resetRole &&
+    loaded.profile.identity === resetRole;
   /*
    * Grouped by the grant itself, which is the one fact about a tool that cannot
    * be out of date — it is the same value the switch is drawn from. An earlier
@@ -617,14 +647,40 @@ export function Settings({
               className="settings-agent settings-agent-new"
               disabled={saving}
               onClick={() => {
-                void change(async () => {
-                  await window.marimo.call('profiles.create', {});
-                });
+                setProblem(null);
+                setNewBotOpen(true);
               }}
             >
               + New bot
             </button>
           </div>
+
+          {newBotOpen && (
+            <NewBotDialog
+              templates={loaded.catalog.botTemplates}
+              {...(loaded.catalog.delegationTool === undefined
+                ? {}
+                : {delegationTool: loaded.catalog.delegationTool})}
+              {...(loaded.catalog.builderTool === undefined
+                ? {}
+                : {builderTool: loaded.catalog.builderTool})}
+              lead={loaded.settings.profiles[0]}
+              onCreated={async () => {
+                setNewBotOpen(false);
+                await load();
+              }}
+              onStartBuilder={
+                onStartBotBuilder ??
+                (async () => ({
+                  ok: false,
+                  problem: 'The builder is not available from this window.',
+                }))
+              }
+              onClose={() => {
+                setNewBotOpen(false);
+              }}
+            />
+          )}
           {/*
             One menu, drawn outside the list and anchored to the trigger that
             opened it. Outside because a popover inside this card would be
@@ -713,32 +769,115 @@ export function Settings({
               }}
             />
             {/*
-             * The identity is a paragraph of instruction addressed to a model,
-             * and the app's own text is a good answer for somebody who has not
-             * thought about prompts at all. There is one screen now, so it is
-             * not hidden behind a mode.
+             * Persona first, because it is the field the person is here for.
+             * The Role below is the app's brief: real, editable, and reset in
+             * one press, but not something most people need to touch.
              *
-             * "How to talk to me" below is the opposite: it is the user's own
-             * voice, and correcting a name or asking not to be flattered should
-             * not be buried among the app's text.
-             */}
-            {/*
-             * Not a `<label>` any more, because it now holds a button: a click
-             * anywhere inside a label focuses its control, so the reset below
-             * would have been a click on the text box. The name is carried by
-             * `aria-label` instead, which is how the other fields that are not
-             * wrapped in a label do it.
+             * Not a `<label>` around either field, because both hold buttons: a
+             * click anywhere inside a label focuses its control, so the buttons
+             * below would have been clicks on the text box. The names are
+             * carried by `aria-label` instead.
              */}
             <div className="settings-field">
-              <span>Identity</span>
+              <span>Persona</span>
               <em className="settings-why">
-                Who this bot is and how it should behave. Written as an
-                instruction to it, and sent at the start of every conversation.
+                Who this bot is, what it is for, and how you want to be spoken
+                to. This is your text; the app seeds it once and never resets
+                it on its own.
+              </em>
+              <textarea
+                className="settings-input settings-preferences"
+                rows={6}
+                aria-label="Persona"
+                placeholder="Dry and precise, never flatters me. Call me Tarlow, and say when you are unsure rather than guessing."
+                value={draft.persona}
+                disabled={saving}
+                onChange={(event) => {
+                  setDraft({...draft, persona: event.target.value});
+                }}
+                onBlur={() => {
+                  const stored = loaded.profile?.persona ?? '';
+                  if (draft.persona === stored) {
+                    return;
+                  }
+                  const persona = draft.persona;
+                  void change(async () => {
+                    await window.marimo.call('profiles.update', {
+                      profileId: loaded.profile?.id ?? '',
+                      patch: {persona},
+                    });
+                  });
+                }}
+              />
+              {/*
+               * The template text is a seed, not a default: pressing this
+               * replaces words only the person wrote, so it asks first. The
+               * Role's Reset below does not need to, because everything it
+               * restores is the app's.
+               */}
+              {resetPersona !== undefined &&
+                resetPersona.length > 0 &&
+                draft.persona !== resetPersona && (
+                  <div className="settings-row">
+                    {confirmingPersona ? (
+                      <>
+                        <span className="settings-muted">
+                          Replace your persona with the starter text?
+                        </span>
+                        <button
+                          type="button"
+                          className="button button-quiet button-small"
+                          disabled={saving}
+                          onClick={() => {
+                            setConfirmingPersona(false);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="button button-danger button-small"
+                          disabled={saving}
+                          onClick={() => {
+                            setConfirmingPersona(false);
+                            setDraft({...draft, persona: resetPersona});
+                            void change(async () => {
+                              await window.marimo.call('profiles.update', {
+                                profileId: loaded.profile?.id ?? '',
+                                patch: {persona: resetPersona},
+                              });
+                            });
+                          }}
+                        >
+                          Replace
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="button button-quiet"
+                        disabled={saving}
+                        onClick={() => {
+                          setConfirmingPersona(true);
+                        }}
+                      >
+                        Use the starter text
+                      </button>
+                    )}
+                  </div>
+                )}
+            </div>
+            <div className="settings-field">
+              <span>Role</span>
+              <em className="settings-why">
+                The app&rsquo;s brief for this bot: what it is for, what it may
+                claim, and how it works. You can change it, but most bots do not
+                need it touched.
               </em>
               <textarea
                 className="settings-input settings-identity"
                 rows={6}
-                aria-label="Identity"
+                aria-label="Role"
                 value={draft.identity}
                 disabled={saving}
                 onChange={(event) => {
@@ -767,13 +906,13 @@ export function Settings({
                 <button
                   type="button"
                   className="button button-quiet"
-                  disabled={saving || identityAtDefault}
+                  disabled={saving || roleAtDefault}
                   onClick={() => {
-                    setDraft({...draft, identity: resetIdentity});
+                    setDraft({...draft, identity: resetRole});
                     void change(async () => {
                       await window.marimo.call('profiles.update', {
                         profileId: loaded.profile?.id ?? '',
-                        patch: {identity: resetIdentity},
+                        patch: {identity: resetRole},
                       });
                     });
                   }}
@@ -781,68 +920,6 @@ export function Settings({
                   Reset to default
                 </button>
               </div>
-            </div>
-            {/*
-             * The user's own words, in their own field. Kept out of the identity
-             * above deliberately: Reset restores the app's text, and it must not
-             * be able to restore over something the app never wrote.
-             */}
-            <div className="settings-field">
-              <span>How to talk to me</span>
-              <em className="settings-why">
-                Your own standing instructions. Sent after the identity, so it
-                wins wherever the two disagree about how you want to be spoken
-                to.
-              </em>
-              <textarea
-                className="settings-input settings-preferences"
-                rows={3}
-                aria-label="How to talk to me"
-                placeholder="Call me Tarlow. Tell me when you are unsure rather than guessing."
-                value={draft.preferences}
-                disabled={saving}
-                onChange={(event) => {
-                  setDraft({...draft, preferences: event.target.value});
-                }}
-                onBlur={() => {
-                  const stored = loaded.profile?.preferences ?? '';
-                  if (draft.preferences === stored) {
-                    return;
-                  }
-                  const preferences = draft.preferences;
-                  void change(async () => {
-                    await window.marimo.call('profiles.update', {
-                      profileId: loaded.profile?.id ?? '',
-                      patch: {preferences},
-                    });
-                  });
-                }}
-              />
-              {draft.preferences.trim().length > 0 && (
-                <div className="settings-row">
-                  {/*
-                   * Clear, not "Reset to default": the default here is nothing,
-                   * and a button that offered to restore the app's wording into a
-                   * box the app did not write would be offering to invent it.
-                   */}
-                  <button
-                    type="button"
-                    className="button button-quiet"
-                    disabled={saving}
-                    onClick={() => {
-                      setDraft({...draft, preferences: ''});
-                      void change(async () => {
-                        await window.marimo.call('profiles.update', {
-                          profileId: loaded.profile?.id ?? '',
-                          patch: {preferences: ''},
-                        });
-                      });
-                    }}
-                  >
-                    Clear
-                  </button>
-                </div>
-              )}
             </div>
           </SettingsSection>
         )}

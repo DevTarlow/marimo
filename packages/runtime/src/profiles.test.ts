@@ -11,13 +11,17 @@ import {join} from 'node:path';
 
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 
-import {DEFAULT_AGENT_IDENTITY, botIdentityFor} from '@marimo/protocol';
+import {
+  DEFAULT_AGENT_PERSONA,
+  DEFAULT_AGENT_ROLE,
+} from '@marimo/protocol';
 
 import {
   LastProfileError,
   ProfileStore,
   UnknownProfileError,
 } from './profiles.js';
+import type {NewProfileSeed} from './profiles.js';
 
 const TOOLS = ['read_file', 'write_file', 'run_shell'];
 const SKILLS = ['reasoning', 'memory'];
@@ -38,11 +42,20 @@ describe('ProfileStore', () => {
   function store(): ProfileStore {
     return new ProfileStore({
       file,
-      defaultIdentity: 'You are an agent.',
-      botIdentity: (name) => `You are ${name}.`,
+      defaultRole: 'You are an agent.',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     });
+  }
+
+  /** A resolved seed, the shape the runtime hands the store. */
+  function seed(name: string): NewProfileSeed {
+    return {
+      name,
+      role: (called) => `You are ${called}.`,
+      persona: 'A test persona.',
+    };
   }
 
   it('seeds one profile with the app defaults on first run', async () => {
@@ -64,7 +77,7 @@ describe('ProfileStore', () => {
 
   it('persists across stores', async () => {
     const first = store();
-    await first.create('Research');
+    await first.create(seed('Research'));
     const reopened = await store().load();
     expect(reopened.profiles.map((profile) => profile.name)).toEqual([
       'Marimo Bot',
@@ -78,7 +91,7 @@ describe('ProfileStore', () => {
   it('moves the active pointer on select, and refuses an unknown one', async () => {
     const profiles = store();
     const first = await profiles.activeProfile();
-    const second = await profiles.create('Second');
+    const second = await profiles.create(seed('Second'));
     expect(await profiles.activeProfileId()).toBe(second.id);
 
     await profiles.select(first.id);
@@ -125,8 +138,8 @@ describe('ProfileStore', () => {
 
   it('creates a profile with unique names and switches to it', async () => {
     const profiles = store();
-    const one = await profiles.create('Agent');
-    const two = await profiles.create('Agent');
+    const one = await profiles.create(seed('Agent'));
+    const two = await profiles.create(seed('Agent'));
     expect(one.id).not.toBe(two.id);
     expect(two.name).toBe('Agent 2');
     expect(await profiles.activeProfileId()).toBe(two.id);
@@ -145,59 +158,93 @@ describe('ProfileStore', () => {
     expect(updated.enabledSkills).toEqual([]);
   });
 
-  it("keeps the user's preferences beside the app's identity", async () => {
+  it("keeps the person's Persona beside the app's Role", async () => {
     const profiles = store();
     const profile = await profiles.activeProfile();
     const updated = await profiles.update(profile.id, {
-      preferences: 'Call me Tarlow. Skip the emoji.',
+      persona: 'Call me Tarlow. Skip the emoji.',
     });
-    expect(updated.preferences).toBe('Call me Tarlow. Skip the emoji.');
-    // The identity is the app's text and writing preferences does not touch it:
-    // Reset has to be able to restore one without touching the other.
+    expect(updated.persona).toBe('Call me Tarlow. Skip the emoji.');
+    // The Role is the app's text and writing Persona does not touch it: Reset
+    // has to be able to restore one without touching the other.
     expect(updated.identity).toBe(profile.identity);
   });
 
-  it('tells a cleared preference apart from one never mentioned', async () => {
+  it('tells a cleared Persona apart from one never mentioned', async () => {
     const profiles = store();
     const profile = await profiles.activeProfile();
-    await profiles.update(profile.id, {preferences: 'Be blunt.'});
-    // A patch that says nothing about them leaves them alone.
+    await profiles.update(profile.id, {persona: 'Be blunt.'});
+    // A patch that says nothing about it leaves it alone.
     const renamed = await profiles.update(profile.id, {name: 'Other'});
-    expect(renamed.preferences).toBe('Be blunt.');
-    // An empty string is the user clearing the box, and it lands as empty rather
-    // than as a no-op on the way to the store.
-    const cleared = await profiles.update(profile.id, {preferences: ''});
-    expect(cleared.preferences).toBe('');
+    expect(renamed.persona).toBe('Be blunt.');
+    // An empty string is the person clearing the box, and it lands as empty
+    // rather than as a no-op on the way to the store.
+    const cleared = await profiles.update(profile.id, {persona: ''});
+    expect(cleared.persona).toBe('');
   });
 
-  it('starts a new profile with no preferences of its own', async () => {
+  it('starts a new profile with the Persona it was seeded with', async () => {
     const profiles = store();
-    const created = await profiles.create('Researcher');
-    expect(created.preferences).toBeUndefined();
+    const created = await profiles.create(seed('Researcher'));
+    expect(created.persona).toBe('A test persona.');
+  });
+
+  /*
+   * The old "How to talk to me" text is moved into Persona on the way in, not
+   * dropped and not left in a field this build no longer writes. A read that
+   * never writes still shows the words; the next write persists the move.
+   */
+  it('adopts old preferences into Persona on read', async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: 'agent',
+        profiles: [
+          {
+            id: 'agent',
+            name: 'Agent',
+            identity: 'You are an agent.',
+            preferences: 'Call me Tarlow. Skip the emoji.',
+            enabledTools: [],
+            enabledSkills: [],
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    const loaded = await store().load();
+    expect(loaded.profiles[0]?.persona).toBe(
+      'Call me Tarlow. Skip the emoji.',
+    );
+    expect(loaded.profiles[0]?.preferences).toBeUndefined();
   });
 
   /*
    * The two seeds, and the reason there are two. The first profile is the lead —
-   * the agent the person talks to — and only it gets the app's identity. A bot
-   * gets text built from its own name, because a bot seeded with the lead's
-   * text introduces itself as Marimo Bot and is told to hand work to bots, which it
+   * the agent the person talks to — and only it gets the app's Role and Persona.
+   * A bot gets its own resolved pair, because a bot seeded with the lead's text
+   * introduces itself as Marimo Bot and is told to hand work to bots, which it
    * has no tool to do.
    */
-  it('seeds a bot with its own name and the lead with the app identity', async () => {
+  it('seeds the lead with the app pair and a bot with its own name', async () => {
     const profiles = new ProfileStore({
       file,
-      defaultIdentity: DEFAULT_AGENT_IDENTITY,
-      botIdentity: botIdentityFor,
+      defaultRole: DEFAULT_AGENT_ROLE,
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     });
 
     const [lead] = (await profiles.load()).profiles;
-    expect(lead?.identity).toBe(DEFAULT_AGENT_IDENTITY);
+    expect(lead?.identity).toBe(DEFAULT_AGENT_ROLE);
+    expect(lead?.persona).toBe(DEFAULT_AGENT_PERSONA);
 
-    const writer = await profiles.create('Writer');
+    const writer = await profiles.create(seed('Writer'));
     expect(writer.identity).toContain('Writer');
     expect(writer.identity).not.toContain('You are Marimo Bot');
+    expect(writer.persona).toBe('A test persona.');
   });
 
   /*
@@ -321,7 +368,7 @@ describe('ProfileStore', () => {
 
   it('moves the active profile when the active one is deleted', async () => {
     const profiles = store();
-    const second = await profiles.create('Second');
+    const second = await profiles.create(seed('Second'));
     const snapshot = await profiles.remove(second.id);
     expect(snapshot.profiles).toHaveLength(1);
     expect(snapshot.activeProfileId).toBe(snapshot.profiles[0]?.id);
@@ -424,11 +471,20 @@ describe('an agents file from a newer build', () => {
   function store(): ProfileStore {
     return new ProfileStore({
       file,
-      defaultIdentity: 'You are an agent.',
-      botIdentity: (name) => `You are ${name}.`,
+      defaultRole: 'You are an agent.',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     });
+  }
+
+  /** A resolved seed, the shape the runtime hands the store. */
+  function seed(name: string): NewProfileSeed {
+    return {
+      name,
+      role: (called) => `You are ${called}.`,
+      persona: 'A test persona.',
+    };
   }
 
   /** A file a future build wrote: a version this one does not know. */
@@ -469,7 +525,7 @@ describe('an agents file from a newer build', () => {
     await writeFuture();
     const profiles = store();
 
-    await expect(profiles.create('Another')).rejects.toThrow(/newer version/u);
+    await expect(profiles.create(seed('Another'))).rejects.toThrow(/newer version/u);
 
     // And the file is still the newer build's.
     const after = JSON.parse(await readFile(file, 'utf8')) as {version: number};
@@ -519,8 +575,8 @@ describe('an agents file with no version', () => {
 
     const snapshot = await new ProfileStore({
       file,
-      defaultIdentity: '',
-      botIdentity: (name) => `You are ${name}.`,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     }).load();
@@ -563,8 +619,8 @@ describe('the folders a pre-workspaces file carried', () => {
   function store(): ProfileStore {
     return new ProfileStore({
       file,
-      defaultIdentity: 'You are an agent.',
-      botIdentity: (name) => `You are ${name}.`,
+      defaultRole: 'You are an agent.',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     });
@@ -663,11 +719,20 @@ describe('ProfileStore avatars', () => {
   function store(): ProfileStore {
     return new ProfileStore({
       file,
-      defaultIdentity: 'You are an agent.',
-      botIdentity: (name) => `You are ${name}.`,
+      defaultRole: 'You are an agent.',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: TOOLS,
       defaultSkills: SKILLS,
     });
+  }
+
+  /** A resolved seed, the shape the runtime hands the store. */
+  function seed(name: string): NewProfileSeed {
+    return {
+      name,
+      role: (called) => `You are ${called}.`,
+      persona: 'A test persona.',
+    };
   }
 
   it('gives the lead Marimo and the next bot a different preset', async () => {
@@ -675,7 +740,7 @@ describe('ProfileStore avatars', () => {
     const lead = await profiles.activeProfile();
     expect(lead.avatar).toEqual({kind: 'preset', id: 'marimo'});
 
-    const second = await profiles.create('Writer');
+    const second = await profiles.create(seed('Writer'));
     expect(second.avatar).toEqual({kind: 'preset', id: 'sprout'});
   });
 

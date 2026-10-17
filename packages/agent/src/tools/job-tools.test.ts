@@ -149,6 +149,7 @@ describe('scheduling tools', () => {
         'create_job',
         'update_job',
         'delete_job',
+        'draft_bot',
       ]);
     });
   });

@@ -81,6 +81,7 @@ describe('createTools', () => {
       'prune_memory',
       'http_fetch',
       'run_shell',
+      'draft_bot',
     ]);
   });
 
@@ -129,6 +130,7 @@ describe('createTools', () => {
       'create_job',
       'update_job',
       'delete_job',
+      'draft_bot',
     ]);
   });
 

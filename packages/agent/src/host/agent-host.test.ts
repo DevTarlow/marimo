@@ -327,6 +327,7 @@ describe('AgentHost', () => {
       'prune_memory',
       'http_fetch',
       'run_shell',
+      'draft_bot',
     ]);
     expect(tools[1]?.function.parameters).toMatchObject({type: 'object'});
 

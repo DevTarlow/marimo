@@ -19,7 +19,11 @@ import {BaseSessionService} from '@google/adk';
 import {z} from 'zod';
 
 import {agentModelSchema} from '@marimo/protocol';
-import type {AgentModel, SessionSource} from '@marimo/protocol';
+import type {
+  AgentModel,
+  SessionPurpose,
+  SessionSource,
+} from '@marimo/protocol';
 
 import {
   assertWritable,
@@ -78,6 +82,14 @@ export interface SessionIndexEntry {
    * do with.
    */
   source?: SessionSource;
+  /**
+   * What this conversation is for, when it is not an ordinary chat.
+   *
+   * Stored on the index for the same reason `source` is: a *list* and a turn
+   * both need it, and the builder's instruction has to survive a reload. Absent
+   * is every conversation a person started to talk to a bot.
+   */
+  purpose?: SessionPurpose;
   /**
    * The model this conversation was pointed at, when it has one of its own.
    *
@@ -147,6 +159,17 @@ const sessionIndexEntrySchema = z
     model: z.preprocess(
       (value: unknown) => (typeof value === 'string' ? undefined : value),
       agentModelSchema.optional(),
+    ),
+    /*
+     * A purpose this build does not know is *dropped*, not refused. The schema
+     * is checked once for the whole index, so an enum that rejected a value from
+     * a later build would quarantine every conversation to keep one field — and
+     * a conversation whose purpose is lost is an ordinary chat, which is the
+     * duller failure rather than the destructive one.
+     */
+    purpose: z.preprocess(
+      (value: unknown) => (value === 'bot-builder' ? value : undefined),
+      z.enum(['bot-builder']).optional(),
     ),
     /*
      * Declared for the same reason `model` above is: a list left to
@@ -355,6 +378,7 @@ export class FileSessionService extends BaseSessionService {
       const profileId = readString(request.state, 'profileId');
       const workspaceId = readString(request.state, 'workspaceId');
       const source = readSource(request.state);
+      const purpose = readPurpose(request.state);
       index.sessions[id] ??= {
         id,
         title: generateTitle(request.state),
@@ -366,6 +390,7 @@ export class FileSessionService extends BaseSessionService {
         ...(profileId ? {profileId} : {}),
         ...(workspaceId ? {workspaceId} : {}),
         ...(source ? {source} : {}),
+        ...(purpose ? {purpose} : {}),
       };
       await this.writeIndex(index);
     });
@@ -677,6 +702,23 @@ function readSource(
   state: Record<string, unknown> | undefined,
 ): SessionSource | undefined {
   return readString(state, 'source') === 'discord' ? 'discord' : undefined;
+}
+
+/**
+ * Reads the conversation's purpose, keeping only the values this build knows.
+ *
+ * The same rule as `readSource`: a state record is assembled from whatever the
+ * caller sent, and an unknown purpose would be a conversation with an
+ * instruction nothing can produce. It is distinct from the index-schema guard
+ * because this one is about what may be *written*, not what an old file may
+ * contain.
+ */
+function readPurpose(
+  state: Record<string, unknown> | undefined,
+): SessionPurpose | undefined {
+  return readString(state, 'purpose') === 'bot-builder'
+    ? 'bot-builder'
+    : undefined;
 }
 
 function sanitizeId(sessionId: string): string {

@@ -28,9 +28,13 @@ import {
 } from '@marimo/agent';
 import type {AdkEvent} from '@marimo/agent';
 import {
-  DEFAULT_AGENT_IDENTITY,
+  DEFAULT_AGENT_PERSONA,
+  DEFAULT_AGENT_ROLE,
   DEFAULT_MEMORY_SOFT_LIMIT_BYTES,
-  botIdentityFor,
+  DRAFT_BOT_TOOL,
+  botPersonaFor,
+  botRoleFor,
+  botTemplateById,
 } from '@marimo/protocol';
 import type {AgentModel, ProviderId} from '@marimo/protocol';
 
@@ -98,8 +102,8 @@ describe('AgentRuntime', () => {
     // capabilities and no folders of its own.
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -468,8 +472,8 @@ describe('the catalogue', () => {
     await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -515,7 +519,7 @@ describe('the catalogue', () => {
    */
   it('is the same catalogue for every agent', async () => {
     const instance = runtime();
-    const created = await instance.createProfile('Researcher');
+    const created = await instance.createProfile({name: 'Researcher'});
     const forResearcher = await instance.catalog();
     await instance.selectProfile(profileId);
     expect((await instance.catalog()).tools.map((tool) => tool.name)).toEqual(
@@ -641,8 +645,8 @@ describe('changing an agent', () => {
     await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: ['read_file'],
       defaultSkills: [],
     });
@@ -690,7 +694,7 @@ describe('changing an agent', () => {
 
   it('adds an agent and can switch to it', async () => {
     const instance = runtime();
-    const created = await instance.createProfile('Researcher');
+    const created = await instance.createProfile({name: 'Researcher'});
     expect(created.name).toBe('Researcher');
 
     await instance.selectProfile(created.id);
@@ -726,18 +730,21 @@ describe('the identity a new agent gets', () => {
     return new AgentRuntime({paths, readSecret: keyPresent});
   }
 
-  it('starts the first agent on the shipped identity', async () => {
+  it('starts the first agent on the shipped Role and Persona', async () => {
     const [profile] = await runtime().profiles();
-    expect(profile?.identity).toBe(DEFAULT_AGENT_IDENTITY);
-    // The same constant is what the Reset button restores for the lead, so a
-    // blank one is a feature that quietly does nothing in both places at once.
-    expect(DEFAULT_AGENT_IDENTITY.trim().length).toBeGreaterThan(0);
+    expect(profile?.identity).toBe(DEFAULT_AGENT_ROLE);
+    expect(profile?.persona).toBe(DEFAULT_AGENT_PERSONA);
+    // The same constants are what the two Reset buttons restore for the lead,
+    // so a blank one is a feature that quietly does nothing in both places.
+    expect(DEFAULT_AGENT_ROLE.trim().length).toBeGreaterThan(0);
+    expect(DEFAULT_AGENT_PERSONA.trim().length).toBeGreaterThan(0);
   });
 
-  it("gives a bot made later an identity of its own, not the lead's", async () => {
-    const created = await runtime().createProfile('Researcher');
-    expect(created.identity).toBe(botIdentityFor('Researcher'));
-    expect(created.identity).not.toBe(DEFAULT_AGENT_IDENTITY);
+  it("gives a bot made later a Role of its own, not the lead's", async () => {
+    const created = await runtime().createProfile({name: 'Researcher'});
+    expect(created.identity).toBe(botRoleFor('Researcher'));
+    expect(created.identity).not.toBe(DEFAULT_AGENT_ROLE);
+    expect(created.persona).toBe(botPersonaFor(undefined));
   });
 
   /*
@@ -749,11 +756,55 @@ describe('the identity a new agent gets', () => {
   it('answers the reset seed for every profile, lead included', async () => {
     const instance = runtime();
     const [lead] = await instance.profiles();
-    const writer = await instance.createProfile('Writer');
+    const writer = await instance.createProfile({name: 'Writer'});
 
     const catalog = await instance.catalog();
-    expect(catalog.identitySeeds[lead?.id ?? '']).toBe(DEFAULT_AGENT_IDENTITY);
-    expect(catalog.identitySeeds[writer.id]).toBe(botIdentityFor('Writer'));
+    expect(catalog.roleSeeds[lead?.id ?? '']).toBe(DEFAULT_AGENT_ROLE);
+    expect(catalog.personaSeeds[lead?.id ?? '']).toBe(DEFAULT_AGENT_PERSONA);
+    expect(catalog.roleSeeds[writer.id]).toBe(botRoleFor('Writer'));
+    expect(catalog.personaSeeds[writer.id]).toBe(botPersonaFor(undefined));
+  });
+
+  /*
+   * The starter role is resolved by the runtime, not the store: the Role, the
+   * Persona and the grant all come from one entry, and a tool this install does
+   * not carry is filtered rather than stored as a name the host would drop.
+   */
+  it('makes a bot from a starter role with its Persona and grant', async () => {
+    const writer = botTemplateById('writer');
+    expect(writer).toBeDefined();
+    const created = await runtime().createProfile({
+      name: 'Writer',
+      templateId: 'writer',
+    });
+    expect(created.templateId).toBe('writer');
+    expect(created.identity).toContain('Your work is writing');
+    expect(created.persona).toBe(botPersonaFor(writer));
+    expect(created.avatar?.id).toBe('spark');
+    expect(created.enabledTools).toContain('read_file');
+    // No web provider is injected here, so the template's web search is filtered.
+    expect(created.enabledTools).not.toContain('web_search');
+  });
+
+  /*
+   * The builder conversation is an ordinary session with a stored purpose, and
+   * the check that matters is the one in code: without the tool the conversation
+   * would tell Marimo to call something it does not have.
+   */
+  it('starts a builder session only when the lead can draft', async () => {
+    const instance = runtime();
+    const [lead] = await instance.profiles();
+    expect(lead).toBeDefined();
+    await expect(
+      instance.startBuilderSession(lead?.id ?? ''),
+    ).rejects.toThrow(/draft-bot tool/u);
+
+    await instance.updateProfile(lead?.id ?? '', {
+      enabledTools: [...(lead?.enabledTools ?? []), DRAFT_BOT_TOOL],
+    });
+    const session = await instance.startBuilderSession(lead?.id ?? '');
+    expect(session.title).toBe('Making a bot');
+    expect(session.purpose).toBe('bot-builder');
   });
 
   /*
@@ -785,17 +836,18 @@ describe('the identity a new agent gets', () => {
     );
 
     const catalog = await runtime().catalog();
-    expect(catalog.identitySeeds).toEqual({});
+    expect(catalog.roleSeeds).toEqual({});
+    expect(catalog.personaSeeds).toEqual({});
     // And the four cards that are not about profiles are still there to draw.
     expect(catalog.tools.length).toBeGreaterThan(0);
     expect(catalog.presets.length).toBeGreaterThan(0);
   });
 
-  it('leaves an identity the user already saved alone', async () => {
+  it('leaves a Role the user already saved alone', async () => {
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -853,8 +905,8 @@ describe('reading a conversation without a working provider', () => {
     await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -961,8 +1013,8 @@ describe('folders and filing', () => {
     paths = resolveAppPaths(dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -1355,8 +1407,8 @@ describe('the model a turn answers with', () => {
     await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -1457,14 +1509,20 @@ describe('who is in a conversation', () => {
     await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: [],
       defaultSkills: [],
     });
     await profiles.load();
     lead = (await profiles.activeProfile()).id;
-    helper = (await profiles.create('Researcher')).id;
+    helper = (
+      await profiles.create({
+        name: 'Researcher',
+        role: (name) => botRoleFor(name),
+        persona: DEFAULT_AGENT_PERSONA,
+      })
+    ).id;
     // Back to the lead: creating a profile selects it, and these tests are about
     // a conversation the lead owns with somebody else in it.
     await profiles.select(lead);
@@ -1725,8 +1783,8 @@ describe('removing a bot', () => {
     await seedWorkspaces(paths, dir);
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: [],
       defaultSkills: [],
     });
@@ -1744,7 +1802,7 @@ describe('removing a bot', () => {
 
   it('takes its conversations, its memory and its records with it', async () => {
     const instance = runtime();
-    const bot = await instance.createProfile('Writer');
+    const bot = await instance.createProfile({name: 'Writer'});
     await instance.createSession(defaultId, 'kept');
     await instance.createSession(bot.id, 'written');
 

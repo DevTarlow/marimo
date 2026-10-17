@@ -166,14 +166,14 @@ describe('resolveAgentConfig', () => {
   });
 
   /*
-   * Carried beside the system prompt rather than folded into it, because the two
-   * have different owners. The prompt builder is the only thing that knows how to
+   * Carried beside the Role rather than folded into it, because the two have
+   * different owners. The prompt builder is the only thing that knows how to
    * order them, so this test is about the field surviving the join at all.
    */
-  it("carries the user's preferences beside the identity", async () => {
+  it("carries the person's Persona beside the Role", async () => {
     const result = await resolve({
       settings: defaultStoredSettings(),
-      profile: profile({preferences: 'Call me Tarlow. Skip the emoji.'}),
+      profile: profile({persona: 'Call me Tarlow. Skip the emoji.'}),
     });
 
     expect(result.ok).toBe(true);
@@ -181,16 +181,25 @@ describe('resolveAgentConfig', () => {
       return;
     }
     expect(result.config.systemPrompt).toBe('You are Marimo Bot.');
-    expect(result.config.preferences).toBe('Call me Tarlow. Skip the emoji.');
+    expect(result.config.persona).toBe('Call me Tarlow. Skip the emoji.');
   });
 
-  it('leaves preferences absent when the user wrote none', async () => {
+  it('leaves Persona absent when the person wrote none', async () => {
     const result = await resolve({
       settings: defaultStoredSettings(),
       profile: profile(),
     });
 
-    expect(result.ok && result.config.preferences).toBeUndefined();
+    expect(result.ok && result.config.persona).toBeUndefined();
+  });
+
+  it('treats a blank Persona as absent', async () => {
+    const result = await resolve({
+      settings: defaultStoredSettings(),
+      profile: profile({persona: '   \n '}),
+    });
+
+    expect(result.ok && result.config.persona).toBeUndefined();
   });
 
   /*

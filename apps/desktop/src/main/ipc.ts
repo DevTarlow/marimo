@@ -569,11 +569,16 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'profiles.create': async (params) => {
       const agent0 = agent();
-      const created = await agent0.createProfile(params.name);
+      const created = await agent0.createProfile(
+        params.draft,
+        params.sourceCallId,
+      );
       // Switched to straight away: somebody who adds an agent wants to be
-      // looking at it, not at the one they were on.
+      // looking at it, not at the one they were on. The caller gets the bot it
+      // made as well, because every flow here selects the lead back before it
+      // answers.
       await agent0.selectProfile(created.id);
-      return await profileState(agent0);
+      return {...(await profileState(agent0)), created};
     },
 
     'profiles.select': async (params) => {
@@ -659,6 +664,10 @@ export function registerIpcHandler(dependencies: IpcDependencies): void {
 
     'sessions.create': async (params) => ({
       session: await agent().createSession(params.profileId, params.spaceId),
+    }),
+
+    'sessions.startBuilder': async (params) => ({
+      session: await agent().startBotBuilder(params.profileId),
     }),
 
     'sessions.get': async (params) =>

@@ -267,6 +267,32 @@ async function main() {
       }
     };
 
+    /*
+     * A card's label is not its whole text: the path and starter cards carry a
+     * blurb under the label, so an exact match finds nothing. This is for those,
+     * and only those — a button whose whole text is the label should still use
+     * `press` above.
+     */
+    const pressContaining = async (fragment) => {
+      const find = `[...document.querySelectorAll('button')].find(
+        (entry) => entry.textContent.includes(${JSON.stringify(fragment)}) && !entry.disabled,
+      )`;
+      await until(`a button containing "${fragment}"`, async () =>
+        (await evaluate(`(${find}) !== undefined`)) === true ? true : undefined,
+      );
+      const clicked = await evaluate(`(() => {
+        const button = ${find};
+        if (button === undefined) {
+          return false;
+        }
+        button.click();
+        return true;
+      })()`);
+      if (clicked !== true) {
+        fail(`the "${fragment}" button went away before it could be pressed`);
+      }
+    };
+
     const opened = JSON.parse(
       await evaluate(`JSON.stringify({
         flow: !!document.querySelector('.setup'),
@@ -287,6 +313,27 @@ async function main() {
     await press('Get started');
 
     /*
+     * The Provider step, now first. The local one, because it is the only entry
+     * that can be chosen without an account — and choosing it is what makes the
+     * app able to answer, which is what turns the step's own button on. The
+     * guided bot path needs that, so the model cannot wait until the end.
+     */
+    const choseProvider = await evaluate(`(() => {
+      const card = [...document.querySelectorAll('.capability-card')].find((entry) =>
+        entry.textContent.trim().startsWith('Local llama.cpp'),
+      );
+      if (card === undefined) {
+        return false;
+      }
+      card.click();
+      return true;
+    })()`);
+    if (choseProvider !== true) {
+      fail('the model step offers no local provider to choose');
+    }
+    await press('Continue');
+
+    /*
      * The Space step. "Later" is what a fresh directory offers; a run that
      * already had a folder loaded is offered "Continue" instead, and either one
      * is the step being answered rather than the check skipping over it.
@@ -299,10 +346,11 @@ async function main() {
     await press(spaceLabels.includes('Later') ? 'Later' : 'Continue');
 
     /*
-     * The bot. Typed into the real field, through the real setter, because the
-     * point of the check is the form and not the store: a step that drew a name
-     * box and never read it would pass a bridge-level check.
+     * The bot step offers three doors. This check drives the form, because the
+     * point of it is that a field draws, takes text and reaches the store; the
+     * starter cards and the guided conversation have their own checks.
      */
+    await pressContaining('Build it step by step');
     await until('the bot form', async () =>
       (await evaluate(
         `document.querySelector('.setup-form input.settings-input') !== null`,
@@ -323,12 +371,12 @@ async function main() {
     await press('Make this bot');
 
     /*
-     * And the step that follows it: the user's own words about how they want to
-     * be spoken to. Typed into the textarea and saved, because the failure this
-     * catches is silent — a field that draws and never writes leaves a bot with
-     * no preferences and nothing on screen to say so.
+     * And the step that follows it: the Persona, which is the one piece of a
+     * bot the person owns. Typed into the textarea and saved, because the
+     * failure this catches is silent — a field that draws and never writes
+     * leaves a bot with no Persona and nothing on screen to say so.
      */
-    await until('the how-to-talk step', async () =>
+    await until('the Persona step', async () =>
       (await evaluate(
         `document.querySelector('.setup-form textarea.settings-preferences') !== null`,
       )) === true
@@ -343,32 +391,12 @@ async function main() {
       return box.value;
     })()`);
     if (wrote !== 'The smoke test wrote this: be brief.') {
-      fail(`the preferences box did not take text: ${String(wrote)}`);
+      fail(`the Persona box did not take text: ${String(wrote)}`);
     }
     await press('Save and continue');
 
     /* And the optional second half: one more bot, or none. */
-    await press("That's enough for now");
-
-    /*
-     * The provider. The local one, because it is the only entry that can be
-     * chosen without an account — and choosing it is what makes the app able to
-     * answer, which is what turns the step's own button on.
-     */
-    const choseProvider = await evaluate(`(() => {
-      const card = [...document.querySelectorAll('.capability-card')].find((entry) =>
-        entry.textContent.trim().startsWith('Local llama.cpp'),
-      );
-      if (card === undefined) {
-        return false;
-      }
-      card.click();
-      return true;
-    })()`);
-    if (choseProvider !== true) {
-      fail('the model step offers no local provider to choose');
-    }
-    await press('Start chatting');
+    await press('That’s enough for now');
 
     /*
      * The recall offer, which is the flow's own last beat: the app went from
@@ -387,7 +415,7 @@ async function main() {
           flow: !!document.querySelector('.setup'),
           composer: !!document.querySelector('.composer-box'),
           bots: profiles.map((entry) => entry.name),
-          botWords: profiles.find((entry) => entry.name === 'Smoke')?.preferences ?? null,
+          botWords: profiles.find((entry) => entry.name === 'Smoke')?.persona ?? null,
           leadTools: profiles[0]?.enabledTools ?? [],
           delegation: delegationTool ?? null,
           ready: (await window.marimo.call('settings.get', {})).settings.modelReady,
@@ -406,12 +434,11 @@ async function main() {
       afterSetup.botWords !== 'The smoke test wrote this: be brief.'
     ) {
       /*
-       * The words the person wrote about being spoken to, at the far end of the
-       * path: the step, the IPC call, the profile store, and back out of a
-       * payload the window reads.
+       * The Persona the person wrote, at the far end of the path: the step, the
+       * IPC call, the profile store, and back out of a payload the window reads.
        */
       fail(
-        `the flow did not keep the words about how to talk: ${JSON.stringify(afterSetup.botWords)}`,
+        `the flow did not keep the Persona: ${JSON.stringify(afterSetup.botWords)}`,
       );
     } else if (
       afterSetup.delegation === null ||
@@ -1404,13 +1431,13 @@ async function main() {
 
       /*
        * The two prompt boxes, asserted in the bundle the window actually loaded.
-       * The identity is the app's text and the preferences box is the user's, kept
-       * apart so that Reset can restore one without touching the other — a build
-       * that rendered one of them, or merged them back together, would pass every
-       * unit test above and still be the wrong screen.
+       * The Role is the app's text and the Persona is the person's, kept apart so
+       * that the Role's Reset can restore one without touching the other — a
+       * build that rendered one of them, or merged them back together, would pass
+       * every unit test above and still be the wrong screen.
        */
       const prompts = await until(
-        'the identity and preferences boxes to appear',
+        'the Role and Persona boxes to appear',
         async () => {
           const {result} = await send('Runtime.evaluate', {
             expression: `(() => {
@@ -1418,18 +1445,16 @@ async function main() {
               .find((entry) => entry.querySelector('h3')?.textContent === 'What it is');
             if (section === undefined) return undefined;
             const name = section.querySelector('input.settings-input');
-            const identity = section.querySelector('textarea[aria-label="Identity"]');
-            const preferences = section.querySelector(
-              'textarea[aria-label="How to talk to me"]',
-            );
-            if (name === null || identity === null || preferences === null) {
+            const role = section.querySelector('textarea[aria-label="Role"]');
+            const persona = section.querySelector('textarea[aria-label="Persona"]');
+            if (name === null || role === null || persona === null) {
               return JSON.stringify({incomplete: true});
             }
             return JSON.stringify({
               name: name.value,
-              identityLength: identity.value.length,
-              preferences: preferences.value,
-              placeholder: preferences.placeholder,
+              roleLength: role.value.length,
+              persona: persona.value,
+              placeholder: persona.placeholder,
               reset: [...section.querySelectorAll('button')].some(
                 (entry) => entry.textContent.trim() === 'Reset to default',
               ),
@@ -1447,21 +1472,18 @@ async function main() {
         fail('the "What it is" section is missing one of its boxes');
       } else if ((prompts.name ?? '').length === 0) {
         fail('the agent has no name in Settings');
-      } else if (prompts.identityLength === 0) {
-        fail('the identity box is empty on a fresh install');
+      } else if (prompts.roleLength === 0) {
+        fail('the Role box is empty on a fresh install');
       } else if (prompts.reset !== true) {
-        fail('the identity box has no Reset to default button');
-      } else if (prompts.preferences !== '') {
-        fail(
-          `a fresh install starts with preferences: "${prompts.preferences}"`,
-        );
+        fail('the Role box has no Reset to default button');
+      } else if ((prompts.persona ?? '').length === 0) {
+        fail('the Persona box is empty on a fresh install');
       } else if ((prompts.placeholder ?? '').length === 0) {
         // The example is how somebody works out what the box is for.
-        fail('the preferences box has no example in it');
+        fail('the Persona box has no example in it');
       } else {
         ok(
-          'Settings carries the app identity, a Reset, and an empty box for your ' +
-            'own words',
+          'Settings carries the app Role, a Reset, and a seeded Persona',
         );
       }
 
@@ -1495,7 +1517,7 @@ async function main() {
        */
       await openSection('What it is');
       try {
-        identityBox = await until('the identity box to be draggable', async () => {
+        identityBox = await until('the Role box to be draggable', async () => {
           const state = await evaluate(`(() => {
           const box = document.querySelector('textarea.settings-identity');
           if (box === null) return undefined;
@@ -1546,7 +1568,7 @@ async function main() {
 
       if (identityBox === undefined) {
         fail(
-          'the identity box could not be put in reach of the pointer: ' +
+          'the Role box could not be put in reach of the pointer: ' +
             `${JSON.stringify(lastLook)}`,
         );
       } else {
@@ -1581,7 +1603,7 @@ async function main() {
           clickCount: 1,
         });
 
-        const grew = await until('the identity box to resize', async () => {
+        const grew = await until('the Role box to resize', async () => {
           const {result} = await send('Runtime.evaluate', {
             expression:
               'document.querySelector("textarea.settings-identity")' +
@@ -1596,12 +1618,12 @@ async function main() {
 
         if (grew !== true) {
           fail(
-            `the identity box did not resize when its corner was dragged ` +
+            `the Role box did not resize when its corner was dragged ` +
               `(still ${String(identityBox.height)}px tall; hit tests ` +
               `${JSON.stringify(identityBox.hits)})`,
           );
         } else {
-          ok('the identity box resizes when its corner is dragged');
+          ok('the Role box resizes when its corner is dragged');
         }
       }
 
@@ -1851,7 +1873,7 @@ async function main() {
       );
       const doomed = JSON.parse(
         await evaluate(`(async () => {
-        const created = await window.marimo.call('profiles.create', {name: 'Doomed'});
+        const created = await window.marimo.call('profiles.create', {draft: {name: 'Doomed'}});
         const {session} = await window.marimo.call('sessions.create', {
           profileId: created.activeProfileId,
         });

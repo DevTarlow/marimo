@@ -3,8 +3,8 @@
  *
  * Everything here comes from the active agent profile and the app's own
  * preferences: which service answers and where, the credential it is reached
- * with, the identity, the folder it works in, and the tools and skills it is
- * allowed to use.
+ * with, the Role and Persona, the folder it works in, and the tools and skills
+ * it is allowed to use.
  */
 import type {ProviderId} from '@marimo/protocol';
 
@@ -39,18 +39,19 @@ export interface AgentConfig {
    */
   apiKey: string;
   maxOutputTokens?: number;
-  /** The profile's identity: who this agent is. */
+  /** The profile's Role: what this agent is for and what it may claim. */
   systemPrompt: string;
   /**
-   * Standing instructions the user wrote about how they want to be talked to.
+   * The person's Persona: the character, the job in their words, and how they
+   * want to be spoken to.
    *
-   * Here rather than in `systemPrompt` because the two have different owners: the
-   * identity is the app's text and Settings can restore it, so the user's own
+   * Here rather than in `systemPrompt` because the two have different owners:
+   * the Role is the app's text and Settings can restore it, so the person's own
    * words must not live inside it. Read per request like `enabledSkills` below,
    * and for the same reason — it is prompt text, so editing it does not abort a
    * turn that is already running. Absent or blank means they wrote none.
    */
-  preferences?: string;
+  persona?: string;
   /**
    * Prompt text for this turn only, appended to the instruction.
    *

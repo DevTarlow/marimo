@@ -210,6 +210,22 @@ export interface AgentController {
    */
   newSession: (spaceId?: string) => Promise<void>;
   /**
+   * Starts the conversation that makes a bot, and opens it.
+   *
+   * Answers a result rather than throwing: the setup flow has a screen to keep
+   * up and a sentence to show when the lead cannot draft, and an exception
+   * there would be a blank wizard.
+   */
+  startBotBuilder: () => Promise<{ok: boolean; problem?: string}>;
+  /**
+   * What the open conversation is for, when it is not an ordinary chat.
+   *
+   * Read off the session summary rather than kept as separate state: the
+   * purpose is a stored fact about the conversation, and a reloaded window
+   * reads it back from the same list the rail does.
+   */
+  sessionPurpose: SessionSummary['purpose'];
+  /**
    * Switches to another bot, and lands on its newest conversation.
    *
    * The switch is the same `profiles.select` Settings uses; what this adds is
@@ -1031,6 +1047,41 @@ export function useAgent(): AgentController {
     [profile, activeWorkspaceId, selectWorkspace],
   );
 
+  /**
+   * Opens the bot-builder conversation.
+   *
+   * The same state swap `newSession` makes, because it is the same kind of
+   * conversation; the difference is the stored purpose, which the runtime writes
+   * and every later turn reads. Nothing is sent here — the opening question is a
+   * card the transcript draws from the purpose.
+   */
+  const startBotBuilder = useCallback(async (): Promise<{
+    ok: boolean;
+    problem?: string;
+  }> => {
+    if (profile === undefined) {
+      return {ok: false, problem: 'There is no bot to start this conversation.'};
+    }
+    try {
+      const {session} = await window.marimo.call('sessions.startBuilder', {
+        profileId: profile.id,
+      });
+      setSessions((current) => [session, ...current]);
+      setSessionId(session.id);
+      setMessages([]);
+      setStoredPending([]);
+      setLive(null);
+      setDelegations({});
+      helperAtWork.current = null;
+      setOutbox(null);
+      return {ok: true};
+    } catch (failure) {
+      const problem = describe(failure);
+      setError(problem);
+      return {ok: false, problem};
+    }
+  }, [profile]);
+
   /*
    * Filing and naming replace the one entry rather than reloading the list.
    * Neither is activity, so the store leaves `updatedAt` alone — and a reload
@@ -1197,6 +1248,15 @@ export function useAgent(): AgentController {
    */
   const busy = live?.running === true || outbox !== null;
 
+  /*
+   * Derived from the stored summary rather than held as a flag: a window that
+   * reloads must draw the builder's opening card from the conversation it
+   * opened, not from a piece of state that belonged to the previous render.
+   */
+  const sessionPurpose = sessions.find(
+    (entry) => entry.id === sessionId,
+  )?.purpose;
+
   return {
     ready,
     error,
@@ -1225,6 +1285,8 @@ export function useAgent(): AgentController {
     },
     reload: boot,
     newSession,
+    startBotBuilder,
+    sessionPurpose,
     selectProfile,
     dismissError: () => {
       setError(null);

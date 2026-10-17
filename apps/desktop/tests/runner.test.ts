@@ -26,7 +26,7 @@ import {
   resolveAppPaths,
 } from '@marimo/runtime';
 import type {AppPaths} from '@marimo/runtime';
-import {botIdentityFor} from '@marimo/protocol';
+import {DEFAULT_AGENT_PERSONA} from '@marimo/protocol';
 import type {McpServer} from '@marimo/protocol';
 
 import {
@@ -82,8 +82,8 @@ describe('runDue', () => {
 
     const profiles = new ProfileStore({
       file: paths.profiles,
-      defaultIdentity: '',
-      botIdentity: botIdentityFor,
+      defaultRole: '',
+      defaultPersona: DEFAULT_AGENT_PERSONA,
       defaultTools: [],
       defaultSkills: [],
     });

@@ -9,6 +9,8 @@
  */
 import {z} from 'zod';
 
+import {botDraftSchema} from './bots.js';
+import type {BotTemplate} from './bots.js';
 import {parseCron} from './cron.js';
 import {mcpServerSchema, mcpServersAreDistinct} from './mcp.js';
 import {
@@ -18,6 +20,25 @@ import {
   providersSchema,
 } from './providers.js';
 import type {ProviderId} from './providers.js';
+
+/*
+ * The starter bots and the two texts a bot is seeded with. They live in their
+ * own module because they are a catalogue with its own shape and its own tests,
+ * and because this file is the IPC contract rather than a place for prose.
+ */
+export {
+  availableBotTemplates,
+  BOT_BUILDER_OPENING,
+  BOT_DRAFT_PERSONA_MAX,
+  BOT_TEMPLATES,
+  botDraftSchema,
+  botPersonaFor,
+  botRoleFor,
+  botTemplateById,
+  DEFAULT_BOT_PERSONA,
+  DRAFT_BOT_TOOL,
+} from './bots.js';
+export type {BotDraft, BotTemplate} from './bots.js';
 
 export {describeCron, nextCronRun, nextRunAfter, parseCron} from './cron.js';
 export type {CronSpec} from './cron.js';
@@ -1075,48 +1096,35 @@ export const workspacesFileSchema = z.object({
 export type WorkspacesFile = z.infer<typeof workspacesFileSchema>;
 
 /**
- * Who Marimo Bot is, until the user says otherwise.
+ * Marimo Bot's Role: the app's brief for the agent the person talks to.
  *
- * One constant rather than a literal in each place that needs it, because those
- * places have to agree and a disagreement is invisible: this is the identity the
- * first profile is seeded with *and* the text Reset puts back. A renderer holding
- * its own copy would reset an agent to something the app never shipped, which
- * looks like the button working.
+ * The stored field is still called `identity` on the profile — changing that
+ * would be a document migration for a word, and the name the person reads is
+ * what matters. The window calls this **Role**, and the exact same text is what
+ * Reset puts back.
+ *
+ * It is the *job*, not the character. The character lives in
+ * `DEFAULT_AGENT_PERSONA`, which is the person's to rewrite; this half is the
+ * app's, and Settings can restore it without touching a word they wrote. The
+ * split is what makes the two owners real rather than a comment: a reset that
+ * could also erase the person's description of how they want to be spoken to is
+ * a reset nobody would dare press.
  *
  * It opens with who the agent is to this person rather than with the work,
  * because that opening is what the model narrates itself with on every turn —
- * an identity that begins "you work on their projects, in a folder" answers
- * "hey, how are you?" as an offer to organise a repository.
+ * a Role that begins "you work on their projects, in a folder" answers "hey, how
+ * are you?" as an offer to organise a repository.
  *
- * **The second paragraph is the part that changed.** This is no longer one agent
- * on a machine: the person makes bots, gives them names, tools and permissions,
- * and puts them in the same conversations. An identity that says nothing about
- * them leaves Marimo Bot behaving as if it were alone — doing work a specialist was
- * made for, or handing everything off as a ritual. What it says here is *when*
- * to use them and that the person should hear about it.
- *
- * `botIdentityFor` is the other half and exists for the reason invariant 9 gives:
- * a capability a profile does not have must be absent from the prompt too. A
- * freshly made bot has no `ask_agent`, so telling it that bots can hand work to
- * each other would be an instruction it cannot follow, and the failure is a model
- * announcing a handoff it never made. So the two texts differ where the two kinds
- * of profile differ, and the shared parts — the person, their preferences, the
- * rule about guessing — are written out in both rather than composed, because an
- * identity is text a person may edit and a template would put the seam in their
- * editor.
- *
- * Method stays out of both. The operating protocol is appended after this and is
+ * Method stays out of it. The operating protocol is appended after this and is
  * written against a tool list this text cannot see, and the app's own rules —
- * what must be approved, what a paused turn means — live there too rather than
- * here, so that a user rewriting their identity cannot lose them. The user's own
- * manner belongs in `preferences`, so editing one's voice never means editing the
- * app's text, and Reset never means "throw my words away".
+ * what must be approved, what a paused turn means — live there too. A person
+ * rewriting their Role cannot lose them, and a Role cannot advertise a tool its
+ * profile does not have: the capability skills are what say what it can do.
  *
  * It is also read where no user is present: a scheduled job and a Discord
- * mention front the same identity, so it states a stance rather than a
- * conversation.
+ * mention front the same Role, so it states a stance rather than a conversation.
  */
-export const DEFAULT_AGENT_IDENTITY = [
+export const DEFAULT_AGENT_ROLE = [
   'You are Marimo Bot. You live on this machine, you belong to one person — the user —',
   'and you are not a service they are renting. The two of you have a history, and',
   'it keeps growing.',
@@ -1151,51 +1159,29 @@ export const DEFAULT_AGENT_IDENTITY = [
   'because they told you, not because it is useful to a project. Their world is the',
   'point; the files are one corner of it.',
   '',
-  'Whatever they have written about how they want to be spoken to comes after this',
-  'and beats it wherever the two disagree. This is who you are; that is how they',
-  'want to be treated. Be yourself otherwise — funny when it is funny, quiet when',
-  'it is not.',
+  'The persona below is theirs. It says who you are to them and how they want to be',
+  'spoken to, and it beats this wherever the two disagree — but it cannot change',
+  'what the app asks of you, and it cannot give you a tool you do not have.',
 ].join('\n');
 
 /**
- * Who a bot the user has just made is, until they say otherwise.
+ * Marimo Bot's Persona: the character, and the person's to rewrite.
  *
- * A function of the name rather than a constant, because the first thing a bot
- * should know is what it is called: it is the name the person chose in Settings
- * and the name the transcript attributes its words to, and a seed that opened
- * "You are one of the bots" would leave it guessing which one.
+ * It follows the Role and wins wherever the two disagree about manner. It is the
+ * seed a fresh install starts with and the text "Use the template text" puts
+ * back; it is not reset by the Role's Reset button, because the two have
+ * different owners.
  *
- * It is deliberately not `DEFAULT_AGENT_IDENTITY`. That text describes the agent
- * the person talks to, and a bot seeded with it would introduce itself as Marimo Bot
- * — the exact confusion this system is built to avoid — and would be told to hand
- * work to bots, which it has no tool to do. What it says instead is what is true
- * of every bot: it was made by this person, it exists to be given work, its words
- * land in a conversation they are reading, and naming a permission it lacks is
- * better than working around it.
- *
- * The last paragraph is the same promise the lead makes, and it is the one the
- * user is told about in the window: their own words about manner come last and
- * win. A bot is not the place to overrule them.
+ * It deliberately says nothing about tools or about the app's rules. Those are
+ * in the Role, the operating protocol and the capability skills, where a person
+ * editing their character cannot lose them.
  */
-export function botIdentityFor(name: string): string {
-  const called = name.trim() || 'this bot';
-  return [
-    `You are ${called}. The person made you. You are one of the bots in their`,
-    'Marimo Bot setup — Marimo Bot is the one they talk to by default, and it hands you',
-    'work — and you are not a lesser Marimo Bot: your name, your instructions and your',
-    'tools are yours.',
-    '',
-    'Either Marimo Bot gives you one task, or the person speaks to you directly in a',
-    'conversation that holds several bots. Both times the person is reading, so',
-    'write for them: what you did, what you could not do, and what you would need',
-    'to finish. A permission you do not have is worth naming rather than working',
-    'around, and a task you cannot do is worth saying so about.',
-    '',
-    'Whatever they have written about how they want to be spoken to comes after',
-    'this and beats it wherever the two disagree. Otherwise be yourself: short when',
-    'the answer is short, and quiet when there is nothing to add.',
-  ].join('\n');
-}
+export const DEFAULT_AGENT_PERSONA = [
+  'Be warm, curious and direct. Be funny when it is funny and quiet when it is',
+  'not. You are not a service: you have opinions, you can disagree, and you would',
+  'rather be useful than agreeable. When you are unsure, say so rather than',
+  'guessing, and when the answer is short, keep it short.',
+].join('\n');
 
 /**
  * What an agent answers with, when it does not want the app's default.
@@ -1276,9 +1262,15 @@ export function defaultBotAvatarFor(index: number): BotAvatar {
 }
 
 /**
- * An agent: its identity (the system prompt) and the tools and skills it is
- * allowed to use. Switching profile is what makes the app feel like a different
- * agent, so each one also owns its conversations.
+ * An agent: its Role (the stored system prompt), its Persona, and the tools and
+ * skills it is allowed to use. Switching profile is what makes the app feel like
+ * a different agent, so each one also owns its conversations.
+ *
+ * **`identity` is the Role, and the name is historical.** The window calls it
+ * Role because that is what it is: the app's brief for the bot. The field keeps
+ * its old name for the reason `workspace` does — renaming it would be a document
+ * migration to change a word the user never reads, and every existing file,
+ * migration and comment already uses this one.
  *
  * The folders it works in are **not** here. They used to be, one list per
  * profile, and that made two agents unable to share a project and made the rail
@@ -1288,22 +1280,54 @@ export function defaultBotAvatarFor(index: number): BotAvatar {
 export const agentProfileSchema = z.object({
   id: z.string().min(1),
   name: z.string().trim().min(1),
-  /** The system prompt, presented to the user as the agent's identity. */
+  /** The system prompt, presented to the user as the agent's Role. */
   identity: z.string(),
   /**
-   * The user's own standing instructions about manner, when they wrote any.
+   * The person's own text: the character, the job in their words, and how they
+   * want to be spoken to.
    *
-   * Separate from `identity` because the two have different owners. The identity
-   * is the app's text: a new profile is seeded with it and Settings can restore
-   * it. This is the user's, and neither the app nor the agent ever writes it — so
-   * resetting the identity cannot cost them their own words, and their own words
-   * do not freeze the app's text at whichever release they first edited it.
+   * Separate from `identity` because the two have different owners. The Role is
+   * the app's text: a new profile is seeded with it and Settings can restore it.
+   * This is the person's, and neither the app nor the agent ever writes it — so
+   * resetting the Role cannot cost them their own words, and their own words do
+   * not freeze the app's text at whichever release they first edited it.
    *
    * Optional, and that is load-bearing rather than tidy. `ProfileStore.parseFile`
    * skips a profile that fails this schema, and a file whose every profile was
    * skipped is treated as unreadable: renamed aside and replaced with a fresh
    * agent. A *required* field here would quarantine every existing agent on
    * upgrade, which is why this one can never become required.
+   */
+  persona: z.string().optional(),
+  /**
+   * The starter role this bot was made from, when it was made from one.
+   *
+   * Kept only so Reset can restore the Role and Persona seeds that belong to
+   * *this* bot: a Writer reset to Marimo Bot's text is the defect the two seeds
+   * exist to prevent. Absent means a custom bot — its generic Role and its
+   * Persona are still reseeded from the defaults, and its job lives in the
+   * Persona where a Role reset cannot erase it.
+   *
+   * Optional for the reason `persona` above is optional.
+   */
+  templateId: z.string().min(1).optional(),
+  /**
+   * The draft card that created this bot, when one did.
+   *
+   * The transcript keeps a tool call forever, so a card revisited months later
+   * would otherwise offer to create the same bot again. The card checks this
+   * marker against the roster and draws its "Created" state instead. Internal:
+   * nothing in the window shows it and no patch can change it.
+   */
+  createdFromCall: z.string().min(1).optional(),
+  /**
+   * The old "How to talk to me" field, read only.
+   *
+   * It is kept on the schema so a file written before Persona parses, and
+   * `ProfileStore.parseFile` moves its text into `persona` on the way in. This
+   * build never writes it, and the next profile write drops it. Removing it from
+   * the schema instead would make every existing profile unparseable, which is
+   * how a whole roster gets quarantined for a rename.
    */
   preferences: z.string().optional(),
   /**
@@ -1332,7 +1356,7 @@ export const agentProfileSchema = z.object({
    * renamed without losing its grant, and a name freed by a delete cannot be
    * inherited by a new server the agent was never given.
    *
-   * Optional for the reason `preferences` above is optional: a required field
+   * Optional for the reason `persona` above is optional: a required field
    * would fail this schema for every agent that already exists, and
    * `ProfileStore.parseFile` skips a profile it cannot parse — a file whose
    * profiles were all skipped is renamed aside and replaced with a fresh agent.
@@ -1341,7 +1365,7 @@ export const agentProfileSchema = z.object({
   /**
    * What this agent answers with, when it is not the app's default.
    *
-   * Optional for the reason `preferences` above is optional, and the reason is
+   * Optional for the reason `persona` above is optional, and the reason is
    * not tidiness: a required field here would fail this schema for every agent
    * that already exists, and `ProfileStore.parseFile` skips a profile it cannot
    * parse — a file whose profiles were all skipped is renamed aside and replaced
@@ -1357,7 +1381,7 @@ export const agentProfileSchema = z.object({
    * makes "my Writer drafts into the website repo" need no sentence in a prompt:
    * the person says it once in Settings and every new chat is filed there.
    *
-   * Optional for the reason `preferences` above is optional, and it is not
+   * Optional for the reason `persona` above is optional, and it is not
    * tidiness: a required field here would fail this schema for every agent that
    * already exists, and `ProfileStore.parseFile` skips a profile it cannot parse
    * — a file whose profiles were all skipped is renamed aside and replaced with
@@ -1370,7 +1394,7 @@ export const profilePatchSchema = z.object({
   name: z.string().trim().min(1).optional(),
   identity: z.string().optional(),
   /** An empty string clears it; absent leaves whatever is stored alone. */
-  preferences: z.string().optional(),
+  persona: z.string().optional(),
   /**
    * The icon, or `null` to go back to the default for this bot's place in the
    * roster. Absent leaves whatever is stored alone — the same three answers
@@ -1576,6 +1600,18 @@ export type PublicSettings = Settings & {
  */
 export type SessionSource = 'discord';
 
+/**
+ * What a conversation is *for*, when it is not an ordinary chat.
+ *
+ * A purpose is not a second title and not a source: the setup flow starts a
+ * conversation to make a bot, and every turn of it has to carry the builder's
+ * own instruction or a small model drifts back into being a general assistant.
+ * The stored purpose is what makes that a fact about the conversation rather
+ * than a flag a reloaded window has to remember. `bot-builder` is the only value
+ * today.
+ */
+export type SessionPurpose = 'bot-builder';
+
 export interface SessionSummary {
   /**
    * The conversation's own id, and the only name for it that never changes.
@@ -1606,6 +1642,14 @@ export interface SessionSummary {
    * and never under a folder, whatever `workspaceId` happens to say.
    */
   source?: SessionSource;
+  /**
+   * What this conversation is for, when it is not an ordinary chat.
+   *
+   * The window reads it to draw the builder's opening card and the runtime reads
+   * it to append the builder instruction on every turn. Absent is every
+   * conversation a person started to talk to a bot.
+   */
+  purpose?: SessionPurpose;
   /**
    * The model this conversation was pointed at, when it has one of its own.
    *
@@ -2963,6 +3007,15 @@ export const agentCallSchemas = {
     profileId: z.string().min(1),
     spaceId: z.string().min(1).optional(),
   }),
+  /*
+   * Starts the conversation that builds a bot.
+   *
+   * A call of its own rather than `sessions.create` with a flag, because the
+   * purpose has to be written where the runtime reads it and the lead has to be
+   * checked for the tool before a session exists. The window opens what comes
+   * back and draws the opening card; nothing is created here.
+   */
+  'sessions.startBuilder': z.object({profileId: z.string().min(1)}),
   'sessions.get': z.object({
     profileId: z.string().min(1),
     sessionId: z.string().min(1),
@@ -3316,8 +3369,22 @@ export const agentCallSchemas = {
     profileId: z.string().min(1),
     patch: profilePatchSchema,
   }),
+  /*
+   * Makes a bot, from a draft the person has seen.
+   *
+   * The draft is the same shape the review card and the `draft_bot` tool use, so
+   * there is one description of "a bot to be" rather than a form-shaped copy
+   * here and a prompt-shaped one there. Every field is optional: a blank bot is
+   * an empty draft, and the runtime fills the rest from the starter role or the
+   * defaults.
+   *
+   * `sourceCallId` is the transcript's tool call id when the draft card asked.
+   * It is written onto the profile so a card revisited later can tell it already
+   * made this bot instead of offering to make it again.
+   */
   'profiles.create': z.object({
-    name: z.string().trim().min(1).optional(),
+    draft: botDraftSchema.optional(),
+    sourceCallId: z.string().min(1).optional(),
   }),
   'profiles.select': z.object({profileId: z.string().min(1)}),
   /*
@@ -3356,6 +3423,7 @@ export interface AgentCallResults {
   'profiles.list': {profiles: AgentProfile[]; activeProfileId: string};
   'sessions.list': {sessions: SessionSummary[]};
   'sessions.create': {session: SessionSummary};
+  'sessions.startBuilder': {session: SessionSummary};
   'sessions.get': {
     messages: TranscriptMessage[];
     pending: PendingGate[];
@@ -3436,7 +3504,16 @@ export interface AgentCallResults {
   'recall.query': RecallQueryResult;
   'profiles.catalog': ProfileCatalog;
   'profiles.update': {profiles: AgentProfile[]; activeProfileId: string};
-  'profiles.create': {profiles: AgentProfile[]; activeProfileId: string};
+  'profiles.create': {
+    profiles: AgentProfile[];
+    activeProfileId: string;
+    /**
+     * The bot that was just made, so the caller does not have to guess it from
+     * whichever profile is active — the handler selects the lead back before it
+     * answers in every flow that made a bot.
+     */
+    created: AgentProfile;
+  };
   'profiles.select': {profiles: AgentProfile[]; activeProfileId: string};
   'profiles.uploadAvatar': {
     profiles: AgentProfile[];
@@ -3483,18 +3560,36 @@ export interface ProfileCatalog {
    */
   presets: CapabilityPreset[];
   /**
-   * The text Reset would put back, keyed by profile id.
+   * The starter roles this install can offer, with their tools narrowed to what
+   * it actually has.
    *
-   * One text per profile rather than one for the install, because the two kinds
-   * of profile are seeded differently: the lead — the first profile in the
-   * document, the one created at install — was given `DEFAULT_AGENT_IDENTITY`,
-   * and a bot was given the text built from its own name. The window holds
-   * neither, because it is text the app shipped and a copy in the renderer is a
-   * copy that can drift; a bot reset to the lead's identity is the defect this
-   * exists to stop. Delete the lead and the next first profile becomes the lead,
-   * which is exactly what the seeding rule already answers for it.
+   * Here rather than in the window for the reason `presets` is: the tool names
+   * are the agent package's, and a card that offered a name nothing answers to
+   * would be a choice that grants nothing.
    */
-  identitySeeds: Record<string, string>;
+  botTemplates: BotTemplate[];
+  /**
+   * The Role text Reset would put back, keyed by profile id.
+   *
+   * One text per profile rather than one for the install, because the kinds of
+   * profile are seeded differently: the lead — the first profile in the
+   * document, the one created at install — was given `DEFAULT_AGENT_ROLE`, a
+   * starter bot was given its template's text, and a custom bot was given the
+   * generic bot contract. The window holds none of them, because it is text the
+   * app shipped and a copy in the renderer is a copy that can drift; a Writer
+   * reset to Marimo Bot's Role is the defect this exists to stop.
+   */
+  roleSeeds: Record<string, string>;
+  /**
+   * The Persona text "Use the template text" would put back, keyed by profile
+   * id.
+   *
+   * Separate from `roleSeeds` because the two have different owners and
+   * different buttons: the Role has a Reset that is safe to press, and the
+   * Persona has a "use the template text" that asks first because it replaces
+   * words the person wrote.
+   */
+  personaSeeds: Record<string, string>;
   /**
    * The tool that hands work from one agent to another, when this install has it.
    *
@@ -3508,6 +3603,16 @@ export interface ProfileCatalog {
    * setup flow from promising a capability this build cannot carry out.
    */
   delegationTool?: string;
+  /**
+   * The tool that drafts a bot for the person to review, when this install has
+   * it.
+   *
+   * Carried the same way as `delegationTool`, and for the same reason: the setup
+   * flow grants it to the lead before starting a builder conversation, and a
+   * second spelling of the name would grant nothing. Absent means the guided
+   * creation path is not offered.
+   */
+  builderTool?: string;
 }
 
 /**
